@@ -1,0 +1,44 @@
+# --- Local databases & workspace state (never commit real data) -----------
+_app/*.db
+_app/*.db-journal
+_app/*.db-wal
+_app/*.db-shm
+_app/workspaces.json
+_app/workspaces/
+
+# --- Your real tracked folder, if you keep it inside this repo -------------
+# By default JobTracker/_app expects to live one level inside the folder
+# you're tracking. If that's this repo, uncomment lines for whatever real
+# folders you add so your actual documents never get committed:
+# Applications/
+# Certifications/
+# References/
+# Degree and Transcripts/
+
+# --- LaTeX build byproducts ----------------------------------------------
+# classify.py already excludes most of these from the JobTracker index
+# itself (see IGNORE_SUFFIXES), but that only keeps them out of the app's
+# UI — it doesn't stop git from tracking them if you compile resume.tex/
+# coverletter.tex in place inside a folder this repo covers.
+out/
+*.aux
+*.log
+*.out
+*.synctex.gz
+*.fls
+*.fdb_latexmk
+*.toc
+
+# --- Python ------------------------------------------------------------
+_app/.venv/
+_app/venv/
+_app/env/
+__pycache__/
+*.pyc
+*.pyo
+
+# --- OS / editor cruft -------------------------------------------------
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

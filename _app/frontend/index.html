@@ -1,0 +1,3539 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>JobTracker Hub</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.24.7/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.5.0/chart.umd.min.js"></script>
+<script>
+  // Resolve + apply the theme BEFORE first paint (zero-flash hydration).
+  // Reads the persisted preference ("system" | "light" | "dark"), resolves
+  // "system" via matchMedia, and sets data-theme synchronously so the CSS
+  // below never has to repaint from a wrong default.
+  (function () {
+    try {
+      var pref = localStorage.getItem("jth_theme") || "system";
+      var resolved = pref === "system"
+        ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
+        : pref;
+      document.documentElement.setAttribute("data-theme", resolved);
+      document.documentElement.setAttribute("data-theme-pref", pref);
+    } catch (e) {
+      document.documentElement.setAttribute("data-theme", "dark");
+    }
+  })();
+</script>
+<style>
+  /* ============ THEME ENGINE ============
+     Two explicit palettes below ([data-theme="dark"] / [data-theme="light"])
+     plus a "system" preference that resolves to one of the two (see boot
+     script above + useTheme() hook). Every color in the app is a CSS custom
+     property so switching data-theme on <html> re-themes everything live. */
+  html[data-theme="dark"]{
+    --bg:#0F172A; --panel:#1E293B; --panel-soft:#1E293Bcc; --panel-glass:#1E293Be6;
+    --border:#334155; --border-soft:#1E293B;
+    --text:#F1F5F9; --text-strong:#FFFFFF; --text-soft:#94A3B8; --text-mute:#64748B;
+    --accent:#3B82F6; --accent-soft:#60A5FA; --accent-contrast:#FFFFFF;
+    --green:#10B981; --green-text:#34D399;
+    --amber:#F59E0B; --amber-text:#FBBF24;
+    --red:#EF4444; --red-text:#F87171;
+    --card-shadow:none;
+    --scrollbar-thumb:#334155; --scrollbar-track:transparent;
+    color-scheme: dark;
+  }
+  html[data-theme="light"]{
+    --bg:#F8FAFC; --panel:#FFFFFF; --panel-soft:#FFFFFFcc; --panel-glass:#FFFFFFe6;
+    --border:#E2E8F0; --border-soft:#EDF2F7;
+    --text:#1E293B; --text-strong:#0F172A; --text-soft:#475569; --text-mute:#94A3B8;
+    --accent:#3B82F6; --accent-soft:#2563EB; --accent-contrast:#FFFFFF;
+    --green:#10B981; --green-text:#047857;
+    --amber:#F59E0B; --amber-text:#B45309;
+    --red:#EF4444; --red-text:#DC2626;
+    --card-shadow:0 1px 2px rgba(15,23,42,.06), 0 6px 16px rgba(15,23,42,.06);
+    --scrollbar-thumb:#CBD5E1; --scrollbar-track:transparent;
+    color-scheme: light;
+  }
+  :root{ --radius:10px; }
+  *{box-sizing:border-box;}
+  html,body,#root{height:100%;margin:0;}
+  body{
+    background:var(--bg); color:var(--text);
+    font-family:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,Roboto,Helvetica,Arial,sans-serif;
+    font-size:14px;
+    transition:background-color .2s ease, color .2s ease;
+  }
+  button{font-family:inherit;cursor:pointer;}
+  input,select,textarea{font-family:inherit;}
+  ::-webkit-scrollbar{width:8px;height:8px;}
+  ::-webkit-scrollbar-thumb{background:var(--scrollbar-thumb);border-radius:8px;}
+  ::-webkit-scrollbar-track{background:var(--scrollbar-track);}
+  * { scrollbar-width: thin; scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track); }
+
+  .app-shell{display:flex;height:100vh;overflow:hidden;}
+
+  /* ---------- icon rail ---------- */
+  .rail{width:64px;flex:none;background:var(--panel-soft);border-right:1px solid var(--border);
+    display:flex;flex-direction:column;align-items:center;padding:16px 0;}
+  .rail-logo-anchor{position:relative;margin-bottom:26px;}
+  .rail-logo{width:40px;height:40px;border-radius:10px;background:var(--accent);border:none;padding:0;cursor:pointer;
+    display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:18px;flex:none;
+    transition:transform .15s cubic-bezier(.34,1.56,.64,1),filter .15s ease,box-shadow .15s ease;}
+  .rail-logo:hover{transform:translateY(-1px) scale(1.05);filter:brightness(1.08);box-shadow:0 4px 14px #3B82F655;}
+  .rail-logo:active{transform:translateY(0) scale(.94);filter:brightness(.96);box-shadow:0 1px 4px #3B82F655;}
+  .rail-logo.open{box-shadow:0 0 0 3px #3B82F640;}
+  /* Expanded-rail variant: the J badge + current tracker name + caret,
+     as one full-width clickable row (same target as the collapsed J). */
+  .rail-logo-row{width:100%;display:flex;align-items:center;gap:10px;padding:4px 6px;border:none;
+    background:transparent;border-radius:10px;cursor:pointer;text-align:left;
+    transition:background .15s ease,transform .1s ease;}
+  .rail-logo-row:hover{background:#33415580;}
+  .rail-logo-row:active{transform:scale(.98);background:#33415599;}
+  .rail-logo-row.open{background:#3B82F61A;box-shadow:0 0 0 1px #3B82F640 inset;}
+  .rail-logo-row .rail-logo{cursor:inherit;}
+  .rail-logo-row:hover .rail-logo{transform:none;filter:none;box-shadow:none;}
+  .rail-logo-label{flex:1;min-width:0;text-align:left;color:var(--text-strong);}
+  .rail-logo-label-caret{color:var(--text-mute);font-size:11px;flex:none;transition:transform .15s ease;}
+  .rail-logo-row.open .rail-logo-label-caret{transform:rotate(180deg);}
+  .rail-nav{display:flex;flex-direction:column;gap:10px;align-items:center;flex:1;}
+  .rail-btn{position:relative;width:40px;height:40px;border-radius:12px;border:none;background:transparent;
+    display:flex;align-items:center;justify-content:center;font-size:17px;color:var(--text-soft);transition:background .15s ease,color .15s ease,transform .1s ease;}
+  .rail-btn:hover{background:#33415580;color:var(--text);transform:translateY(-1px);}
+  .rail-btn:active{transform:translateY(0) scale(.9);background:#33415599;}
+  .rail-btn.active{background:#3B82F626;color:var(--accent-soft);}
+  .rail-btn.active:hover{transform:translateY(-1px) scale(1.03);}
+  .rail-badge{position:absolute;top:-4px;right:-4px;min-width:16px;height:16px;padding:0 4px;border-radius:999px;
+    background:var(--red);color:#fff;font-size:9px;font-weight:700;display:flex;align-items:center;justify-content:center;}
+  .rail-bottom{margin-top:auto;display:flex;flex-direction:column;gap:10px;align-items:center;}
+  .rail-version{font-size:10px;color:var(--text-mute);text-align:center;padding:2px 4px 0;white-space:nowrap;}
+  .rail.expanded{width:200px;align-items:stretch;padding:16px 12px;}
+  .rail.expanded .rail-nav,.rail.expanded .rail-bottom{align-items:stretch;}
+  .rail.expanded .rail-btn{width:100%;justify-content:flex-start;gap:10px;padding:0 10px;}
+  .rail.expanded .rail-badge{position:static;margin-left:auto;flex:none;}
+  .rail-btn-label{font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .rail-collapse-btn{color:var(--text-mute);}
+
+  /* ---------- workspace switcher popover ---------- */
+  .workspace-pop{position:absolute;top:0;left:52px;z-index:70;width:240px;
+    background:var(--panel-glass);-webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px);
+    border:1px solid var(--border);border-radius:12px;padding:8px;box-shadow:0 12px 40px #0007;}
+  .workspace-pop-title{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--text-soft);
+    padding:6px 8px 8px;}
+  .workspace-pop-err{font-size:12px;color:var(--red-text);padding:4px 8px 8px;}
+  .workspace-pop-loading{font-size:12px;color:var(--text-soft);padding:4px 8px;}
+  .workspace-row{display:flex;align-items:center;gap:4px;border-radius:8px;}
+  .workspace-row:hover{background:#33415540;}
+  .workspace-row.active .workspace-name{color:var(--text-strong);font-weight:600;}
+  .workspace-row-main{flex:1;display:flex;align-items:center;gap:8px;background:none;border:none;
+    padding:8px;text-align:left;color:var(--text);font-size:13px;border-radius:8px;min-width:0;}
+  .workspace-check{width:14px;flex:none;color:var(--accent-soft);font-size:12px;}
+  .workspace-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .workspace-row-actions{display:flex;gap:2px;padding-right:4px;}
+  .workspace-row-btn{width:24px;height:24px;border:none;background:transparent;border-radius:6px;cursor:pointer;
+    color:var(--text-soft);font-size:12px;display:flex;align-items:center;justify-content:center;}
+  .workspace-row-btn:hover{background:#33415580;color:var(--text);}
+  .workspace-row-btn.spinning{animation:workspace-spin .8s linear infinite;}
+  @keyframes workspace-spin{to{transform:rotate(360deg);}}
+  .workspace-rename-input{flex:1;background:var(--panel);border:1px solid var(--accent);border-radius:6px;
+    padding:6px 8px;font-size:13px;color:var(--text);margin:2px 4px;}
+  .workspace-pop-divider{height:1px;background:var(--border-soft);margin:6px 4px;}
+  .workspace-import-row{display:flex;flex-direction:column;gap:6px;padding:4px 0 2px;}
+  .workspace-import-or{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-soft);}
+  .link-btn{background:none;border:none;color:var(--accent-soft);font-size:11px;cursor:pointer;padding:2px 0;text-decoration:underline;text-underline-offset:2px;}
+  .link-btn:hover{color:var(--accent);}
+  .workspace-import-row .dropzone.compact{margin-bottom:0;padding:10px 8px;font-size:12px;text-align:center;}
+  .workspace-import-actions{display:flex;justify-content:flex-end;gap:6px;}
+  .workspace-import-actions .btn{padding:5px 10px;font-size:12px;}
+  .workspace-new-btn{color:var(--accent-soft);font-weight:600;width:100%;}
+
+  /* ---------- generic layout ---------- */
+  .main{flex:1;min-width:0;display:flex;flex-direction:column;overflow:hidden;}
+  .topbar{display:flex;gap:12px;align-items:center;padding:16px 24px;border-bottom:1px solid var(--border-soft);flex-wrap:wrap;}
+  .content{flex:1;min-height:0;overflow:auto;padding:20px 24px 40px;}
+
+  .search-input{background:var(--panel);border:1px solid var(--border);border-radius:8px;color:var(--text);
+    padding:9px 12px;font-size:13px;outline:none;transition:border-color .15s ease,box-shadow .15s ease;}
+  .search-input::placeholder{color:var(--text-mute);}
+  .search-input:focus{border-color:var(--accent);box-shadow:0 0 0 3px #3B82F622;}
+
+  /* Wrapper + "x" clear button shared by every search/filter text input in
+     the app (top search bar, command palette, Search Hub role field) — one
+     component (ClearableInput) renders this markup everywhere instead of
+     each input reimplementing its own clear behavior. */
+  .clearable-input{position:relative;display:flex;align-items:center;}
+  .clearable-input input{width:100%;}
+  .clearable-input input.has-value{padding-right:30px;}
+  .clear-input-btn{position:absolute;right:6px;top:50%;transform:translateY(-50%);
+    width:20px;height:20px;border-radius:50%;border:none;background:transparent;
+    color:var(--text-mute);font-size:13px;line-height:1;display:flex;align-items:center;justify-content:center;
+    cursor:pointer;padding:0;transition:background .12s ease,color .12s ease;}
+  .clear-input-btn:hover{background:var(--border);color:var(--text);}
+
+  .btn{border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);
+    padding:8px 14px;font-size:12.5px;font-weight:500;transition:all .15s ease;}
+  .btn:hover{border-color:var(--accent-soft);transform:translateY(-1px);}
+  .btn:active{transform:translateY(0);}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600;}
+  .btn.primary:hover{background:#2f6fe0;}
+  .btn.subtle{background:transparent;border:1px solid var(--border);color:var(--text-soft);}
+  .btn.danger-outline{background:transparent;border:1px solid #ef444455;color:var(--red-text);}
+  .btn:disabled{opacity:.5;cursor:default;transform:none;}
+  .btn.small{padding:5px 10px;font-size:11.5px;}
+  .btn.icon{padding:8px 10px;font-size:15px;line-height:1;}
+
+  .page-title{font-size:20px;font-weight:800;color:var(--text-strong);margin:0 0 4px;letter-spacing:-.01em;}
+  .page-sub{color:var(--text-soft);font-size:12.5px;margin:0 0 18px;}
+
+  .badge{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:999px;font-size:11px;font-weight:600;letter-spacing:.02em;white-space:nowrap;}
+  .stale-tag{color:var(--amber-text);font-size:11.5px;font-weight:600;}
+
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--card-shadow);}
+
+  .empty-state{color:var(--text-soft);font-size:13px;padding:36px 24px;text-align:center;background:var(--panel);
+    border:1px dashed var(--border);border-radius:var(--radius);}
+  .empty-state .empty-icon{font-size:26px;margin-bottom:8px;opacity:.7;}
+  .empty-state .empty-title{color:var(--text);font-weight:700;font-size:13.5px;margin-bottom:4px;}
+
+  .stat-strip{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:18px;}
+  .stat-pill{flex:1;min-width:110px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px;box-shadow:var(--card-shadow);transition:transform .15s ease;}
+  .stat-pill:hover{transform:translateY(-1px);}
+  .stat-pill .num{font-size:22px;font-weight:700;color:var(--text-strong);}
+  .stat-pill .lbl{font-size:11px;color:var(--text-soft);text-transform:uppercase;letter-spacing:.04em;margin-top:2px;}
+
+  mark.hl{background:#F59E0B55;color:var(--text-strong);border-radius:3px;padding:0 1px;}
+
+  /* ---------- pipeline: master/detail ---------- */
+  .pipeline-split{display:flex;gap:0;height:100%;}
+  .master-pane{width:340px;flex:none;border-right:1px solid var(--border-soft);display:flex;flex-direction:column;overflow:hidden;padding-right:14px;}
+  .master-list{overflow:auto;flex:1;display:flex;flex-direction:column;gap:8px;padding-right:4px;}
+  .master-item{border-radius:8px;padding:12px 12px;cursor:pointer;border:1px solid transparent;background:var(--bg);transition:background .15s ease,border-color .15s ease;}
+  .master-item:hover{background:#3B82F612;}
+  .master-item.selected{background:var(--panel);border-left:3px solid var(--accent);padding-left:9px;}
+  .master-item.focused{outline:1px dashed var(--accent-soft);outline-offset:-1px;}
+  .master-item-top{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;}
+  .master-item-title{font-size:13.5px;font-weight:600;color:var(--text-strong);}
+  .master-item-role{font-size:11.5px;color:var(--text-soft);margin-top:3px;}
+  .master-item-meta{font-size:10.5px;color:var(--text-mute);margin-top:6px;}
+
+  .detail-pane{flex:1;min-width:0;overflow:auto;padding-left:22px;}
+  .detail-header{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:18px 22px;margin-bottom:18px;box-shadow:var(--card-shadow);}
+  .detail-eyebrow{color:var(--accent-soft);font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px;}
+  .detail-title{font-size:19px;font-weight:700;color:var(--text-strong);margin:0 0 6px;}
+  .detail-meta{color:var(--text-soft);font-size:12px;}
+  .detail-actions{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;}
+
+  .section-label{color:var(--text-soft);font-size:11.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;margin:22px 0 10px;}
+  .section-label:first-child{margin-top:0;}
+
+  .doc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px;}
+  /* Two-row layout: icon+name+type on top (full card width, so long
+     filenames actually have room), action icons on their own row
+     underneath. Previously all of this was one row and 4-5 action
+     buttons left the filename about 40px to work with. */
+  .doc-card{display:flex;flex-direction:column;gap:8px;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:12px;box-shadow:var(--card-shadow);transition:transform .15s ease,border-color .15s ease;}
+  .doc-card:hover{transform:translateY(-1px);border-color:var(--accent-soft);}
+  .doc-card-top{display:flex;align-items:center;gap:10px;min-width:0;}
+  .dropzone{display:flex;align-items:center;justify-content:center;gap:8px;border:1.5px dashed var(--border);border-radius:10px;padding:16px;margin-bottom:12px;color:var(--text-soft);font-size:13px;cursor:pointer;transition:border-color .15s ease,background .15s ease,color .15s ease;}
+  .dropzone:hover{border-color:var(--accent-soft);color:var(--text);}
+  .dropzone.drag-over{border-color:var(--accent-soft);background:var(--panel);color:var(--text);}
+  .dropzone.busy{cursor:default;opacity:.6;}
+  .dropzone-icon{font-size:16px;}
+  .dropzone.compact{padding:10px;margin-bottom:10px;font-size:12px;}
+  .doc-icon{flex:none;width:36px;height:36px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;}
+  .doc-meta{flex:1;min-width:0;}
+  .doc-name{font-size:12.5px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .doc-type{font-size:10.5px;color:var(--text-soft);margin-top:2px;}
+  .doc-actions{display:flex;gap:4px;flex:none;justify-content:flex-end;border-top:1px solid var(--border-soft);padding-top:8px;}
+  .doc-open{background:transparent;border:1px solid var(--border);border-radius:6px;color:var(--text-soft);padding:5px 8px;font-size:12px;transition:all .15s ease;}
+  .doc-open:hover{border-color:var(--accent-soft);color:var(--accent-soft);}
+
+  .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:4px;}
+  .notes-card{padding:18px 20px;}
+  .field label{display:block;font-size:11px;color:var(--text-soft);margin-bottom:5px;text-transform:uppercase;letter-spacing:.04em;}
+  .field input[type=text], .field input[type=date], .field select, .field textarea{
+    width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);
+    padding:8px 10px;font-size:12.5px;outline:none;transition:border-color .15s ease;}
+  .field textarea{resize:vertical;min-height:60px;}
+  .field input:focus, .field select:focus, .field textarea:focus{border-color:var(--accent);}
+  .field.span2{grid-column:span 2;}
+  .checkbox-row{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--text-soft);margin-top:6px;}
+
+  /* ---------- status pulse (active interviews) ---------- */
+  .status-pulse{position:relative;display:inline-flex;width:7px;height:7px;border-radius:50%;background:currentColor;}
+  .status-pulse::after{content:"";position:absolute;inset:0;border-radius:50%;background:currentColor;
+    animation:pulse-ring 1.6s cubic-bezier(.4,0,.6,1) infinite;}
+  @keyframes pulse-ring{0%{transform:scale(1);opacity:.7;}70%{transform:scale(2.4);opacity:0;}100%{transform:scale(2.4);opacity:0;}}
+
+  /* ---------- kanban (native HTML5 drag & drop, optimistic moves) ---------- */
+  .kanban{display:flex;gap:16px;height:100%;overflow-x:auto;padding-bottom:8px;}
+  .kanban-col{width:270px;flex:none;background:#94A3B812;border:1px solid var(--border);border-radius:10px;padding:12px;display:flex;flex-direction:column;transition:background .15s ease,border-color .15s ease;}
+  .kanban-col.drag-over{background:#3B82F61c;border-color:var(--accent-soft);}
+  .kanban-col-head{font-weight:700;font-size:12.5px;padding-bottom:8px;border-bottom:2px solid var(--border);margin-bottom:10px;display:flex;align-items:center;gap:6px;}
+  .kanban-cards{overflow-y:auto;display:flex;flex-direction:column;gap:10px;flex:1;}
+  .kanban-card{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:10px 12px;cursor:grab;box-shadow:var(--card-shadow);transition:opacity .15s ease,transform .15s ease,border-color .15s ease;}
+  .kanban-card:hover{border-color:var(--accent-soft);}
+  .kanban-card:active{cursor:grabbing;}
+  .kanban-card.dragging{opacity:.35;transform:scale(.98);}
+  .kanban-card.optimistic{opacity:.6;}
+  .kanban-card.stale{border-color:#EF444488;}
+  .kanban-card-title{font-size:13px;font-weight:600;color:var(--text-strong);}
+  .kanban-card-role{font-size:11px;color:var(--text-soft);margin-top:2px;}
+  .kanban-card-foot{display:flex;justify-content:space-between;align-items:center;margin-top:8px;}
+  .kanban-card-meta{font-size:10.5px;color:var(--text-mute);}
+  .kanban-move{margin-top:8px;width:100%;background:var(--bg);border:1px solid var(--border);border-radius:5px;color:var(--text-soft);font-size:11px;padding:5px 6px;}
+  .kanban-drag-hint{font-size:9.5px;color:var(--text-mute);text-align:center;margin-top:6px;}
+  .kanban-empty-col{color:var(--text-mute);font-size:11.5px;padding:14px 6px;text-align:center;border:1px dashed var(--border);border-radius:8px;}
+
+  /* ---------- attention / browse / manage lists ---------- */
+  .list-card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:10px;display:flex;gap:12px;align-items:flex-start;box-shadow:var(--card-shadow);transition:border-color .15s ease;}
+  .list-card.focused{outline:1px dashed var(--accent-soft);outline-offset:-1px;}
+  .list-card-body{flex:1;min-width:0;}
+  .list-card-top{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;}
+  .list-card-title{font-size:13.5px;font-weight:700;color:var(--text-strong);}
+  .list-card-actions{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;}
+  .select-checkbox{width:16px;height:16px;margin-top:2px;accent-color:var(--accent);flex:none;}
+  details.doc-expander{margin-top:10px;}
+  details.doc-expander summary{cursor:pointer;color:var(--text-soft);font-size:11.5px;padding:4px 0;}
+
+  .bulk-bar{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:10px;background:var(--panel-glass);
+    -webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);
+    border:1px solid var(--accent-soft);border-radius:10px;padding:10px 14px;margin-bottom:14px;flex-wrap:wrap;}
+  .bulk-bar .count{font-size:12.5px;font-weight:700;color:var(--accent-soft);margin-right:4px;}
+
+  /* ---------- search hub (external portals directory) ---------- */
+  .hub-prompt-bar{display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap;background:var(--panel-glass);
+    -webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);
+    border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:20px;box-shadow:var(--card-shadow);}
+  .hub-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px;margin-bottom:24px;}
+  .hub-card{background:var(--panel-glass);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);
+    border:1px solid var(--border);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:8px;
+    box-shadow:var(--card-shadow);transition:border-color .15s ease,transform .15s ease;}
+  .hub-card:hover{border-color:var(--accent-soft);transform:translateY(-2px);}
+  .hub-card-top{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;}
+  .hub-tag{display:inline-flex;padding:3px 9px;border-radius:999px;font-size:10.5px;font-weight:700;letter-spacing:.02em;white-space:nowrap;}
+  .hub-card-edit{background:none;border:none;color:var(--text-soft);cursor:pointer;font-size:12px;padding:2px 4px;border-radius:6px;flex:none;}
+  .hub-card-edit:hover{color:var(--text-strong);background:#33415540;}
+  .hub-card-name{font-size:13.5px;font-weight:700;color:var(--text-strong);}
+  .hub-card-desc{font-size:12px;color:var(--text-soft);line-height:1.5;flex:1;}
+  .hub-open{align-self:flex-start;margin-top:2px;}
+  .hub-card-edit-row{display:flex;gap:6px;align-items:center;}
+  .hub-card-edit-col{display:flex;flex-direction:column;gap:6px;}
+  .hub-card-edit-input{flex:1;min-width:0;background:var(--panel);border:1px solid var(--accent);border-radius:6px;
+    padding:5px 8px;font-size:12px;color:var(--text-strong);}
+  .hub-card-edit-actions{display:flex;gap:6px;justify-content:flex-end;}
+  .hub-add-tile{background:transparent;border:1.5px dashed var(--border);border-radius:12px;padding:14px 16px;
+    display:flex;align-items:center;justify-content:center;min-height:96px;color:var(--text-soft);
+    font-size:12.5px;font-weight:600;cursor:pointer;transition:border-color .15s ease,color .15s ease;}
+  .hub-add-tile:hover{border-color:var(--accent-soft);color:var(--text-strong);}
+  .hub-add-tile.editing{cursor:default;flex-direction:column;align-items:stretch;justify-content:flex-start;gap:8px;}
+
+  .tabs{display:flex;gap:4px;border-bottom:1px solid var(--border-soft);margin-bottom:16px;flex-wrap:wrap;}
+  .tab-btn{background:none;border:none;color:var(--text-soft);padding:9px 14px;font-size:12.5px;font-weight:600;border-bottom:2px solid transparent;transition:color .15s ease,border-color .15s ease;}
+  .tab-btn.active{color:var(--text-strong);border-color:var(--accent);}
+
+  .section-row{display:flex;justify-content:space-between;align-items:center;padding:10px 4px;border-bottom:1px solid var(--border-soft);cursor:pointer;}
+  .section-row:hover{color:var(--text-strong);}
+
+  .chip{display:inline-flex;align-items:center;gap:4px;border:1px solid var(--border);border-radius:999px;padding:4px 10px;font-size:11.5px;color:var(--text-soft);cursor:pointer;user-select:none;transition:all .15s ease;}
+  .chip.on{background:#3B82F622;border-color:#3B82F688;color:var(--accent-soft);}
+
+  .metric-card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:16px 18px;flex:1;min-width:160px;box-shadow:var(--card-shadow);}
+  .metric-card .num{font-size:26px;font-weight:700;color:var(--text-strong);}
+  .metric-card .lbl{font-size:12px;color:var(--text-soft);margin-top:4px;}
+  .warning-banner{background:#F59E0B18;border:1px solid #F59E0B55;color:var(--amber-text);border-radius:10px;padding:14px 16px;font-size:12.5px;line-height:1.5;}
+  .success-banner{background:#10B98118;border:1px solid #10B98155;color:var(--green-text);border-radius:10px;padding:14px 16px;font-size:13px;}
+
+  .chart-card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:16px 18px;margin-bottom:20px;box-shadow:var(--card-shadow);}
+  .chart-card h3{margin:0 0 12px;font-size:13px;color:var(--text-soft);text-transform:uppercase;letter-spacing:.04em;}
+  .chart-wrap{position:relative;height:260px;}
+  .charts-row{display:flex;gap:16px;flex-wrap:wrap;}
+  .charts-row .chart-card{flex:1;min-width:320px;}
+
+  .toast-stack{position:fixed;bottom:22px;right:22px;display:flex;flex-direction:column;gap:8px;align-items:flex-end;z-index:50;}
+  .toast{background:var(--panel-glass);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);border:1px solid var(--border);
+    color:var(--text);padding:10px 16px;border-radius:8px;font-size:12.5px;box-shadow:0 8px 24px #0004;}
+  .toast.undo-toast{display:flex;align-items:center;gap:12px;border-color:var(--accent-soft);}
+  .toast.error-toast{display:flex;align-items:flex-start;gap:12px;border-color:#EF444488;background:#EF444414;max-width:420px;line-height:1.4;}
+  .toast-undo-btn{background:none;border:none;color:var(--accent-soft);font-weight:700;font-size:12.5px;padding:0;cursor:pointer;flex:none;white-space:nowrap;}
+  .toast-undo-btn:hover{text-decoration:underline;}
+
+  .center-screen{height:100%;display:flex;align-items:center;justify-content:center;padding:40px;}
+  .onboard-card{max-width:460px;background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:32px;text-align:left;box-shadow:var(--card-shadow);}
+  .onboard-card h1{font-size:20px;margin:0 0 8px;color:var(--text-strong);}
+  .onboard-card p{color:var(--text-soft);font-size:13px;line-height:1.6;}
+  code{background:var(--bg);border:1px solid var(--border);padding:1px 6px;border-radius:4px;font-size:12px;color:var(--accent-soft);}
+
+  /* ---------- glassmorphic modal / palette / drawer chrome ---------- */
+  .modal-backdrop{position:fixed;inset:0;background:#00000066;-webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;z-index:60;}
+  .modal{width:460px;max-width:92vw;background:var(--panel-glass);-webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px);border:1px solid var(--border);border-radius:14px;padding:24px;box-shadow:0 20px 60px #0006;}
+  .modal h2{margin:0 0 4px;font-size:16px;color:var(--text-strong);}
+  .modal-foot{display:flex;justify-content:flex-end;gap:8px;margin-top:18px;}
+  .close-x{position:absolute;top:14px;right:16px;background:none;border:none;color:var(--text-soft);font-size:16px;}
+
+  .theme-switch{display:flex;border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-top:10px;}
+  .theme-switch button{flex:1;background:var(--bg);border:none;color:var(--text-soft);padding:8px 6px;font-size:11.5px;font-weight:600;
+    display:flex;flex-direction:column;align-items:center;gap:3px;transition:all .15s ease;border-right:1px solid var(--border);}
+  .theme-switch button:last-child{border-right:none;}
+  .theme-switch button.active{background:var(--accent);color:#fff;}
+
+  /* ---------- command palette ---------- */
+  .palette-backdrop{position:fixed;inset:0;background:#00000066;-webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px);display:flex;align-items:flex-start;justify-content:center;padding-top:12vh;z-index:80;}
+  .palette{width:560px;max-width:92vw;max-height:64vh;background:var(--panel-glass);-webkit-backdrop-filter:blur(20px);backdrop-filter:blur(20px);border:1px solid var(--border);
+    border-radius:14px;box-shadow:0 20px 60px #0008;display:flex;flex-direction:column;overflow:hidden;}
+  .palette-input{border:none;border-bottom:1px solid var(--border);background:transparent;color:var(--text);
+    padding:16px 18px;font-size:15px;outline:none;}
+  .palette-results{overflow-y:auto;padding:8px;}
+  .palette-group{color:var(--text-mute);font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;font-weight:700;padding:10px 10px 4px;}
+  .palette-item{display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border-radius:8px;cursor:pointer;font-size:13px;}
+  .palette-item.active{background:#3B82F633;}
+  .palette-item .sub{color:var(--text-soft);font-size:11px;}
+  .palette-empty{color:var(--text-soft);font-size:12.5px;padding:20px;text-align:center;}
+  .palette-footer{border-top:1px solid var(--border-soft);padding:8px 14px;display:flex;gap:14px;color:var(--text-mute);font-size:10.5px;}
+  .kbd{background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:1px 5px;font-size:10px;}
+
+  /* ---------- inline PDF / document viewer drawer (glassmorphic slide-over) ---------- */
+  .viewer-backdrop{position:fixed;inset:0;background:#00000055;-webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px);z-index:70;display:flex;justify-content:flex-end;}
+  .viewer-drawer{width:min(760px,92vw);height:100%;background:var(--panel-glass);-webkit-backdrop-filter:blur(20px);backdrop-filter:blur(20px);border-left:1px solid var(--border);
+    display:flex;flex-direction:column;box-shadow:-16px 0 40px #0006;
+    animation:slide-in .22s ease;}
+  @keyframes slide-in{from{transform:translateX(24px);opacity:.4;}to{transform:translateX(0);opacity:1;}}
+  .viewer-header{display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid var(--border-soft);}
+  .viewer-title{flex:1;min-width:0;font-size:13px;font-weight:600;color:var(--text-strong);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .viewer-body{flex:1;min-height:0;background:#000;}
+  .viewer-frame{width:100%;height:100%;border:none;background:#fff;}
+  .viewer-unsupported{height:100%;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px;color:var(--text-soft);padding:30px;text-align:center;}
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" data-presets="react">
+const {useState, useEffect, useMemo, useCallback, useRef, useContext} = React;
+
+// Same-origin: the frontend is served by api.py's StaticFiles mount, so
+// every request is a plain relative fetch — no host to configure, no CORS.
+const API_BASE = "";
+const APP_VERSION = "1.0.0";
+const CACHE_KEY = "jth_cache_v1";
+const THEME_KEY = "jth_theme";
+
+const NAV_ICONS = {
+  pipeline: "\u{1F4CA}",   // 📊
+  attention: "\u26A0\uFE0F", // ⚠️
+  browse: "\u{1F4C2}",     // 📂
+  hub: "\u{1F9ED}",        // 🧭
+  insights: "\u{1F4C8}",   // 📈
+  manage: "\u{1F6E0}\uFE0F", // 🛠️
+  settings: "\u2699\uFE0F", // ⚙️
+};
+const THEME_ICONS = { system: "\u{1F5A5}\uFE0F", light: "\u2600\uFE0F", dark: "\u{1F319}" };
+
+const DEFAULT_STATUS_COLORS = {
+  applied: "#3B82F6", interviewing: "#F59E0B", rejected: "#EF4444", drafted: "#9aa4b2", unknown: "#5b6472",
+};
+const DEFAULT_STATUS_ICONS = {applied:"\u{1F535}", interviewing:"\u{1F7E1}", rejected:"\u{1F534}", drafted:"\u26AA", unknown:"\u26AB"};
+const DEFAULT_STATUS_ORDER = ["drafted","applied","interviewing","rejected","unknown"];
+const DEFAULT_SECTION_LABELS = {
+  applications:"\u{1F4CB} Applications", credentials:"\u{1F393} Credentials", network:"\u{1F91D} Recommendations & Network",
+  resume_library:"\u{1F4C4} Resume Library", leads:"\u{1F50D} Leads", compliance:"\u{1F5C2}\uFE0F Case Management",
+  personal:"\u{1F512} Personal", misc:"\u{1F4CE} Misc",
+};
+// Fallback for a custom category's section id (e.g. "solar_panel_docs")
+// when it isn't one of the known section_labels/DEFAULT_SECTION_LABELS —
+// turns the slug back into a readable title ("Solar Panel Docs") instead
+// of showing the raw snake_case id as the tab name.
+function prettifySection(section){
+  return (section || "").split("_").filter(Boolean)
+    .map(w => w[0].toUpperCase() + w.slice(1)).join(" ") || section;
+}
+// Presets shown as quick-fill buttons in "+ New Category" — clicking one
+// just fills the (always-editable) text field with its folder name; nothing
+// is locked in until Create is pressed. Names are chosen so they classify
+// straight into the existing section ids/labels above (see
+// classify.slugify_section's docstring for why "Credentials", "Network",
+// etc. line up automatically, and classify.SECTION_RULES for why "Case
+// Management" needs its own alias to land on the "compliance" id).
+const NEW_CATEGORY_PRESETS = [
+  "Credentials", "Network", "Resume Library", "Leads", "Case Management", "Personal", "Misc",
+];
+const DEFAULT_DOC_TYPE_LABELS = {
+  resume:"Resume", cover_letter:"Cover letter", interview_prep:"Interview prep", rejection_notice:"Rejection notice",
+  interview_notice:"Interview notice", application_confirmation:"Confirmation", job_posting:"Job posting",
+  certificate:"Certificate", readme:"Readme", other:"Other",
+};
+
+function extBadge(ext){
+  const e = (ext || "").replace(".", "").toUpperCase();
+  if (e === "PDF") return {label:"PDF", bg:"#EF444426", fg:"#F87171"};
+  if (e === "TEX") return {label:"TEX", bg:"#3B82F626", fg:"#60A5FA"};
+  if (e === "MD") return {label:"MD", bg:"#10B98126", fg:"#34D399"};
+  if (e === "DOC" || e === "DOCX") return {label:"DOC", bg:"#3B82F626", fg:"#60A5FA"};
+  return {label:e.slice(0,4) || "FILE", bg:"#33415566", fg:"#94A3B8"};
+}
+function isPdf(d){ return (d.ext || "").toLowerCase() === ".pdf"; }
+function isInlineViewable(d){
+  const e = (d.ext || "").toLowerCase();
+  return e === ".pdf" || e === ".md" || e === ".markdown" || e === ".txt" || e === ".tex" || e === ".docx";
+}
+
+// Global "Show source files" toggle (mirrors the existing "Show personal"
+// pattern) — .tex/etc are always fully indexed and searchable; this only
+// controls whether DocGrid renders them by default. Context, not prop
+// drilling, since DocGrid is used from Pipeline detail, Browse, and the
+// Attention list.
+const ShowSourceContext = React.createContext({showSource: false, setShowSource: () => {}});
+// Docs currently in their undo-window after a delete: hidden from every
+// DocGrid (Pipeline, Browse, Attention) without threading a prop through
+// each call site — same rationale as ShowSourceContext above.
+const PendingDeleteContext = React.createContext({pendingDeleteIds: new Set()});
+function docEffectiveType(d){ return d.effective_doc_type || d.doc_type; }
+
+// FastAPI error bodies are JSON ({"detail": "..."}) — pull the plain
+// message out of that instead of dumping raw JSON into a toast/alert.
+function extractErrorMessage(rawText, fallback){
+  if (!rawText) return fallback;
+  try {
+    const parsed = JSON.parse(rawText);
+    if (parsed && typeof parsed.detail === "string") return parsed.detail;
+  } catch (e) { /* not JSON — fall through to raw text */ }
+  return rawText;
+}
+async function apiGet(path){
+  const res = await fetch(API_BASE + path);
+  if (!res.ok) { const t = await res.text(); throw new Error(extractErrorMessage(t, res.statusText)); }
+  return res.json();
+}
+async function apiPost(path, body){
+  const res = await fetch(API_BASE + path, {
+    method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(body || {}),
+  });
+  if (!res.ok) { const t = await res.text(); throw new Error(extractErrorMessage(t, res.statusText)); }
+  return res.json();
+}
+async function apiDelete(path){
+  const res = await fetch(API_BASE + path, { method: "DELETE" });
+  if (!res.ok) { const t = await res.text(); throw new Error(extractErrorMessage(t, res.statusText)); }
+  return res.json();
+}
+
+function useToast(){
+  const [msg, setMsg] = useState(null);
+  const fire = useCallback((m) => {
+    setMsg(m);
+    setTimeout(() => setMsg(null), 2200);
+  }, []);
+  return [msg, fire];
+}
+
+/* ---- theme: system / light / dark, persisted, zero-flash on load ---- */
+function getSystemTheme(){
+  return (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) ? "dark" : "light";
+}
+function useTheme(){
+  const [pref, setPref] = useState(() => {
+    try { return localStorage.getItem(THEME_KEY) || "system"; } catch(e) { return "system"; }
+  });
+  const applied = pref === "system" ? getSystemTheme() : pref;
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", applied);
+    document.documentElement.setAttribute("data-theme-pref", pref);
+  }, [applied, pref]);
+
+  // Live-follow OS changes while pref==="system".
+  useEffect(() => {
+    if (pref !== "system" || !window.matchMedia) return;
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const handler = () => document.documentElement.setAttribute("data-theme", getSystemTheme());
+    if (mq.addEventListener) mq.addEventListener("change", handler); else mq.addListener(handler);
+    return () => { if (mq.removeEventListener) mq.removeEventListener("change", handler); else mq.removeListener(handler); };
+  }, [pref]);
+
+  const setTheme = useCallback((t) => {
+    setPref(t);
+    try { localStorage.setItem(THEME_KEY, t); } catch(e) { /* best-effort */ }
+  }, []);
+
+  return {pref, applied, setTheme};
+}
+
+/* ---- URL query-param helpers (?view=kanban&selected=123) ---- */
+function readUrlState(){
+  const p = new URLSearchParams(window.location.search);
+  const rawSelected = p.get("selected");
+  return {view: p.get("view") || "pipeline", selected: rawSelected ? Number(rawSelected) : null};
+}
+function writeUrlState(view, selectedId){
+  const p = new URLSearchParams();
+  if (view) p.set("view", view);
+  if (selectedId != null) p.set("selected", String(selectedId));
+  const qs = p.toString();
+  const url = window.location.pathname + (qs ? "?" + qs : "");
+  window.history.replaceState(null, "", url);
+}
+
+/* ---- localStorage cache: instant first paint, then refreshed from the API ---- */
+function loadCache(){
+  try {
+    const raw = localStorage.getItem(CACHE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) { return null; }
+}
+function saveCache(statusInfo, apps){
+  try { localStorage.setItem(CACHE_KEY, JSON.stringify({statusInfo, apps, savedAt: Date.now()})); }
+  catch (e) { /* storage full/unavailable — fine, cache is best-effort */ }
+}
+// Cleared before a workspace switch/create/rebuild-from-scratch reload so
+// the old tracker's cached apps never flash on screen before the new
+// tracker's /api/status + /api/applications calls land.
+function clearCache(){
+  try { localStorage.removeItem(CACHE_KEY); } catch (e) { /* best-effort */ }
+}
+
+/* ---- search-term highlighting ---- */
+function escapeRe(s){ return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+function Highlight({text, query}){
+  const t = text == null ? "" : String(text);
+  const qq = (query || "").trim();
+  if (!qq) return <React.Fragment>{t}</React.Fragment>;
+  // A single capturing group makes String.split() interleave the text as
+  // [before, match, between, match, ..., after] — odd indices are always
+  // the captured matches, so no need to re-test against a stateful global
+  // regex (re-testing a /g regex's .test() advances lastIndex and gives
+  // wrong results on repeat calls).
+  const re = new RegExp("(" + escapeRe(qq) + ")", "ig");
+  const parts = t.split(re);
+  if (parts.length === 1) return <React.Fragment>{t}</React.Fragment>;
+  return (
+    <React.Fragment>
+      {parts.map((part, i) => (i % 2 === 1)
+        ? <mark className="hl" key={i}>{part}</mark>
+        : <React.Fragment key={i}>{part}</React.Fragment>)}
+    </React.Fragment>
+  );
+}
+
+/* ---- shared "x"-to-clear text input, used by every search/filter box in
+   the app (top search bar, command palette, Search Hub role field) — one
+   place for the clear behavior instead of each input reimplementing it. ---- */
+function ClearableInput({value, onChange, onClear, className, placeholder, style, inputRef, onKeyDown, autoFocus, wrapStyle}){
+  const ownRef = useRef(null);
+  const ref = inputRef || ownRef;
+  const hasValue = !!value;
+  const clear = () => {
+    onChange({target: {value: ""}});
+    if (onClear) onClear();
+    if (ref.current) ref.current.focus();
+  };
+  return (
+    <div className="clearable-input" style={wrapStyle}>
+      <input ref={ref} className={(className || "") + (hasValue ? " has-value" : "")} style={style}
+        placeholder={placeholder} value={value} onChange={onChange} onKeyDown={onKeyDown} autoFocus={autoFocus} />
+      {hasValue && (
+        <button type="button" className="clear-input-btn" title="Clear" aria-label="Clear search" onClick={clear}>
+          {"\u2715"}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/* ---- keyboard list navigation (j/k, arrows, enter, esc) ---- */
+function isTypingTarget(el){
+  if (!el) return false;
+  const tag = (el.tagName || "").toLowerCase();
+  return tag === "input" || tag === "textarea" || tag === "select" || el.isContentEditable;
+}
+function useListNav({enabled, items, selectedKey, onSelect, onEnter}){
+  useEffect(() => {
+    if (!enabled) return;
+    const handler = (e) => {
+      if (isTypingTarget(document.activeElement)) return;
+      if (!items || items.length === 0) return;
+      const idx = items.findIndex(it => it.id === selectedKey);
+      if (e.key === "j" || e.key === "ArrowDown") {
+        e.preventDefault();
+        const next = items[Math.min(items.length - 1, idx < 0 ? 0 : idx + 1)];
+        onSelect(next);
+      } else if (e.key === "k" || e.key === "ArrowUp") {
+        e.preventDefault();
+        const prev = items[Math.max(0, idx < 0 ? 0 : idx - 1)];
+        onSelect(prev);
+      } else if (e.key === "Enter") {
+        const cur = idx >= 0 ? items[idx] : items[0];
+        if (cur && onEnter) { e.preventDefault(); onEnter(cur); }
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [enabled, items, selectedKey, onSelect, onEnter]);
+}
+
+function StatusBadge({status, manual, colors, icons}){
+  const c = (colors && colors[status]) || DEFAULT_STATUS_COLORS[status] || "#5b6472";
+  const i = (icons && icons[status]) || DEFAULT_STATUS_ICONS[status] || "\u26AB";
+  return (
+    <span className="badge" style={{background:c+"22", color:c, border:`1px solid ${c}55`}}>
+      {status === "interviewing"
+        ? <span className="status-pulse" style={{color:c}} />
+        : i}
+      {" "}{status ? status[0].toUpperCase()+status.slice(1) : "Unknown"}{manual ? " \u270E" : ""}
+    </span>
+  );
+}
+
+function roleSuffix(app){
+  return app.role_label && app.role_label !== "(root)" ? ` — ${app.role_label}` : "";
+}
+
+function EmptyState({icon, title, sub}){
+  return (
+    <div className="empty-state">
+      {icon && <div className="empty-icon">{icon}</div>}
+      {title && <div className="empty-title">{title}</div>}
+      {sub && <div>{sub}</div>}
+    </div>
+  );
+}
+
+/* =========================== THEME TOGGLE (quick, topbar) =========================== */
+function ThemeToggle({pref, applied, setTheme}){
+  const order = ["system", "light", "dark"];
+  const cycle = () => setTheme(order[(order.indexOf(pref) + 1) % order.length]);
+  const icon = pref === "system" ? (applied === "dark" ? "\u{1F5A5}\uFE0F\u{1F319}" : "\u{1F5A5}\uFE0F\u2600\uFE0F") : THEME_ICONS[pref];
+  return (
+    <button className="btn icon" title={`Theme: ${pref} (click to cycle)`} onClick={cycle}>
+      {THEME_ICONS[pref]}
+    </button>
+  );
+}
+
+/* =========================== WORKSPACE SWITCHER =========================== */
+// The J logo doubles as a tracker switcher: click it to see every tracker
+// (each one a fully separate Applications/ folder + its own two DBs — see
+// workspace.py), switch between them, rename, delete (removes it from this
+// list only — nothing on disk is ever touched), or start a brand-new one.
+function WorkspacePopover({onClose, anchorRef}){
+  const [data, setData] = useState(null);   // {active, workspaces:[...]}
+  const [err, setErr] = useState(null);
+  const [busyId, setBusyId] = useState(null);
+  const [renamingId, setRenamingId] = useState(null);
+  const [renameVal, setRenameVal] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [importing, setImporting] = useState(false);
+  const [importName, setImportName] = useState("");
+  const [importFile, setImportFile] = useState(null);       // single .zip File
+  const [importFolderFiles, setImportFolderFiles] = useState(null); // FileList from a folder picker
+  const [importDragOver, setImportDragOver] = useState(false);
+  const importFileInputRef = useRef(null);
+  const importFolderInputRef = useRef(null);
+  const popRef = useRef(null);
+
+  const load = useCallback(() => {
+    apiGet("/api/workspaces").then(setData).catch(e => setErr(String(e.message || e)));
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  // Close on outside click / Escape — anchorRef lets us ignore the click
+  // that opened this popover (the logo button itself) so toggling isn't
+  // immediately undone by its own mousedown bubbling to document.
+  useEffect(() => {
+    function onDocMouseDown(e){
+      if (popRef.current && popRef.current.contains(e.target)) return;
+      if (anchorRef.current && anchorRef.current.contains(e.target)) return;
+      onClose();
+    }
+    function onKey(e){ if (e.key === "Escape") onClose(); }
+    document.addEventListener("mousedown", onDocMouseDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDocMouseDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [onClose, anchorRef]);
+
+  async function doSwitch(id){
+    if (!data || id === data.active) { onClose(); return; }
+    setBusyId(id);
+    try {
+      await apiPost("/api/workspaces/switch", {id});
+      clearCache();
+      window.location.reload();
+    } catch (e) { setErr(String(e.message || e)); setBusyId(null); }
+  }
+
+  async function doCreate(){
+    const name = newName.trim();
+    if (!name) return;
+    setBusyId("__create__");
+    try {
+      await apiPost("/api/workspaces", {name});
+      clearCache();
+      window.location.reload();
+    } catch (e) { setErr(String(e.message || e)); setBusyId(null); }
+  }
+
+  // Multipart, like the document/application upload flows elsewhere —
+  // posts the tracker name plus either a single .zip (import) or every
+  // file from a picked folder (import-folder, each carrying its
+  // webkitRelativePath as its filename so the server can rebuild the
+  // folder structure), then switches to the resulting workspace the
+  // same way doCreate() does. See workspace.import_workspace_from_zip /
+  // import_workspace_from_files for how the source's contents get
+  // placed on disk (top-level wrapping folder detected/stripped, _app/
+  // and other non-tracker cruft filtered out; the source itself — zip
+  // or folder — is only ever read, never modified).
+  async function doImport(){
+    const name = importName.trim();
+    const hasFolder = importFolderFiles && importFolderFiles.length > 0;
+    if (!name || (!importFile && !hasFolder)) return;
+    setBusyId("__import__");
+    setErr(null);
+    try {
+      const form = new FormData();
+      form.append("name", name);
+      let path;
+      if (hasFolder) {
+        for (const f of importFolderFiles) form.append("files", f, f.webkitRelativePath || f.name);
+        path = "/api/workspaces/import-folder";
+      } else {
+        form.append("file", importFile);
+        path = "/api/workspaces/import";
+      }
+      const res = await fetch(`${API_BASE}${path}`, {method: "POST", body: form});
+      if (!res.ok) { const t = await res.text(); throw new Error(extractErrorMessage(t, res.statusText)); }
+      clearCache();
+      window.location.reload();
+    } catch (e) { setErr(String(e.message || e)); setBusyId(null); }
+  }
+
+  async function doRename(id){
+    const name = renameVal.trim();
+    if (!name) { setRenamingId(null); return; }
+    setBusyId(id);
+    try {
+      await apiPost(`/api/workspaces/${encodeURIComponent(id)}/rename`, {name});
+      setRenamingId(null);
+      // Renaming the *active* tracker changes what the rail's J-row label
+      // shows (see App's statusInfo.workspace.name) — that only gets
+      // refetched on a full reload or the next 15s poll, so force it now
+      // rather than leaving the sidebar showing the old name briefly.
+      if (data && data.active === id) { window.location.reload(); return; }
+      load();
+    } catch (e) { setErr(String(e.message || e)); }
+    finally { setBusyId(null); }
+  }
+
+  async function doExport(id){
+    // fetch + blob (rather than a plain <a href> download) so we can show
+    // a busy state on the button while the server builds the zip — for a
+    // big tracker that can take a moment, and a silent click with no
+    // feedback looks broken.
+    setBusyId(id);
+    try {
+      const res = await fetch(`/api/workspaces/${encodeURIComponent(id)}/export`);
+      if (!res.ok) {
+        let msg = "Export failed.";
+        try { const j = await res.json(); if (j.detail) msg = j.detail; } catch {}
+        throw new Error(msg);
+      }
+      const blob = await res.blob();
+      const cd = res.headers.get("Content-Disposition") || "";
+      const match = cd.match(/filename="?([^"; ]+)"?/);
+      const filename = match ? match[1] : `${id}.zip`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setErr(String(e.message || e));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function doDelete(id, name){
+    if (!window.confirm(`Delete "${name}"?\n\nIts index/notes cache is deleted, and its tracker folder is sent to the Trash (recoverable there — this never permanently deletes anything).`)) return;
+    setBusyId(id);
+    try {
+      await apiDelete(`/api/workspaces/${encodeURIComponent(id)}`);
+      load();
+    } catch (e) { setErr(String(e.message || e)); }
+    finally { setBusyId(null); }
+  }
+
+  return (
+    <div ref={popRef} className="workspace-pop" role="menu">
+      <div className="workspace-pop-title">Trackers</div>
+      {err && <div className="workspace-pop-err">{err}</div>}
+      {!data && !err && <div className="workspace-pop-loading">Loading…</div>}
+      {data && data.workspaces.map(w => (
+        <div key={w.id} className={"workspace-row" + (w.id === data.active ? " active" : "")}>
+          {renamingId === w.id ? (
+            <input
+              className="workspace-rename-input" autoFocus value={renameVal}
+              onChange={e => setRenameVal(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter") doRename(w.id); if (e.key === "Escape") setRenamingId(null); }}
+              onBlur={() => doRename(w.id)}
+            />
+          ) : (
+            <button
+              className="workspace-row-main" disabled={busyId === w.id}
+              onClick={() => doSwitch(w.id)} title={w.root}
+            >
+              <span className="workspace-check">{w.id === data.active ? "\u2713" : ""}</span>
+              <span className="workspace-name">{w.name}</span>
+            </button>
+          )}
+          {renamingId !== w.id && (
+            <div className="workspace-row-actions">
+              <button className="workspace-row-btn" title="Rename"
+                onClick={() => { setRenamingId(w.id); setRenameVal(w.name); }}>{"\u270E"}</button>
+              <button className={"workspace-row-btn" + (busyId === w.id ? " spinning" : "")}
+                disabled={busyId === w.id}
+                title={busyId === w.id ? "Exporting\u2026" : "Export as zip"}
+                onClick={() => doExport(w.id)}>{"\u2913"}</button>
+              {w.id !== "default" && (
+                <button className="workspace-row-btn" title="Delete (its cache is removed; its tracker folder is sent to the Trash)"
+                  onClick={() => doDelete(w.id, w.name)}>{"\u2715"}</button>
+              )}
+            </div>
+          )}
+        </div>
+      ))}
+      <div className="workspace-pop-divider" />
+      {creating ? (
+        <div className="workspace-import-row">
+          <input
+            className="workspace-rename-input" autoFocus placeholder="Tracker name"
+            value={newName} onChange={e => setNewName(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter") doCreate(); if (e.key === "Escape") setCreating(false); }}
+          />
+          <div className="workspace-import-actions">
+            <button className="btn" onClick={() => setCreating(false)}>Cancel</button>
+            <button className="btn primary" disabled={busyId === "__create__" || !newName.trim()}
+              onClick={doCreate}>{busyId === "__create__" ? "Creating\u2026" : "Create tracker"}</button>
+          </div>
+        </div>
+      ) : (
+        <button className="workspace-row-main workspace-new-btn" onClick={() => setCreating(true)}>
+          {"\u2795"} New tracker
+        </button>
+      )}
+      {importing ? (
+        <div className="workspace-import-row">
+          <input
+            className="workspace-rename-input" autoFocus placeholder="Tracker name"
+            value={importName} onChange={e => setImportName(e.target.value)}
+            onKeyDown={e => { if (e.key === "Escape") { setImporting(false); setImportFile(null); setImportFolderFiles(null); } }}
+          />
+          <div
+            className={"dropzone compact" + (importDragOver ? " drag-over" : "")}
+            onDragOver={e => { e.preventDefault(); setImportDragOver(true); }}
+            onDragLeave={() => setImportDragOver(false)}
+            onDrop={e => {
+              e.preventDefault(); setImportDragOver(false);
+              const f = e.dataTransfer.files && e.dataTransfer.files[0];
+              if (!f) return;
+              if (!f.name.toLowerCase().endsWith(".zip")) { setErr("Drag-and-drop only accepts a .zip file here — use \u201cChoose folder\u201d below to import an unzipped folder."); return; }
+              setImportFile(f); setImportFolderFiles(null);
+              if (!importName.trim()) setImportName(f.name.replace(/\.zip$/i, ""));
+            }}
+            onClick={() => importFileInputRef.current && importFileInputRef.current.click()}
+          >
+            <input
+              ref={importFileInputRef} type="file" accept=".zip" style={{display:"none"}}
+              onChange={e => {
+                const f = e.target.files && e.target.files[0] ? e.target.files[0] : null;
+                if (f) { setImportFile(f); setImportFolderFiles(null); if (!importName.trim()) setImportName(f.name.replace(/\.zip$/i, "")); }
+              }}
+            />
+            <span className="dropzone-icon">{"\u{1F4E6}"}</span>
+            <span>
+              {importFile ? importFile.name
+                : importFolderFiles ? `${importFolderFiles.length} files selected`
+                : (importDragOver ? "Drop the .zip here" : "Drag a tracker .zip here, or click to browse")}
+            </span>
+          </div>
+          <div className="workspace-import-or">
+            <span>or</span>
+            <button className="link-btn" type="button"
+              onClick={() => importFolderInputRef.current && importFolderInputRef.current.click()}>
+              {"\u{1F4C1}"} Choose a folder instead
+            </button>
+            <input
+              ref={importFolderInputRef} type="file" webkitdirectory="" directory="" multiple style={{display:"none"}}
+              onChange={e => {
+                const list = e.target.files;
+                if (!list || !list.length) return;
+                setImportFolderFiles(list); setImportFile(null);
+                if (!importName.trim()) {
+                  const top = (list[0].webkitRelativePath || list[0].name).split("/")[0];
+                  setImportName(top);
+                }
+              }}
+            />
+          </div>
+          <div className="workspace-import-actions">
+            <button className="btn" onClick={() => { setImporting(false); setImportFile(null); setImportFolderFiles(null); }}>Cancel</button>
+            <button className="btn primary" disabled={busyId === "__import__" || !importName.trim() || (!importFile && !(importFolderFiles && importFolderFiles.length))}
+              onClick={doImport}>{busyId === "__import__" ? "Importing\u2026" : "Import tracker"}</button>
+          </div>
+        </div>
+      ) : (
+        <button className="workspace-row-main workspace-new-btn" onClick={() => setImporting(true)}>
+          {"\u{1F4E5}"} Import tracker
+        </button>
+      )}
+    </div>
+  );
+}
+
+/* =========================== ICON RAIL =========================== */
+const RAIL_EXPANDED_KEY = "jth_rail_expanded"; // "1"/"0" — whether the rail shows text labels, saved locally only
+function Rail({page, setPage, attentionCount, onOpenPalette, onOpenSettings, workspacePopoverOpen, onToggleWorkspacePopover, onCloseWorkspacePopover, trackerName}){
+  const logoRef = useRef(null);
+  const [expanded, setExpanded] = useState(() => {
+    try { return localStorage.getItem(RAIL_EXPANDED_KEY) === "1"; } catch(e) { return false; }
+  });
+  const toggleExpanded = () => setExpanded(prev => {
+    const next = !prev;
+    try { localStorage.setItem(RAIL_EXPANDED_KEY, next ? "1" : "0"); } catch(e) { /* best-effort */ }
+    return next;
+  });
+  const items = [
+    {key:"pipeline", title:"Pipeline"},
+    {key:"attention", title:"Needs Attention", badge: attentionCount},
+    {key:"browse", title:"Browse by Section"},
+    {key:"hub", title:"Search Hub"},
+    {key:"insights", title:"Insights"},
+    {key:"manage", title:"Manage"},
+  ];
+  return (
+    <div className={"rail" + (expanded ? " expanded" : "")}>
+      <div className="rail-logo-anchor">
+        {expanded ? (
+          <button ref={logoRef} className={"rail-logo-row" + (workspacePopoverOpen ? " open" : "")}
+            title="Click to switch trackers" onClick={onToggleWorkspacePopover}>
+            <span className="rail-logo">J</span>
+            <span className="rail-btn-label rail-logo-label">{trackerName || "JobTracker Hub"}</span>
+            <span className="rail-logo-label-caret">{"\u2304"}</span>
+          </button>
+        ) : (
+          <button ref={logoRef} className={"rail-logo" + (workspacePopoverOpen ? " open" : "")}
+            title="JobTracker Hub — click to switch trackers" onClick={onToggleWorkspacePopover}>J</button>
+        )}
+        {workspacePopoverOpen && <WorkspacePopover onClose={onCloseWorkspacePopover} anchorRef={logoRef} />}
+      </div>
+      <div className="rail-nav">
+        {items.map(it => (
+          <button key={it.key} title={expanded ? undefined : it.title} className={"rail-btn" + (page===it.key ? " active":"")}
+            onClick={() => setPage(it.key)}>
+            {NAV_ICONS[it.key]}
+            {expanded && <span className="rail-btn-label">{it.title}</span>}
+            {it.badge ? <span className="rail-badge">{it.badge > 99 ? "99+" : it.badge}</span> : null}
+          </button>
+        ))}
+      </div>
+      <div className="rail-bottom">
+        <button title={expanded ? undefined : "Command palette (⌘K)"} className="rail-btn" onClick={onOpenPalette}>
+          {"\u2318"}{expanded && <span className="rail-btn-label">Command palette</span>}
+        </button>
+        <button title={expanded ? undefined : "Settings"} className="rail-btn" onClick={onOpenSettings}>
+          {NAV_ICONS.settings}{expanded && <span className="rail-btn-label">Settings</span>}
+        </button>
+        <button title={expanded ? "Collapse sidebar" : "Expand sidebar"} className="rail-btn rail-collapse-btn" onClick={toggleExpanded}>
+          {expanded ? "\u00AB" : "\u00BB"}{expanded && <span className="rail-btn-label">Collapse</span>}
+        </button>
+        {expanded && <div className="rail-version">{"\u00A9 " + new Date().getFullYear() + " JobTracker Hub \u00B7 v" + APP_VERSION}</div>}
+      </div>
+    </div>
+  );
+}
+
+/* =========================== DOCS =========================== */
+function DocGrid({docs, docTypeLabels, onOpen, onView, query, onFixType, onRename, onDelete}){
+  const {showSource} = useContext(ShowSourceContext);
+  const {pendingDeleteIds} = useContext(PendingDeleteContext);
+  const all = docs || [];
+  const sourceVisible = all.filter(d => showSource || !d.is_source);
+  const visible = sourceVisible.filter(d => !pendingDeleteIds.has(d.id));
+  const hiddenCount = all.length - sourceVisible.length;
+
+  if (all.length === 0) {
+    return <EmptyState icon={"\u{1F4C1}"} title="No documents indexed" sub="This application doesn't have any files under it yet." />;
+  }
+  return (
+    <div>
+      <div className="doc-grid">
+        {visible.map(d => {
+          const badge = extBadge(d.ext);
+          const etype = docEffectiveType(d);
+          const label = (docTypeLabels && docTypeLabels[etype]) || DEFAULT_DOC_TYPE_LABELS[etype] || etype;
+          return (
+            <div className="doc-card" key={d.id}>
+              <div className="doc-card-top">
+                <div className="doc-icon" style={{background:badge.bg, color:badge.fg}}>{badge.label}</div>
+                <div className="doc-meta">
+                  <div className="doc-name" title={d.filename}><Highlight text={d.filename} query={query} /></div>
+                  <div className="doc-type">
+                    {label}
+                    {d.doc_type === "other" && !d.doc_type_override && (
+                      <span title="Filename gave no classification signal — open to check" style={{color:"#F59E0B", marginLeft:6}}>{"\u2753 unclassified"}</span>
+                    )}
+                    {d.duplicate_count > 0 && (
+                      <span title="Byte-identical to a document used elsewhere — nothing deleted or merged" style={{color:"#F59E0B", marginLeft:6}}>
+                        {"\u29C9"} also used in {d.duplicate_count} other place{d.duplicate_count > 1 ? "s" : ""}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+              <div className="doc-actions">
+                {isInlineViewable(d) && (
+                  <button className="doc-open" title="View inline" onClick={() => onView(d)}>{"\u{1F441}"}</button>
+                )}
+                <button className="doc-open" title="Open in OS" onClick={() => onOpen(d.relpath)}>{"\u2197"}</button>
+                {onFixType && d.doc_type === "other" && (
+                  <button className="doc-open" title="Correct the document type (doesn't rename the file)" onClick={() => onFixType(d)}>{"\u270E"}</button>
+                )}
+                {onRename && (
+                  <button className="doc-open" title="Rename file" onClick={() => onRename(d)}>{"\u{1F4DD}"}</button>
+                )}
+                {onDelete && (
+                  <button className="doc-open" title="Move to Trash" onClick={() => onDelete(d)}>{"\u{1F5D1}\uFE0F"}</button>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {hiddenCount > 0 && (
+        <div style={{color:"var(--text-soft)", fontSize:12, padding:"6px 2px"}}>
+          {hiddenCount} source file{hiddenCount > 1 ? "s" : ""} hidden — toggle "Show source files" in the top bar.
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* =========================== UPLOAD DROPZONE =========================== */
+// Same native-HTML5 drag pattern as KanbanBoard above, plus a plain file
+// input as a click-to-browse fallback (needed on mobile, and for anyone
+// who'd rather pick files than drag them).
+function UploadDropzone({itemId, onUpload, compact}){
+  const [over, setOver] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const inputRef = useRef(null);
+
+  const send = async (fileList) => {
+    if (!fileList || !fileList.length) return;
+    setBusy(true);
+    try { await onUpload(itemId, Array.from(fileList)); }
+    catch (e) { /* App-level uploadDocuments has no error toast of its own on failure — surface it here */ alert(`Upload failed: ${e.message}`); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div
+      className={"dropzone" + (compact ? " compact" : "") + (over ? " drag-over" : "") + (busy ? " busy" : "")}
+      onDragOver={e => { e.preventDefault(); setOver(true); }}
+      onDragLeave={() => setOver(false)}
+      onDrop={e => { e.preventDefault(); setOver(false); send(e.dataTransfer.files); }}
+      onClick={() => !busy && inputRef.current && inputRef.current.click()}
+    >
+      <input ref={inputRef} type="file" multiple style={{display:"none"}}
+        onChange={e => { send(e.target.files); e.target.value = ""; }} />
+      <span className="dropzone-icon">{"\u{1F4CE}"}</span>
+      <span>{busy ? "Uploading\u2026" : (over ? "Drop to add" : "Drag files here, or click to browse")}</span>
+    </div>
+  );
+}
+
+/* =========================== PIPELINE: DETAIL PANE =========================== */
+function DetailPane({app, meta, docs, onSaveOverride, onOpen, onView, onFixType, onUpload, onRename, onDelete, query}){
+  const [notes, setNotes] = useState("");
+  const [dateApplied, setDateApplied] = useState("");
+  const [nextAction, setNextAction] = useState("");
+  const [nextActionDate, setNextActionDate] = useState("");
+  const [manualStatus, setManualStatus] = useState("");
+  const [archived, setArchived] = useState(false);
+  const [dirty, setDirty] = useState(false);
+
+  useEffect(() => {
+    if (!app) return;
+    setNotes(app.notes || "");
+    setDateApplied(app.date_applied ? app.date_applied.slice(0,10) : "");
+    setNextAction(app.next_action || "");
+    setNextActionDate(app.next_action_date ? app.next_action_date.slice(0,10) : "");
+    setManualStatus(app.manual_status || "");
+    setArchived(!!app.archived);
+    setDirty(false);
+  }, [app && app.id]);
+
+  if (!app) {
+    return <div className="detail-pane"><EmptyState icon={"\u{1F4CB}"} title="Nothing selected"
+      sub={<React.Fragment>Select an application from the list. Tip: <span className="kbd">j</span>/<span className="kbd">k</span> to move, <span className="kbd">Enter</span> to preview a document.</React.Fragment>} /></div>;
+  }
+
+  const statusOrder = meta.status_order || DEFAULT_STATUS_ORDER;
+
+  const markField = (setter) => (v) => { setter(v); setDirty(true); };
+
+  const save = async () => {
+    await onSaveOverride(app.id, {
+      manual_status: manualStatus || null,
+      reset_status: !manualStatus,
+      notes,
+      date_applied: dateApplied || null,
+      next_action: nextAction || null,
+      next_action_date: nextActionDate || null,
+      archived,
+    });
+    setDirty(false);
+  };
+
+  const quickFollowUp = async () => {
+    const d = new Date(); d.setDate(d.getDate() + 7);
+    const iso = d.toISOString().slice(0,10);
+    setNextAction("Follow up"); setNextActionDate(iso); setDirty(true);
+    await onSaveOverride(app.id, {next_action:"Follow up", next_action_date: iso});
+  };
+
+  const quickResetActivity = async () => {
+    const iso = new Date().toISOString().slice(0,10);
+    await onSaveOverride(app.id, {activity_override: iso});
+  };
+
+  return (
+    <div className="detail-pane">
+      <div className="detail-header">
+        <div className="detail-eyebrow"><Highlight text={app.effective_company} query={query} /></div>
+        <h2 className="detail-title">{app.role_label && app.role_label !== "(root)" ? <Highlight text={app.role_label} query={query} /> : app.effective_company}</h2>
+        <div className="detail-meta">
+          {app.item_key.split("|").pop()} {app.date_applied ? `\u2022 Applied ${app.date_applied.slice(0,10)}` : ""} {app.activity_override ? `\u2022 Activity reset ${app.activity_override.slice(0,10)}` : ""}
+        </div>
+        <div className="detail-actions">
+          <select className="btn" value={manualStatus} onChange={e => { setManualStatus(e.target.value); setDirty(true); }}>
+            <option value="">(auto — {app.status})</option>
+            {statusOrder.map(s => <option key={s} value={s}>{s[0].toUpperCase()+s.slice(1)}</option>)}
+          </select>
+          <button className="btn primary" onClick={quickFollowUp}>{"Follow Up \u{1F4C5} (+7d)"}</button>
+          <button className="btn" title="Keeps date applied as-is — just resets the days-quiet countdown to 0."
+            onClick={quickResetActivity}>{"Reset Activity Clock \u{1F503}"}</button>
+          {dirty && <button className="btn" onClick={save}>Save changes</button>}
+        </div>
+      </div>
+
+      <div className="section-label">Attached Documents ({docs.length})</div>
+      {onUpload && <UploadDropzone itemId={app.id} onUpload={onUpload} />}
+      <DocGrid docs={docs} docTypeLabels={meta.doc_type_labels} onOpen={onOpen} onView={onView} query={query} onFixType={onFixType} onRename={onRename} onDelete={onDelete} />
+
+      <div className="section-label">Notes &amp; Status</div>
+      <div className="card notes-card">
+        <div className="form-grid">
+          <div className="field span2">
+            <label>Notes</label>
+            <textarea value={notes} onChange={e => markField(setNotes)(e.target.value)} placeholder="e.g. waiting on referral from Jess" />
+          </div>
+          <div className="field">
+            <label>Date applied</label>
+            <input type="date" value={dateApplied} onChange={e => markField(setDateApplied)(e.target.value)} />
+          </div>
+          <div className="field">
+            <label>Next action date</label>
+            <input type="date" value={nextActionDate} onChange={e => markField(setNextActionDate)(e.target.value)} />
+          </div>
+          <div className="field span2">
+            <label>Next action</label>
+            <input type="text" value={nextAction} onChange={e => markField(setNextAction)(e.target.value)} placeholder="e.g. Follow up by email" />
+          </div>
+        </div>
+        <div className="checkbox-row">
+          <input type="checkbox" checked={archived} onChange={e => { setArchived(e.target.checked); setDirty(true); }} id="arch-cb" />
+          <label htmlFor="arch-cb">Archive (hide from Needs Attention)</label>
+        </div>
+        {dirty && <div style={{marginTop:14}}><button className="btn primary" onClick={save}>Save</button></div>}
+      </div>
+    </div>
+  );
+}
+
+/* =========================== PIPELINE: LIST (MASTER) =========================== */
+function MasterList({apps, selectedKey, onSelect, meta, query}){
+  return (
+    <div className="master-list">
+      {apps.length === 0 && <EmptyState icon={"\u{1F50D}"} title="No matches" sub="No applications match the current filters." />}
+      {apps.map(app => (
+        <div key={app.id} className={"master-item" + (app.id===selectedKey ? " selected":"")} onClick={() => onSelect(app)}>
+          <div className="master-item-top">
+            <div>
+              <div className="master-item-title"><Highlight text={app.effective_company} query={query} /></div>
+              <div className="master-item-role">{app.role_label !== "(root)" ? <Highlight text={app.role_label} query={query} /> : "—"}</div>
+            </div>
+            <StatusBadge status={app.effective_status} manual={!!app.manual_status} colors={meta.status_colors} icons={meta.status_icons} />
+          </div>
+          <div className="master-item-meta">
+            {app.days_since_activity != null ? `${app.days_since_activity}d since ${app.date_is_manual ? "date applied" : "last file activity"}` : "no date on file"}
+            {app.is_stale ? <span className="stale-tag"> {"\u2022"} needs attention</span> : null}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* =========================== PIPELINE: KANBAN (native drag & drop, optimistic) =========================== */
+function KanbanBoard({apps, meta, onMove, pendingIds}){
+  const statusOrder = meta.status_order || DEFAULT_STATUS_ORDER;
+  const [dragId, setDragId] = useState(null);
+  const [overCol, setOverCol] = useState(null);
+
+  const handleDrop = (status) => (e) => {
+    e.preventDefault();
+    setOverCol(null);
+    const raw = e.dataTransfer.getData("text/plain") || dragId;
+    const id = Number(raw);
+    const app = apps.find(a => a.id === id);
+    if (app && app.effective_status !== status) onMove(app, status);
+    setDragId(null);
+  };
+
+  return (
+    <div className="kanban">
+      {statusOrder.map(status => {
+        const inStatus = apps.filter(a => a.effective_status === status);
+        const color = (meta.status_colors && meta.status_colors[status]) || DEFAULT_STATUS_COLORS[status];
+        return (
+          <div className={"kanban-col" + (overCol === status ? " drag-over" : "")} key={status}
+            onDragOver={e => { e.preventDefault(); setOverCol(status); }}
+            onDragLeave={() => setOverCol(c => c === status ? null : c)}
+            onDrop={handleDrop(status)}>
+            <div className="kanban-col-head" style={{borderColor:color+"66", color}}>
+              {status === "interviewing" && <span className="status-pulse" style={{color}} />}
+              {status[0].toUpperCase()+status.slice(1)} &middot; {inStatus.length}
+            </div>
+            <div className="kanban-cards">
+              {inStatus.map(app => (
+                <div
+                  className={"kanban-card" + (app.is_stale ? " stale":"") + (dragId===app.id ? " dragging":"") + (pendingIds && pendingIds.has(app.id) ? " optimistic":"")}
+                  key={app.id}
+                  draggable
+                  onDragStart={e => { e.dataTransfer.setData("text/plain", String(app.id)); e.dataTransfer.effectAllowed = "move"; setDragId(app.id); }}
+                  onDragEnd={() => { setDragId(null); setOverCol(null); }}
+                >
+                  <div className="kanban-card-title">{app.effective_company}</div>
+                  <div className="kanban-card-role">{app.role_label !== "(root)" ? app.role_label : "—"}{app.is_stale ? " \u26A0" : ""}</div>
+                  <div className="kanban-card-foot">
+                    <span className="kanban-card-meta">{app.days_since_activity != null ? `${app.days_since_activity}d` : "?"}</span>
+                  </div>
+                  <select className="kanban-move" value={status} onChange={e => onMove(app, e.target.value)}>
+                    {statusOrder.map(s => <option key={s} value={s}>Move to {s}</option>)}
+                  </select>
+                </div>
+              ))}
+              {inStatus.length===0 && <div className="kanban-empty-col">Drop a card here.</div>}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* =========================== PIPELINE PAGE =========================== */
+function PipelinePage({apps, meta, docsByItemId, ensureDocs, onSaveOverride, onMoveStatus, pendingIds, onOpen, onView, onFixType, onUpload, onRename, onDelete, searchQuery, selectedKey, setSelectedKey, active}){
+  const statusOrder = meta.status_order || DEFAULT_STATUS_ORDER;
+  const [view, setView] = useState("list");
+  const [statusFilter, setStatusFilter] = useState(new Set(statusOrder));
+  const [showArchived, setShowArchived] = useState(false);
+  const [sortBy, setSortBy] = useState("company");
+
+  const q = (searchQuery || "").trim().toLowerCase();
+  const sorters = {
+    // Most days-quiet first — the default "what needs my attention" order.
+    days_quiet: (a,b) => (b.days_since_activity ?? -1) - (a.days_since_activity ?? -1),
+    // Same alphabetical rule Browse uses, so switching views reads the same.
+    company: (a,b) => (a.effective_company||"").localeCompare(b.effective_company||"") || (a.role_label||"").localeCompare(b.role_label||""),
+    // Soonest-due next action first; items with no next action sort last.
+    next_action: (a,b) => {
+      if (!a.next_action_date && !b.next_action_date) return 0;
+      if (!a.next_action_date) return 1;
+      if (!b.next_action_date) return -1;
+      return a.next_action_date.localeCompare(b.next_action_date);
+    },
+    // Newest date_applied first; never-applied items sort last.
+    recent_applied: (a,b) => {
+      if (!a.date_applied && !b.date_applied) return 0;
+      if (!a.date_applied) return 1;
+      if (!b.date_applied) return -1;
+      return b.date_applied.localeCompare(a.date_applied);
+    },
+    // Grouped by pipeline stage, in the same order as the status chips/stat strip.
+    status: (a,b) => statusOrder.indexOf(a.effective_status) - statusOrder.indexOf(b.effective_status)
+      || (b.days_since_activity ?? -1) - (a.days_since_activity ?? -1),
+  };
+
+  const filtered = useMemo(() => apps.filter(a => {
+    if (!statusFilter.has(a.effective_status)) return false;
+    if (!showArchived && a.archived) return false;
+    if (q) {
+      const hay = (a.effective_company + " " + a.role_label).toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  }).sort(sorters[sortBy] || sorters.days_quiet), [apps, statusFilter, showArchived, q, sortBy]);
+
+  const selected = filtered.find(a => a.id === selectedKey) || filtered[0] || null;
+
+  useEffect(() => {
+    if (selected) ensureDocs(selected.id);
+  }, [selected && selected.id]);
+
+  const selectApp = useCallback((a) => setSelectedKey(a.id), [setSelectedKey]);
+  const openFirstDoc = useCallback((a) => {
+    const docs = docsByItemId[a.id] || [];
+    const pdf = docs.find(isPdf);
+    if (pdf) onView(pdf);
+  }, [docsByItemId, onView]);
+  useListNav({enabled: active && view === "list", items: filtered, selectedKey: selected && selected.id, onSelect: selectApp, onEnter: openFirstDoc});
+
+  const activeApps = apps.filter(a => !a.archived);
+  const byStatus = {};
+  statusOrder.forEach(s => byStatus[s] = 0);
+  activeApps.forEach(a => byStatus[a.effective_status] = (byStatus[a.effective_status]||0)+1);
+
+  const toggleStatus = (s) => {
+    const next = new Set(statusFilter);
+    if (next.has(s)) next.delete(s); else next.add(s);
+    setStatusFilter(next);
+  };
+
+  return (
+    <div style={{display:"flex", flexDirection:"column", height:"100%"}}>
+      <h1 className="page-title">Pipeline</h1>
+      <p className="page-sub">{filtered.length} of {apps.length} applications shown</p>
+
+      <div className="stat-strip">
+        {statusOrder.map(s => (
+          <div className="stat-pill" key={s}>
+            <div className="num">{byStatus[s]||0}</div>
+            <div className="lbl">{s}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{display:"flex", gap:10, alignItems:"center", marginBottom:16, flexWrap:"wrap"}}>
+        <div style={{display:"flex", background:"var(--panel)", border:"1px solid var(--border)", borderRadius:8, overflow:"hidden"}}>
+          <button className="btn subtle" style={{border:"none", borderRadius:0, background: view==="list" ? "var(--border)":"transparent"}} onClick={() => setView("list")}>List</button>
+          <button className="btn subtle" style={{border:"none", borderRadius:0, background: view==="kanban" ? "var(--border)":"transparent"}} onClick={() => setView("kanban")}>Kanban (drag cards to move)</button>
+        </div>
+        {statusOrder.map(s => (
+          <span key={s} className={"chip" + (statusFilter.has(s) ? " on":"")} onClick={() => toggleStatus(s)}>{s}</span>
+        ))}
+        <label style={{display:"flex", alignItems:"center", gap:6, color:"var(--text-soft)", fontSize:12}}>
+          Sort by
+          <select className="btn subtle" style={{padding:"4px 8px"}} value={sortBy} onChange={e => setSortBy(e.target.value)}>
+            <option value="days_quiet">Days quiet</option>
+            <option value="company">Company A–Z</option>
+            <option value="next_action">Next action date</option>
+            <option value="recent_applied">Recently applied</option>
+            <option value="status">Status</option>
+          </select>
+        </label>
+        <label style={{display:"flex", alignItems:"center", gap:6, color:"var(--text-soft)", fontSize:12}}>
+          <input type="checkbox" checked={showArchived} onChange={e => setShowArchived(e.target.checked)} /> Show archived
+        </label>
+      </div>
+
+      <div style={{flex:1, minHeight:0}}>
+        {view === "list" ? (
+          filtered.length === 0 ? (
+            <EmptyState icon={"\u{1F4ED}"} title="Nothing here" sub="Try a different status filter, or clear the search box." />
+          ) : (
+            <div className="pipeline-split">
+              <div className="master-pane">
+                <MasterList apps={filtered} selectedKey={selected && selected.id} onSelect={selectApp} meta={meta} query={searchQuery} />
+              </div>
+              <DetailPane app={selected} meta={meta} docs={selected ? (docsByItemId[selected.id] || []) : []} onSaveOverride={onSaveOverride} onOpen={onOpen} onView={onView} onFixType={onFixType} onUpload={onUpload} onRename={onRename} onDelete={onDelete} query={searchQuery} />
+            </div>
+          )
+        ) : (
+          <KanbanBoard apps={filtered} meta={meta} onMove={onMoveStatus} pendingIds={pendingIds} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* =========================== ATTENTION PAGE (with batch operations) =========================== */
+function AttentionPage({apps, meta, docsByItemId, ensureDocs, onSaveOverride, onBulkOverride, onOpen, onView, active}){
+  const attn = useMemo(() => apps.filter(a => !a.archived && !a.is_snoozed && (a.is_stale || a.next_action_due))
+    .sort((a,b) => (b.next_action_due?1:0)-(a.next_action_due?1:0) || (b.days_since_activity||0)-(a.days_since_activity||0)), [apps]);
+
+  const [selected, setSelected] = useState(() => new Set());
+  const [focusedKey, setFocusedKey] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  const toggleOne = (id) => setSelected(prev => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+  const toggleAll = () => setSelected(prev => prev.size === attn.length ? new Set() : new Set(attn.map(a => a.id)));
+
+  const selectFocus = useCallback((a) => setFocusedKey(a.id), []);
+  const openFirstDoc = useCallback((a) => {
+    ensureDocs(a.id);
+    const docs = docsByItemId[a.id] || [];
+    const pdf = docs.find(isPdf);
+    if (pdf) onView(pdf);
+  }, [docsByItemId, ensureDocs, onView]);
+  useListNav({enabled: active, items: attn, selectedKey: focusedKey, onSelect: selectFocus, onEnter: openFirstDoc});
+
+  const runBulk = async (fields) => {
+    setBusy(true);
+    try { await onBulkOverride(Array.from(selected), fields); setSelected(new Set()); }
+    finally { setBusy(false); }
+  };
+
+  if (attn.length === 0) {
+    return (
+      <div>
+        <h1 className="page-title">Needs Attention</h1>
+        <p className="page-sub">Applications sitting quietly for a while, plus anything with a next action due.</p>
+        <div className="success-banner">{"Nothing needs attention right now. \u{1F389}"}</div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <h1 className="page-title">Needs Attention</h1>
+      <p className="page-sub">21+ days since applied/interviewing, or 14+ days untouched while drafted/unknown, plus due next actions. Nothing is ever deleted — dismiss with Archive if it doesn't need action. (<span className="kbd">j</span>/<span className="kbd">k</span> to move focus, <span className="kbd">Enter</span> to preview a document.)</p>
+      <p className="page-sub">{attn.length} item(s)</p>
+
+      {selected.size > 0 && (
+        <div className="bulk-bar">
+          <span className="count">{selected.size} selected</span>
+          <button className="btn primary small" disabled={busy} onClick={() => runBulk({manual_status:"applied"})}>Bulk Move to Applied</button>
+          <button className="btn small" disabled={busy} onClick={() => runBulk({manual_status:"rejected"})}>Bulk Mark Rejected</button>
+          <button className="btn danger-outline small" disabled={busy} onClick={() => runBulk({archived:true})}>Bulk Archive</button>
+          <button className="btn subtle small" onClick={() => setSelected(new Set())}>Clear</button>
+        </div>
+      )}
+
+      <label style={{display:"flex", alignItems:"center", gap:8, color:"var(--text-soft)", fontSize:12, margin:"0 0 10px"}}>
+        <input type="checkbox" className="select-checkbox" checked={selected.size === attn.length} onChange={toggleAll} /> Select all
+      </label>
+
+      {attn.map(app => {
+        const reasons = [];
+        if (app.next_action_due) reasons.push(`next action due: ${app.next_action}`);
+        if (app.is_stale) reasons.push(`${app.days_since_activity} days quiet${app.activity_is_reset ? " (since reset)" : ""}`);
+        return (
+          <div className={"list-card" + (focusedKey===app.id ? " focused":"")} key={app.id} onClick={() => setFocusedKey(app.id)}>
+            <input type="checkbox" className="select-checkbox" checked={selected.has(app.id)}
+              onChange={() => toggleOne(app.id)} onClick={e => e.stopPropagation()} />
+            <div className="list-card-body">
+              <div className="list-card-top">
+                <div className="list-card-title">{app.effective_company}{roleSuffix(app)}</div>
+                <div style={{textAlign:"right"}}>
+                  <StatusBadge status={app.effective_status} manual={!!app.manual_status} colors={meta.status_colors} icons={meta.status_icons} />
+                  <div className="stale-tag" style={{marginTop:4}}>{reasons.join(" \u00b7 ")}</div>
+                </div>
+              </div>
+              <details className="doc-expander" onToggle={() => ensureDocs(app.id)}>
+                <summary>Documents</summary>
+                <div style={{marginTop:10}}>
+                  <DocGrid docs={docsByItemId[app.id] || []} docTypeLabels={meta.doc_type_labels} onOpen={onOpen} onView={onView} />
+                </div>
+              </details>
+              <div className="list-card-actions">
+                <button className="btn" onClick={() => onSaveOverride(app.id, {next_action:null, next_action_date:null})}>Mark followed up</button>
+                <button className="btn" title="Keeps date applied as-is — just resets the days-quiet countdown to 0 (e.g. after an interview or a call)."
+                  onClick={() => onSaveOverride(app.id, {activity_override: new Date().toISOString().slice(0,10)})}>Reset activity clock</button>
+                <button className="btn" onClick={() => {
+                  const d = new Date(); d.setDate(d.getDate()+7);
+                  onSaveOverride(app.id, {snoozed_until:d.toISOString().slice(0,10)});
+                }}>Snooze 7 days</button>
+                <button className="btn danger-outline" onClick={() => onSaveOverride(app.id, {archived:true})}>Archive</button>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* =========================== BROWSE PAGE =========================== */
+function BrowsePage({searchQuery, showPersonal, meta, onOpen, onView, onFixType, onUpload, onRename, onDelete, docsVersion}){
+  const [data, setData] = useState(null);
+  const [activeTab, setActiveTab] = useState(null);
+  const [err, setErr] = useState(null);
+  const [showArchived, setShowArchived] = useState(false);
+
+  useEffect(() => {
+    apiGet(`/api/browse?show_personal=${showPersonal}&show_archived=${showArchived}&q=${encodeURIComponent(searchQuery||"")}`)
+      .then(d => { setData(d); if (!activeTab) setActiveTab(Object.keys(d)[0]); })
+      .catch(e => setErr(String(e.message||e)));
+  }, [searchQuery, showPersonal, showArchived, docsVersion]);
+
+  if (err) return <EmptyState icon={"\u26A0\uFE0F"} title="Couldn't load Browse" sub={err} />;
+  if (!data) return <EmptyState icon={"\u23F3"} title="Loading…" />;
+
+  const sections = Object.keys(data);
+  const items = data[activeTab] || [];
+
+  return (
+    <div>
+      <h1 className="page-title">Browse by Section</h1>
+      {searchQuery && <p className="page-sub">Filtered to items matching "{searchQuery}"</p>}
+      <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:8, marginBottom:4}}>
+        <div className="tabs">
+          {sections.map(s => (
+            <button key={s} className={"tab-btn" + (activeTab===s?" active":"")} onClick={() => setActiveTab(s)}>
+              {(meta.section_labels && meta.section_labels[s]) || DEFAULT_SECTION_LABELS[s] || prettifySection(s)}
+            </button>
+          ))}
+        </div>
+        <label style={{display:"flex", alignItems:"center", gap:6, color:"var(--text-soft)", fontSize:12}}>
+          <input type="checkbox" checked={showArchived} onChange={e => setShowArchived(e.target.checked)} /> Show archived
+        </label>
+      </div>
+      {items.length === 0 && <EmptyState icon={"\u{1F4ED}"} title="No matches" sub="No matches in this section." />}
+      {items.map(it => (
+        <details className="doc-expander" key={it.id} style={{marginBottom:8, background:"var(--panel)", border:"1px solid var(--border)", borderRadius:8, padding:"8px 12px"}}>
+          <summary style={{color:"var(--text)", fontWeight:600, fontSize:13}}>
+            <Highlight text={it.label} query={searchQuery} />
+            {it.archived && <span className="badge" style={{marginLeft:8, background:"var(--border)", color:"var(--text-soft)", border:"none"}}>archived</span>}
+          </summary>
+          <div style={{marginTop:12}}>
+            {onUpload && <UploadDropzone itemId={it.id} onUpload={onUpload} compact />}
+            <DocGrid docs={it.documents} docTypeLabels={meta.doc_type_labels} onOpen={onOpen} onView={onView} query={searchQuery} onFixType={onFixType} onRename={onRename} onDelete={onDelete} />
+          </div>
+        </details>
+      ))}
+    </div>
+  );
+}
+
+/* =========================== SEARCH RESULTS (when typing in top search on non-pipeline pages) ============ */
+function SearchPage({searchQuery, showPersonal, meta, onOpen, onView}){
+  const {showSource} = useContext(ShowSourceContext);
+  const [rows, setRows] = useState(null);
+  const [err, setErr] = useState(null);
+
+  useEffect(() => {
+    if (!searchQuery) { setRows([]); return; }
+    apiGet(`/api/search?q=${encodeURIComponent(searchQuery)}&show_personal=${showPersonal}`).then(setRows).catch(e => setErr(String(e.message||e)));
+  }, [searchQuery, showPersonal]);
+
+  const visibleRows = (rows || []).filter(r => showSource || !r.is_source);
+  const hiddenCount = (rows ? rows.length : 0) - visibleRows.length;
+
+  return (
+    <div>
+      <h1 className="page-title">Search &amp; Retrieval</h1>
+      <p className="page-sub">Search across every indexed document — resumes, cover letters, prep notes, everything.</p>
+      {!searchQuery && <EmptyState icon={"\u{1F50D}"} title="Start typing" sub="Type in the search box above to get started." />}
+      {err && <EmptyState icon={"\u26A0\uFE0F"} title="Search error" sub={err} />}
+      {rows && searchQuery && <p className="page-sub">{visibleRows.length} result(s){hiddenCount ? ` (${hiddenCount} source file(s) hidden — toggle "Show source files")` : ""}</p>}
+      {rows && searchQuery && visibleRows.length === 0 && !err && (
+        <EmptyState icon={"\u{1F4ED}"} title="No results" sub={`Nothing matched "${searchQuery}". Try a shorter or different term.`} />
+      )}
+      {visibleRows.map(r => (
+        <div className="list-card" key={r.id}>
+          <div className="list-card-body">
+            <div className="list-card-top">
+              <div>
+                <div className="list-card-title"><Highlight text={r.company} query={searchQuery} /> {r.role_label !== "(root)" ? <React.Fragment>— <Highlight text={r.role_label} query={searchQuery} /></React.Fragment> : ""}</div>
+                <div style={{fontSize:12, color:"var(--text-soft)", marginTop:4}}>
+                  <span className="doc-type" style={{background:"var(--bg)", padding:"1px 6px", borderRadius:4, border:"1px solid var(--border)"}}>{docEffectiveType(r)}</span> &nbsp;<Highlight text={r.filename} query={searchQuery} />
+                  {r.duplicate_count > 0 && <span style={{color:"#F59E0B", marginLeft:6}}>{"\u29C9"} also used in {r.duplicate_count} other place{r.duplicate_count > 1 ? "s" : ""}</span>}
+                </div>
+                <div style={{fontSize:11, color:"var(--text-mute)", marginTop:4}}>{(meta.section_labels && meta.section_labels[r.section]) || DEFAULT_SECTION_LABELS[r.section] || prettifySection(r.section)}</div>
+              </div>
+              <div style={{display:"flex", gap:6}}>
+                {isInlineViewable(r) && <button className="btn" onClick={() => onView(r)}>View</button>}
+                <button className="btn" onClick={() => onOpen(r.relpath)}>Open</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* =========================== SEARCH HUB (external portals directory) =========================== */
+// Curated external job-search resources, grouped by category. This is a
+// static directory, not something the backend indexes — every URL below was
+// checked by hand against the real site (not guessed), the way the CDN
+// fiasco in Insights should have been checked the first time.
+const HUB_ROLE_KEY = "jth_hub_role";
+const HUB_LOCATION_KEY = "jth_hub_location";
+const HUB_CUSTOM_LINKS_KEY = "jth_hub_custom_links"; // { [linkName]: {title?, url?} } — your own edits to built-in cards, saved locally only
+const HUB_CUSTOM_CARDS_KEY = "jth_hub_custom_cards"; // { [categoryId]: [{id, title, url, note}] } — cards you've added yourself, saved locally only
+// Every entry below is either a genuinely national/global service, or a
+// clearly-labeled placeholder for you to fill in with your own region's
+// links. Nothing here assumes a particular state, city, or industry —
+// edit HUB_CATEGORIES freely to match your own job search; there's no
+// backend dependency on this list, it's just a static directory.
+const HUB_CATEGORIES = [
+  {
+    id: "highered",
+    label: "Higher Education & Early Career",
+    accent: "#3B82F6",
+    links: [
+      {name:"Handshake", url:"https://joinhandshake.com/", tag:"Early Career / University",
+        desc:"Campus job and internship network for college students and alumni — most U.S. colleges participate."},
+      {name:"Your university's careers page", url:"", tag:"HigherEd",
+        searchQuery:"university careers staff faculty jobs",
+        desc:"Add your own school's (or your target schools') staff/faculty careers page here."},
+      {name:"Your state's higher-ed system job portal", url:"", tag:"Statewide",
+        searchQuery:"state higher education system jobs portal",
+        desc:"Many states run a shared job board across their public colleges/universities — add yours here if so."},
+    ],
+  },
+  {
+    id: "k12",
+    label: "K-12 Education & School District Portals",
+    accent: "#10B981",
+    links: [
+      {name:"K12JobSpot", url:"https://www.k12jobspot.com/", tag:"K-12 Portal",
+        desc:"National K-12 job board — search by district, grade level, and role."},
+      {name:"Your state's teaching-jobs board", url:"", tag:"K-12",
+        searchQuery:"state department of education teaching jobs board",
+        desc:"Most state education departments run an index of district job boards — add yours here."},
+      {name:"Your local school district careers page", url:"", tag:"District",
+        searchQuery:"school district careers jobs",
+        desc:"Add a specific district's careers page here if you're targeting one."},
+    ],
+  },
+  {
+    id: "ai",
+    label: "AI-Powered Job Search & Career Assistants",
+    accent: "#A855F7",
+    links: [
+      {name:"ChatGPT", url:"https://chatgpt.com/", tag:"AI Assistant",
+        desc:"Match analysis and resume tailoring against a specific job description."},
+      {name:"Perplexity AI", url:"https://www.perplexity.ai/", tag:"AI Web Search",
+        desc:"Real-time web search for active postings, company research, and salary data."},
+      {name:"Claude", url:"https://claude.ai/", tag:"AI Assistant",
+        desc:"Deep job description analysis and cover letter drafting."},
+      {name:"Jobright AI", url:"https://jobright.ai/", tag:"AI Match",
+        desc:"AI-driven job aggregator and matching engine."},
+      {name:"Simplify Copilot", url:"https://simplify.jobs/", tag:"AI Autofill / Tracker",
+        desc:"Browser extension that autofills applications across ATS platforms and tracks them automatically."},
+    ],
+  },
+  {
+    id: "govt",
+    label: "State & Local Government",
+    accent: "#F59E0B",
+    // Edit this list for your own state/county/city — these are just
+    // generic starting points. Add your state's workforce-center portal
+    // here if you use one (see classify_config.json's nested_application_markers
+    // if it also requires proof-of-search compliance tracking).
+    links: [
+      {name:"USAJobs", url:"https://www.usajobs.gov/", tag:"Federal",
+        desc:"The official job board for U.S. federal government positions."},
+      {name:"Your state's workforce/unemployment portal", url:"", tag:"State",
+        searchQuery:"state workforce unemployment job center official site",
+        desc:"Add your state's official job board / case-management portal here."},
+      {name:"Your county's employment site", url:"", tag:"Local",
+        searchQuery:"county government employment jobs",
+        desc:"Add your county government's job openings page here."},
+      {name:"Your city's careers page", url:"", tag:"Local",
+        searchQuery:"city municipal government careers jobs",
+        desc:"Add your city/municipal job postings page here."},
+    ],
+  },
+  {
+    id: "mainstream",
+    label: "Tech & Mainstream Portals",
+    accent: "#64748B",
+    links: [
+      {name:"LinkedIn Jobs", url:"https://www.linkedin.com/jobs/", tag:"General",
+        desc:"General-purpose job board with networking and Easy Apply."},
+      {name:"Indeed", url:"https://www.indeed.com/", tag:"General",
+        desc:"General-purpose job aggregator covering most industries and locations."},
+      {name:"Built In", url:"https://builtin.com/jobs", tag:"Tech",
+        desc:"Tech-focused job board with regional editions for major metro areas."},
+    ],
+  },
+];
+
+function buildAiPrompt(role, location){
+  const r = (role || "").trim() || "[Role]";
+  const loc = (location || "").trim() || "[Your City, State]";
+  return `I am searching for ${r} jobs in ${loc}. Analyze my target skills and generate a list of relevant job titles, active search strategies, and tailored bullet points for my resume.`;
+}
+
+// A saved override for a built-in card is either the legacy shape (a bare
+// URL string, from before renaming existed) or {title, url} — both are
+// normalized here so old localStorage data keeps working untouched.
+function normalizeOverride(raw){
+  if (!raw) return null;
+  if (typeof raw === "string") return raw ? {url: raw} : null;
+  const title = (raw.title || "").trim();
+  const url = (raw.url || "").trim();
+  if (!title && !url) return null;
+  return {title: title || undefined, url: url || undefined};
+}
+
+function HubLinkCard({link, accent, override, onSaveOverride, location}){
+  const [editing, setEditing] = useState(false);
+  const ov = normalizeOverride(override);
+  const [titleDraft, setTitleDraft] = useState(ov?.title || "");
+  const [urlDraft, setUrlDraft] = useState(ov?.url || "");
+  const effectiveTitle = ov?.title || link.name;
+  const effectiveUrl = ov?.url || link.url;
+
+  const searchUrl = () => {
+    const term = link.searchQuery || `${effectiveTitle} jobs`;
+    const q = encodeURIComponent(`${term}${location ? " " + location : ""}`);
+    return `https://www.google.com/search?q=${q}`;
+  };
+
+  const startEdit = () => {
+    setTitleDraft(ov?.title || "");
+    setUrlDraft(ov?.url || "");
+    setEditing(true);
+  };
+
+  const save = () => {
+    onSaveOverride(link.name, {title: titleDraft.trim(), url: urlDraft.trim()});
+    setEditing(false);
+  };
+
+  return (
+    <div className="hub-card">
+      <div className="hub-card-top">
+        <span className="hub-tag" style={{background:accent+"22", color:accent, border:`1px solid ${accent}55`}}>{link.tag}</span>
+        <div style={{display:"flex", gap:2}}>
+          {ov && (
+            <button className="hub-card-edit" title="Reset to default" onClick={() => onSaveOverride(link.name, null)}>
+              {"\u21BA"}
+            </button>
+          )}
+          <button className="hub-card-edit" title={editing ? "Cancel" : "Edit this card"}
+            onClick={() => editing ? setEditing(false) : startEdit()}>
+            {editing ? "\u2715" : "\u270E"}
+          </button>
+        </div>
+      </div>
+
+      {editing ? (
+        <div className="hub-card-edit-col">
+          <input className="hub-card-edit-input" type="text" placeholder={link.name} value={titleDraft}
+            onChange={e => setTitleDraft(e.target.value)}
+            onKeyDown={e => { if (e.key === "Escape") setEditing(false); }} autoFocus />
+          <input className="hub-card-edit-input" type="text" placeholder="https://..." value={urlDraft}
+            onChange={e => setUrlDraft(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter") save(); if (e.key === "Escape") setEditing(false); }} />
+          <div className="hub-card-edit-actions">
+            <button className="btn small" onClick={save}>Save</button>
+          </div>
+        </div>
+      ) : (
+        <React.Fragment>
+          <div className="hub-card-name">{effectiveTitle}</div>
+          <div className="hub-card-desc">{link.desc}</div>
+          {effectiveUrl ? (
+            <button className="btn small hub-open" onClick={() => window.open(effectiveUrl, "_blank", "noopener,noreferrer")}>
+              Open {"\u2197"}
+            </button>
+          ) : (
+            <button className="btn small hub-open" title="No link saved yet — this searches for it instead"
+              onClick={() => window.open(searchUrl(), "_blank", "noopener,noreferrer")}>
+              Search {"\u2197"}
+            </button>
+          )}
+        </React.Fragment>
+      )}
+    </div>
+  );
+}
+
+// A fully user-created card — no shipped default, so there's nothing to
+// "reset" to; it's delete instead. Kept visually identical to HubLinkCard.
+function CustomHubCard({card, accent, onSave, onDelete}){
+  const [editing, setEditing] = useState(!card.url && !card.title);
+  const [titleDraft, setTitleDraft] = useState(card.title || "");
+  const [urlDraft, setUrlDraft] = useState(card.url || "");
+  const [noteDraft, setNoteDraft] = useState(card.note || "");
+
+  const save = () => {
+    if (!titleDraft.trim()) return;
+    onSave({...card, title: titleDraft.trim(), url: urlDraft.trim(), note: noteDraft.trim()});
+    setEditing(false);
+  };
+
+  return (
+    <div className="hub-card">
+      <div className="hub-card-top">
+        <span className="hub-tag" style={{background:accent+"22", color:accent, border:`1px solid ${accent}55`}}>Custom</span>
+        <div style={{display:"flex", gap:2}}>
+          <button className="hub-card-edit" title="Delete this card" onClick={() => onDelete(card.id)}>
+            {"\u{1F5D1}"}
+          </button>
+          {!editing && (
+            <button className="hub-card-edit" title="Edit this card" onClick={() => {
+              setTitleDraft(card.title || ""); setUrlDraft(card.url || ""); setNoteDraft(card.note || ""); setEditing(true);
+            }}>{"\u270E"}</button>
+          )}
+        </div>
+      </div>
+
+      {editing ? (
+        <div className="hub-card-edit-col">
+          <input className="hub-card-edit-input" type="text" placeholder="Card title" value={titleDraft}
+            onChange={e => setTitleDraft(e.target.value)} autoFocus />
+          <input className="hub-card-edit-input" type="text" placeholder="https://..." value={urlDraft}
+            onChange={e => setUrlDraft(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter") save(); }} />
+          <input className="hub-card-edit-input" type="text" placeholder="Note (optional)" value={noteDraft}
+            onChange={e => setNoteDraft(e.target.value)} />
+          <div className="hub-card-edit-actions">
+            <button className="btn small" onClick={save} disabled={!titleDraft.trim()}>Save</button>
+          </div>
+        </div>
+      ) : (
+        <React.Fragment>
+          <div className="hub-card-name">{card.title}</div>
+          {card.note && <div className="hub-card-desc">{card.note}</div>}
+          {card.url && (
+            <button className="btn small hub-open" onClick={() => window.open(card.url, "_blank", "noopener,noreferrer")}>
+              Open {"\u2197"}
+            </button>
+          )}
+        </React.Fragment>
+      )}
+    </div>
+  );
+}
+
+function AddCardTile({onAdd}){
+  const [editing, setEditing] = useState(false);
+  const [titleDraft, setTitleDraft] = useState("");
+  const [urlDraft, setUrlDraft] = useState("");
+
+  if (!editing) {
+    return (
+      <button className="hub-add-tile" onClick={() => setEditing(true)}>
+        {"+ Add card"}
+      </button>
+    );
+  }
+
+  const save = () => {
+    if (!titleDraft.trim()) return;
+    onAdd({title: titleDraft.trim(), url: urlDraft.trim(), note: ""});
+    setTitleDraft(""); setUrlDraft(""); setEditing(false);
+  };
+
+  return (
+    <div className="hub-add-tile editing">
+      <input className="hub-card-edit-input" type="text" placeholder="Card title" value={titleDraft}
+        onChange={e => setTitleDraft(e.target.value)} autoFocus />
+      <input className="hub-card-edit-input" type="text" placeholder="https://... (optional)" value={urlDraft}
+        onChange={e => setUrlDraft(e.target.value)}
+        onKeyDown={e => { if (e.key === "Enter") save(); if (e.key === "Escape") setEditing(false); }} />
+      <div className="hub-card-edit-actions">
+        <button className="btn small" onClick={() => setEditing(false)}>Cancel</button>
+        <button className="btn small" onClick={save} disabled={!titleDraft.trim()}>Add</button>
+      </div>
+    </div>
+  );
+}
+
+function SearchHubPage(){
+  const [role, setRole] = useState(() => { try { return localStorage.getItem(HUB_ROLE_KEY) || ""; } catch(e) { return ""; } });
+  const [location, setLocation] = useState(() => { try { return localStorage.getItem(HUB_LOCATION_KEY) || ""; } catch(e) { return ""; } });
+  const [customLinks, setCustomLinks] = useState(() => {
+    try { return JSON.parse(localStorage.getItem(HUB_CUSTOM_LINKS_KEY) || "{}"); } catch(e) { return {}; }
+  });
+  // Net-new cards the user has added, keyed by category id — separate from
+  // customLinks (which only overrides built-in cards) since these have no
+  // shipped default to fall back to.
+  const [customCards, setCustomCards] = useState(() => {
+    try { return JSON.parse(localStorage.getItem(HUB_CUSTOM_CARDS_KEY) || "{}"); } catch(e) { return {}; }
+  });
+  const [copied, setCopied] = useState(false);
+  const [cardUndo, setCardUndo] = useState(null); // {catId, card} — the just-deleted custom card, undoable for a few seconds
+  const cardUndoTimer = useRef(null);
+  // Categories with more than this many cards collapse to a "+N more" tile
+  // instead of growing the grid indefinitely. Not persisted — just a
+  // per-visit display state, since it's purely about scanability, not data.
+  const HUB_VISIBLE_LIMIT = 8;
+  const [expandedCats, setExpandedCats] = useState({});
+
+  const saveRole = (v) => {
+    setRole(v);
+    try { localStorage.setItem(HUB_ROLE_KEY, v); } catch(e) { /* best-effort */ }
+  };
+
+  const saveLocation = (v) => {
+    setLocation(v);
+    try { localStorage.setItem(HUB_LOCATION_KEY, v); } catch(e) { /* best-effort */ }
+  };
+
+  const saveOverride = (name, override) => {
+    setCustomLinks(prev => {
+      const next = {...prev};
+      const norm = normalizeOverride(override);
+      if (norm) next[name] = norm; else delete next[name];
+      try { localStorage.setItem(HUB_CUSTOM_LINKS_KEY, JSON.stringify(next)); } catch(e) { /* best-effort */ }
+      return next;
+    });
+  };
+
+  const resetAllLinks = () => {
+    if (!window.confirm("Reset all Search Hub links back to the shipped defaults? This only affects edits to built-in cards — your own added cards and tracker data are untouched.")) return;
+    setCustomLinks({});
+    try { localStorage.removeItem(HUB_CUSTOM_LINKS_KEY); } catch(e) { /* best-effort */ }
+  };
+
+  const addCustomCard = (catId, card) => {
+    setCustomCards(prev => {
+      const next = {...prev, [catId]: [...(prev[catId] || []), {...card, id: `c_${Date.now()}_${Math.random().toString(36).slice(2,7)}`}]};
+      try { localStorage.setItem(HUB_CUSTOM_CARDS_KEY, JSON.stringify(next)); } catch(e) { /* best-effort */ }
+      return next;
+    });
+  };
+
+  const saveCustomCard = (catId, updated) => {
+    setCustomCards(prev => {
+      const next = {...prev, [catId]: (prev[catId] || []).map(c => c.id === updated.id ? updated : c)};
+      try { localStorage.setItem(HUB_CUSTOM_CARDS_KEY, JSON.stringify(next)); } catch(e) { /* best-effort */ }
+      return next;
+    });
+  };
+
+  const deleteCustomCard = (catId, id) => {
+    setCustomCards(prev => {
+      const next = {...prev, [catId]: (prev[catId] || []).filter(c => c.id !== id)};
+      try { localStorage.setItem(HUB_CUSTOM_CARDS_KEY, JSON.stringify(next)); } catch(e) { /* best-effort */ }
+      return next;
+    });
+  };
+
+  // Delete removes the card right away (it's just a title/URL — cheap to
+  // redo by hand), but offers a few seconds of Undo instead of a blocking
+  // confirm() dialog, same as document delete elsewhere in this app.
+  const requestDeleteCustomCard = (catId, card) => {
+    deleteCustomCard(catId, card.id);
+    setCardUndo({catId, card});
+    if (cardUndoTimer.current) clearTimeout(cardUndoTimer.current);
+    cardUndoTimer.current = setTimeout(() => setCardUndo(null), 6000);
+  };
+
+  const undoDeleteCustomCard = () => {
+    if (!cardUndo) return;
+    const {catId, card} = cardUndo;
+    setCustomCards(prev => {
+      const next = {...prev, [catId]: [...(prev[catId] || []), card]};
+      try { localStorage.setItem(HUB_CUSTOM_CARDS_KEY, JSON.stringify(next)); } catch(e) { /* best-effort */ }
+      return next;
+    });
+    if (cardUndoTimer.current) clearTimeout(cardUndoTimer.current);
+    setCardUndo(null);
+  };
+
+  const copyPrompt = async () => {
+    const text = buildAiPrompt(role, location);
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (e) {
+      // Clipboard API can be unavailable (older browser, non-HTTPS-like
+      // context) — fall back to a manual copy via prompt() rather than
+      // silently doing nothing.
+      window.prompt("Copy this prompt:", text);
+    }
+  };
+
+  return (
+    <div>
+      <h1 className="page-title">Search Hub</h1>
+      <div style={{display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:12}}>
+        <p className="page-sub" style={{flex:1}}>External job boards, portals, and AI assistants worth checking regularly — organized so you're not re-Googling the same list every week. Cards with no built-in link search for you until you add one (click the {"\u270E"} to save your own — stored on this computer only).</p>
+        {Object.keys(customLinks).length > 0 && (
+          <button className="btn small" onClick={resetAllLinks} style={{flex:"none"}}>{"\u21BA"} Reset all to defaults</button>
+        )}
+      </div>
+
+      <div className="hub-prompt-bar">
+        <div style={{flex:1, minWidth:180}}>
+          <label style={{display:"block", fontSize:11, color:"var(--text-soft)", textTransform:"uppercase", letterSpacing:".04em", marginBottom:5}}>
+            Target role (used in the AI prompt and searches below)
+          </label>
+          <ClearableInput className="search-input" wrapStyle={{width:"100%"}}
+            placeholder="e.g. Software Engineer" value={role} onChange={e => saveRole(e.target.value)} />
+        </div>
+        <div style={{flex:1, minWidth:180}}>
+          <label style={{display:"block", fontSize:11, color:"var(--text-soft)", textTransform:"uppercase", letterSpacing:".04em", marginBottom:5}}>
+            Location (used the same way)
+          </label>
+          <ClearableInput className="search-input" wrapStyle={{width:"100%"}}
+            placeholder="e.g. Denver, CO" value={location} onChange={e => saveLocation(e.target.value)} />
+        </div>
+        <button className="btn primary" onClick={copyPrompt} style={{alignSelf:"flex-end"}}>
+          {copied ? "Copied \u2713" : "\u{1F4CB} Copy AI Job Prompt"}
+        </button>
+      </div>
+      <p className="page-sub" style={{marginTop:8, fontStyle:"italic"}}>"{buildAiPrompt(role, location)}"</p>
+
+      {HUB_CATEGORIES.map(cat => {
+        // Built-in links and your own custom cards share one grid, so the
+        // collapse threshold counts both together.
+        const allCards = [
+          ...cat.links.map(link => ({type: "link", key: link.name, link})),
+          ...(customCards[cat.id] || []).map(card => ({type: "custom", key: card.id, card})),
+        ];
+        const overLimit = allCards.length > HUB_VISIBLE_LIMIT;
+        const expanded = !!expandedCats[cat.id];
+        const visibleCards = (overLimit && !expanded) ? allCards.slice(0, HUB_VISIBLE_LIMIT) : allCards;
+        return (
+          <div key={cat.id}>
+            <div className="section-label" style={{color:cat.accent}}>{cat.label}</div>
+            <div className="hub-grid">
+              {visibleCards.map(item => item.type === "link" ? (
+                <HubLinkCard key={item.key} link={item.link} accent={cat.accent}
+                  override={customLinks[item.link.name]} onSaveOverride={saveOverride} location={location} />
+              ) : (
+                <CustomHubCard key={item.key} card={item.card} accent={cat.accent}
+                  onSave={updated => saveCustomCard(cat.id, updated)}
+                  onDelete={() => requestDeleteCustomCard(cat.id, item.card)} />
+              ))}
+              {overLimit && (
+                <button className="hub-add-tile" onClick={() => setExpandedCats(prev => ({...prev, [cat.id]: !expanded}))}>
+                  {expanded ? "Show fewer" : `+ ${allCards.length - HUB_VISIBLE_LIMIT} more`}
+                </button>
+              )}
+              <AddCardTile onAdd={card => addCustomCard(cat.id, card)} />
+            </div>
+          </div>
+        );
+      })}
+
+      {cardUndo && (
+        <div className="toast-stack">
+          <div className="toast undo-toast">
+            <span>Removed "{cardUndo.card.title}".</span>
+            <button className="toast-undo-btn" onClick={undoDeleteCustomCard}>Undo</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+// Chart.js loads from a CDN — if that script failed (offline, CDN hiccup,
+// ad blocker, a bad version pin) `window.Chart` just won't exist. Charts are
+// enhancement, not core function, so we degrade to a message instead of
+// throwing and taking down the whole page (there's no error boundary around
+// individual pages, so an uncaught render error here would blank everything,
+// not just the chart).
+function chartLibAvailable(){
+  return typeof window.Chart !== "undefined";
+}
+
+function useChart(canvasRef, config){
+  const chartRef = useRef(null);
+  // Depends on the *entire* serialized config (not just .data) so a theme
+  // flip — which changes only tick/legend/grid colors — still triggers a
+  // rebuild instead of leaving the chart drawn in the old theme's colors.
+  useEffect(() => {
+    if (!canvasRef.current || !chartLibAvailable()) return;
+    try {
+      if (chartRef.current) chartRef.current.destroy();
+      chartRef.current = new Chart(canvasRef.current, config);
+    } catch (e) {
+      console.error("Chart render failed:", e);
+    }
+    return () => { if (chartRef.current) { chartRef.current.destroy(); chartRef.current = null; } };
+  }, [JSON.stringify(config.data), JSON.stringify(config.options), config.type]);
+}
+
+function ChartUnavailable(){
+  return (
+    <div style={{display:"flex", alignItems:"center", justifyContent:"center", height:"100%",
+      color:"var(--text-soft)", fontSize:12.5, textAlign:"center", padding:16}}>
+      Chart.js didn't load (offline, or the CDN is unreachable) — the rest of the app still works fine.
+    </div>
+  );
+}
+
+function chartTextColor(){
+  return getComputedStyle(document.documentElement).getPropertyValue("--text-soft").trim() || "#94A3B8";
+}
+function chartGridColor(){
+  return getComputedStyle(document.documentElement).getPropertyValue("--border-soft").trim() || "#1E293B";
+}
+
+function StatusDistributionChart({apps, meta, themeTick}){
+  const canvasRef = useRef(null);
+  const statusOrder = meta.status_order || DEFAULT_STATUS_ORDER;
+  const colors = meta.status_colors || DEFAULT_STATUS_COLORS;
+  const active = apps.filter(a => !a.archived);
+  const counts = statusOrder.map(s => active.filter(a => a.effective_status === s).length);
+  const config = {
+    type: "doughnut",
+    data: {
+      labels: statusOrder.map(s => s[0].toUpperCase()+s.slice(1)),
+      datasets: [{ data: counts, backgroundColor: statusOrder.map(s => colors[s] || "#5b6472"), borderWidth: 0 }],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { position: "right", labels: { color: chartTextColor(), font: {size: 11.5} } } },
+    },
+  };
+  useChart(canvasRef, config);
+  if (!chartLibAvailable()) return <ChartUnavailable />;
+  return <canvas ref={canvasRef}></canvas>;
+}
+
+function VelocityChart({apps, themeTick}){
+  const canvasRef = useRef(null);
+  // Bucket by ISO week of date_applied (falls back to last_activity — see
+  // README's note on why file-mtime-derived dates can be noisy).
+  const buckets = {};
+  apps.filter(a => !a.archived).forEach(a => {
+    const raw = a.date_applied || a.last_activity;
+    if (!raw) return;
+    const d = new Date(raw);
+    if (isNaN(d)) return;
+    const weekStart = new Date(d);
+    weekStart.setDate(d.getDate() - d.getDay());
+    const key = weekStart.toISOString().slice(0,10);
+    buckets[key] = (buckets[key] || 0) + 1;
+  });
+  const weeks = Object.keys(buckets).sort().slice(-16);
+  const gridColor = chartGridColor();
+  const textColor = chartTextColor();
+  const config = {
+    type: "line",
+    data: {
+      labels: weeks,
+      datasets: [{
+        label: "Applications",
+        data: weeks.map(w => buckets[w]),
+        borderColor: "#3B82F6", backgroundColor: "#3B82F633", fill: true, tension: 0.3, pointRadius: 3,
+      }],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color: textColor, font: {size: 10.5} }, grid: { color: gridColor } },
+        y: { beginAtZero: true, ticks: { color: textColor, stepSize: 1 }, grid: { color: gridColor } },
+      },
+    },
+  };
+  useChart(canvasRef, config);
+  if (!chartLibAvailable()) return <ChartUnavailable />;
+  if (weeks.length === 0) {
+    return <EmptyState icon={"\u{1F4C8}"} title="No velocity data yet" sub="Set Date applied on a few cards to see velocity over time." />;
+  }
+  return <canvas ref={canvasRef}></canvas>;
+}
+
+// Published 2025-2026 hiring-market figures (LinkedIn/Indeed aggregate data,
+// CareerPlug's 10M-application report, Glassdoor benchmarks), kept as static
+// reference points — not fetched live, this app never calls out to the
+// internet. Intentionally broad ranges since real benchmarks vary a lot by
+// industry/platform; this is for rough calibration, not a precise target.
+const BENCHMARKS = {
+  response_rate: [2, 10],
+  interview_rate: [2, 3],
+};
+
+function BenchmarkNote({label, value, range}){
+  const [lo, hi] = range;
+  const above = value > hi;
+  const within = value >= lo && value <= hi;
+  const verb = above ? "well above" : within ? "in line with" : "below";
+  const color = above ? "var(--green-text, #4ADE80)" : within ? "var(--text-soft)" : "var(--amber-text, #F59E0B)";
+  return (
+    <span style={{fontSize:11.5, color, display:"block", marginTop:4}}>
+      {verb} the typical {lo}–{hi}% published for {label}
+    </span>
+  );
+}
+
+function StatusFunnel({byStatus, total}){
+  const order = [["drafted","Drafted"],["applied","Applied"],["interviewing","Interviewing"],["rejected","Rejected"],["unknown","Unknown"]];
+  const colors = DEFAULT_STATUS_COLORS;
+  return (
+    <div className="chart-card">
+      <h3>Pipeline breakdown</h3>
+      <div style={{display:"flex", flexDirection:"column", gap:10}}>
+        {order.map(([key,label]) => {
+          const count = byStatus[key] || 0;
+          const pct = total ? (count/total*100) : 0;
+          return (
+            <div key={key}>
+              <div style={{display:"flex", justifyContent:"space-between", fontSize:12.5, marginBottom:4}}>
+                <span style={{color:"var(--text-soft)"}}>{label}</span>
+                <span style={{color:"var(--text)"}}>{count} · {pct.toFixed(0)}%</span>
+              </div>
+              <div style={{height:6, borderRadius:99, background:"var(--border)", overflow:"hidden"}}>
+                <div style={{height:"100%", width:`${pct}%`, background:colors[key]||"#5b6472", borderRadius:99}} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function thisWeekAndDataQuality(apps){
+  const active = apps.filter(a => !a.archived);
+  const weekAgo = new Date(); weekAgo.setDate(weekAgo.getDate()-7);
+  const recent = active.filter(a => {
+    const raw = a.date_applied || a.last_activity;
+    if (!raw) return false;
+    const d = new Date(raw);
+    return !isNaN(d) && d >= weekAgo;
+  });
+  const byStatus = {};
+  recent.forEach(a => { byStatus[a.effective_status] = (byStatus[a.effective_status]||0)+1; });
+
+  // Data quality: a cluster of un-dated items sharing one file-mtime date
+  // usually means a folder copy/reorganize, not real activity that day.
+  const mtimeOnly = active.filter(a => a.last_activity && !a.date_applied).map(a => a.last_activity.slice(0,10));
+  let warning = null;
+  if (mtimeOnly.length >= 10) {
+    const counts = {};
+    mtimeOnly.forEach(d => { counts[d] = (counts[d]||0)+1; });
+    const [topDate, topCount] = Object.entries(counts).sort((a,b) => b[1]-a[1])[0];
+    if (topCount / mtimeOnly.length > 0.4) {
+      warning = `${topCount} of ${mtimeOnly.length} applications share the same file-modification date (${topDate}) — likely from copying or reorganizing files, not real activity. "Days since" and time-to-response numbers for those will be off until you set a real Date applied on them (Pipeline → open a card → Notes & status).`;
+    }
+  }
+  return {recent, byStatus, warning};
+}
+
+function InsightsPage({apps, meta, themeTick}){
+  const [m, setM] = useState(null);
+  const [err, setErr] = useState(null);
+  useEffect(() => { apiGet("/api/insights").then(setM).catch(e => setErr(String(e.message||e))); }, []);
+  if (err) return <EmptyState icon={"\u26A0\uFE0F"} title="Couldn't load Insights" sub={err} />;
+  if (!m) return <EmptyState icon={"\u23F3"} title="Loading…" />;
+
+  const {recent, byStatus: weekByStatus, warning} = thisWeekAndDataQuality(apps);
+
+  return (
+    <div>
+      <h1 className="page-title">Insights</h1>
+      <div style={{display:"flex", gap:14, flexWrap:"wrap", marginBottom:20}}>
+        <div className="metric-card"><div className="num">{m.total}</div><div className="lbl">Active applications</div></div>
+        <div className="metric-card">
+          <div className="num">{m.response_rate.toFixed(0)}%</div><div className="lbl">Response rate</div>
+          <BenchmarkNote label="response rate" value={m.response_rate} range={BENCHMARKS.response_rate} />
+        </div>
+        <div className="metric-card">
+          <div className="num">{m.interview_rate.toFixed(0)}%</div><div className="lbl">Interview rate</div>
+          <BenchmarkNote label="application-to-interview rate" value={m.interview_rate} range={BENCHMARKS.interview_rate} />
+        </div>
+      </div>
+      {m.avg_response_days != null ? (
+        <p className="page-sub">Average time to first response: <b style={{color:"var(--text)"}}>{m.avg_response_days} days</b> (based on {m.lag_sample_size} application(s) with a manually-set Date Applied).</p>
+      ) : (
+        <p className="page-sub">Set Date applied on a few cards in Pipeline to unlock time-to-response tracking.</p>
+      )}
+
+      {warning && <div className="warning-banner" style={{marginBottom:20}}>{warning}</div>}
+
+      <div className="section-label">This week</div>
+      {recent.length ? (
+        <p className="page-sub" style={{marginBottom:20}}>
+          {Object.entries(weekByStatus).map(([status,count],i) => (
+            <span key={status}><b style={{color:"var(--text)"}}>{count}</b> {status}{i < Object.entries(weekByStatus).length-1 ? " · " : ""}</span>
+          ))}
+        </p>
+      ) : (
+        <p className="page-sub" style={{marginBottom:20}}>No recorded activity in the last 7 days — a quiet week is a good cue to queue up a few more applications.</p>
+      )}
+
+      <div className="charts-row">
+        <div className="chart-card">
+          <h3>Application velocity (by week applied)</h3>
+          <div className="chart-wrap"><VelocityChart apps={apps} themeTick={themeTick} /></div>
+        </div>
+        <div className="chart-card">
+          <h3>Status distribution</h3>
+          <div className="chart-wrap"><StatusDistributionChart apps={apps} meta={meta} themeTick={themeTick} /></div>
+        </div>
+      </div>
+      <div className="charts-row">
+        <StatusFunnel byStatus={m.by_status || {}} total={m.total} />
+      </div>
+    </div>
+  );
+}
+
+/* =========================== MANAGE PAGE =========================== */
+function ManagePage({onRefreshApps, meta, onCategoriesChanged}){
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState(null);
+  const [canonicalChoice, setCanonicalChoice] = useState({});
+  const [archSelected, setArchSelected] = useState(() => new Set());
+  const [archBusy, setArchBusy] = useState(false);
+  const [archErr, setArchErr] = useState(null);
+  const [categories, setCategories] = useState(null);
+  const [catErr, setCatErr] = useState(null);
+  const [catBusy, setCatBusy] = useState(false);
+
+  const load = () => apiGet("/api/manage").then(setData).catch(e => setErr(String(e.message||e)));
+  const loadCategories = () => apiGet("/api/categories").then(setCategories).catch(e => setCatErr(String(e.message||e)));
+  useEffect(() => { load(); loadCategories(); }, []);
+
+  if (err) return <EmptyState icon={"\u26A0\uFE0F"} title="Couldn't load Manage" sub={err} />;
+  if (!data) return <EmptyState icon={"\u23F3"} title="Loading…" />;
+
+  const suggestions = Object.entries(data.duplicate_suggestions || {});
+
+  return (
+    <div>
+      <h1 className="page-title">Manage</h1>
+
+      <div className="section-label">
+        Merge duplicate companies{suggestions.length > 0 ? ` — ${suggestions.length} suggestion${suggestions.length===1?"":"s"} to review` : ""}
+      </div>
+      <p className="page-sub">
+        These look like the same company split across folders (e.g. spelling or spacing differences). Merging
+        only changes how they're grouped and displayed in this app — <b>your files on disk are never touched</b>,
+        and you can undo any merge below at any time.
+      </p>
+      {suggestions.length === 0 && <EmptyState icon={"\u2728"} title="All clear" sub="No unresolved duplicate suggestions right now." />}
+      {suggestions.map(([key, names]) => (
+        <div className="list-card" key={key}>
+          <div className="list-card-body">
+            <div>{names.map(n => <b key={n} style={{marginRight:8}}>{n}</b>)}</div>
+            <div style={{display:"flex", gap:8, marginTop:10, alignItems:"center"}}>
+              <span style={{fontSize:12, color:"var(--text-soft)"}}>Keep as:</span>
+              <select className="field" value={canonicalChoice[key] || names[0]} onChange={e => setCanonicalChoice({...canonicalChoice, [key]:e.target.value})}
+                style={{background:"var(--bg)", border:"1px solid var(--border)", color:"var(--text)", borderRadius:6, padding:"6px 10px"}}>
+                {names.map(n => <option key={n} value={n}>{n}</option>)}
+              </select>
+              <button className="btn primary" onClick={async () => {
+                await apiPost("/api/manage/merge", {names, canonical: canonicalChoice[key] || names[0]});
+                await load(); onRefreshApps();
+              }}>Merge</button>
+            </div>
+          </div>
+        </div>
+      ))}
+
+      <div className="section-label">Current merges</div>
+      {Object.keys(data.aliases||{}).length === 0 && <EmptyState icon={"\u{1F517}"} title="No merges yet" />}
+      {Object.entries(data.aliases||{}).map(([alias, canonical]) => (
+        <div className="list-card" key={alias} style={{alignItems:"center"}}>
+          <div className="list-card-body" style={{display:"flex", justifyContent:"space-between", alignItems:"center"}}>
+            <span>{alias} &nbsp;→&nbsp; <b>{canonical}</b></span>
+            <button className="btn" onClick={async () => { await apiPost("/api/manage/unmerge", {alias}); await load(); onRefreshApps(); }}>Undo</button>
+          </div>
+        </div>
+      ))}
+
+      <div style={{marginTop:28, paddingTop:4, borderTop:"1px solid var(--border)"}} />
+      <div className="section-label" style={{display:"flex", alignItems:"center", gap:8}}>
+        <span>Duplicate documents</span>
+        <span className="badge" style={{background:"var(--border)", color:"var(--text-soft)", border:"none"}}>informational — no action needed</span>
+      </div>
+      <p className="page-sub">
+        Byte-identical files found in more than one place — nothing to fix here, every copy stays exactly where it
+        is. Mostly this is expected: reusing one master resume/cover-letter across many applications is normal and
+        shows up as a large group below. Worth a second look only if a group spans companies that shouldn't share a
+        file (e.g. a cover letter meant for one company saved under another).
+      </p>
+      {(data.duplicate_documents||[]).length === 0 && <EmptyState icon={"\u2728"} title="No exact duplicates found" />}
+      {(data.duplicate_documents||[]).map(g => (
+        <div className="list-card" key={g.content_hash} style={{opacity:0.85}}>
+          <div className="list-card-body">
+            <div style={{fontSize:12, color:"var(--text-mute)", marginBottom:6}}>{g.documents.length} identical copies</div>
+            {g.documents.map(d => (
+              <div key={d.relpath} style={{fontSize:13, padding:"2px 0"}}>
+                <b>{d.company}</b>{d.role_label && d.role_label !== "(root)" ? ` — ${d.role_label}` : ""} &nbsp;
+                <span style={{color:"var(--text-soft)"}}>{d.filename}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+
+      <div className="section-label">Archived applications</div>
+      {(() => {
+        const archived = data.archived || [];
+        const toggleOne = (id) => setArchSelected(prev => {
+          const next = new Set(prev);
+          if (next.has(id)) next.delete(id); else next.add(id);
+          return next;
+        });
+        const toggleAll = () => setArchSelected(prev => prev.size === archived.length ? new Set() : new Set(archived.map(a => a.id)));
+
+        const runDelete = async (ids) => {
+          if (ids.length === 0) return;
+          const label = ids.length === 1
+            ? (archived.find(a => a.id === ids[0]) || {}).effective_company || "this application"
+            : `${ids.length} applications`;
+          const confirmMsg = ids.length === 1
+            ? `Permanently delete ${label}? Its folder goes to the OS Trash (recoverable there), and it's removed from the app.`
+            : `Permanently delete ${label}? Each folder goes to the OS Trash (recoverable there), and they're removed from the app.`;
+          if (!window.confirm(confirmMsg)) return;
+          setArchBusy(true);
+          setArchErr(null);
+          try {
+            if (ids.length === 1) {
+              await apiPost(`/api/applications/${ids[0]}/delete`, {});
+            } else {
+              const r = await apiPost("/api/applications/bulk-delete", {item_ids: ids});
+              if ((r.failed||[]).length > 0) {
+                setArchErr(
+                  `${r.deleted.length} deleted, ${r.failed.length} couldn't be deleted: ` +
+                  r.failed.map(f => `#${f.id} (${f.error})`).join("; ")
+                );
+              }
+            }
+            setArchSelected(new Set());
+            await load(); onRefreshApps();
+          } catch (e) {
+            setArchErr(String(e.message||e));
+          } finally {
+            setArchBusy(false);
+          }
+        };
+
+        if (archived.length === 0) return <EmptyState icon={"\u{1F4E6}"} title="Nothing archived" />;
+
+        return (
+          <div>
+            {archErr && <div className="warning-banner" style={{marginBottom:10}}>{archErr}</div>}
+
+            <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", gap:8, marginBottom:10, flexWrap:"wrap"}}>
+              <label style={{display:"flex", alignItems:"center", gap:8, color:"var(--text-soft)", fontSize:12}}>
+                <input type="checkbox" className="select-checkbox" checked={archSelected.size === archived.length} onChange={toggleAll} /> Select all
+              </label>
+              <button className="btn danger-outline small" disabled={archBusy} onClick={() => runDelete(archived.map(a => a.id))}>
+                Delete all archived ({archived.length})
+              </button>
+            </div>
+
+            {archSelected.size > 0 && (
+              <div className="bulk-bar">
+                <span className="count">{archSelected.size} selected</span>
+                <button className="btn danger-outline small" disabled={archBusy} onClick={() => runDelete(Array.from(archSelected))}>Delete selected</button>
+                <button className="btn subtle small" onClick={() => setArchSelected(new Set())}>Clear</button>
+              </div>
+            )}
+
+            {archived.map(a => (
+              <div className="list-card" key={a.id} style={{alignItems:"center"}}>
+                <input type="checkbox" className="select-checkbox" checked={archSelected.has(a.id)} onChange={() => toggleOne(a.id)} />
+                <div className="list-card-body" style={{display:"flex", justifyContent:"space-between", alignItems:"center"}}>
+                  <span>{a.effective_company}{roleSuffix(a)}</span>
+                  <div style={{display:"flex", gap:8}}>
+                    <button className="btn" disabled={archBusy} onClick={async () => {
+                      await apiPost(`/api/applications/${a.id}/override`, {archived:false});
+                      await load(); onRefreshApps();
+                    }}>Unarchive</button>
+                    <button className="btn danger-outline" disabled={archBusy} onClick={() => runDelete([a.id])}>Delete</button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        );
+      })()}
+
+      <div style={{marginTop:28, paddingTop:4, borderTop:"1px solid var(--border)"}} />
+      <div className="section-label">Categories</div>
+      <p className="page-sub">
+        Every physical folder behind a Browse tab except Applications — Certifications and
+        "Degree and Transcrips" list separately here even though both show under one "Credentials"
+        tab, so you can archive or delete just one of them. Archiving hides a folder from Browse and
+        Search without touching any files; deleting it moves that folder to the OS Trash (recoverable
+        there) and requires it to be archived first.
+      </p>
+      {catErr && <div className="warning-banner" style={{marginBottom:10}}>{catErr}</div>}
+      {categories === null && !catErr && <EmptyState icon={"\u23F3"} title="Loading…" />}
+      {categories !== null && categories.length === 0 && <EmptyState icon={"\u{1F5C2}\uFE0F"} title="No categories yet" />}
+      {(categories || []).map(c => {
+        const tabLabel = (meta && meta.section_labels && meta.section_labels[c.section]) || DEFAULT_SECTION_LABELS[c.section] || prettifySection(c.section);
+        const folderPath = c.folder.split("/").map(encodeURIComponent).join("/");
+        const runCategoryDelete = async () => {
+          const confirmMsg = `Permanently delete "${c.folder}"? It goes to the OS Trash `
+            + `(recoverable there), and it's removed from the app.`;
+          if (!window.confirm(confirmMsg)) return;
+          setCatBusy(true);
+          setCatErr(null);
+          try {
+            await apiPost(`/api/categories/${folderPath}/delete`, {});
+            await loadCategories();
+            onCategoriesChanged && onCategoriesChanged();
+          } catch (e) {
+            setCatErr(String(e.message||e));
+          } finally {
+            setCatBusy(false);
+          }
+        };
+        return (
+          <div className="list-card" key={c.folder} style={{alignItems:"center"}}>
+            <div className="list-card-body" style={{display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:8}}>
+              <div>
+                <div>
+                  <b>{c.folder}</b>
+                  <span className="badge" style={{marginLeft:8, background:"var(--border)", color:"var(--text-soft)", border:"none"}}>{tabLabel}</span>
+                  {c.archived && <span className="badge" style={{marginLeft:8, background:"var(--border)", color:"var(--text-soft)", border:"none"}}>archived</span>}
+                </div>
+                <div style={{fontSize:12, color:"var(--text-mute)", marginTop:2}}>
+                  {c.item_count} item{c.item_count===1?"":"s"}, {c.doc_count} document{c.doc_count===1?"":"s"}
+                </div>
+              </div>
+              <div style={{display:"flex", gap:8}}>
+                {c.archived ? (
+                  <button className="btn" disabled={catBusy} onClick={async () => {
+                    setCatBusy(true);
+                    try { await apiPost(`/api/categories/${folderPath}/override`, {archived:false}); await loadCategories(); onCategoriesChanged && onCategoriesChanged(); }
+                    catch (e) { setCatErr(String(e.message||e)); }
+                    finally { setCatBusy(false); }
+                  }}>Unarchive</button>
+                ) : (
+                  <button className="btn" disabled={catBusy} onClick={async () => {
+                    setCatBusy(true);
+                    try { await apiPost(`/api/categories/${folderPath}/override`, {archived:true}); await loadCategories(); onCategoriesChanged && onCategoriesChanged(); }
+                    catch (e) { setCatErr(String(e.message||e)); }
+                    finally { setCatBusy(false); }
+                  }}>Archive</button>
+                )}
+                <button className="btn danger-outline" disabled={catBusy || !c.archived} title={!c.archived ? "Archive this category first" : ""} onClick={runCategoryDelete}>Delete</button>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* =========================== FIX DOCUMENT TYPE MODAL =========================== */
+function FixTypeModal({doc, docTypeLabels, onClose, onSave}){
+  const options = Object.keys(DEFAULT_DOC_TYPE_LABELS).filter(k => k !== "other");
+  const [val, setVal] = useState(doc.doc_type_override || "");
+  const [busy, setBusy] = useState(false);
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={e => e.stopPropagation()} style={{position:"relative", maxWidth:420}}>
+        <button className="close-x" onClick={onClose}>{"\u2715"}</button>
+        <h2>Correct document type</h2>
+        <p style={{color:"var(--text-mute)", fontSize:12, marginTop:6}}>
+          <b>{doc.filename}</b> couldn't be classified from its filename alone
+          (common with job-ID-only names). This only corrects what the app
+          displays — the file itself is never renamed or moved.
+        </p>
+        <select className="btn" style={{width:"100%"}} value={val} onChange={e => setVal(e.target.value)}>
+          <option value="">(leave unclassified)</option>
+          {options.map(o => (
+            <option key={o} value={o}>{(docTypeLabels && docTypeLabels[o]) || DEFAULT_DOC_TYPE_LABELS[o]}</option>
+          ))}
+        </select>
+        <div style={{display:"flex", justifyContent:"flex-end", gap:8, marginTop:14}}>
+          <button className="btn" onClick={onClose} disabled={busy}>Cancel</button>
+          <button className="btn primary" disabled={busy} onClick={async () => { setBusy(true); await onSave(val || null); }}>
+            Save
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RenameModal({doc, onClose, onSave}){
+  const [name, setName] = useState(doc.filename);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    // Select just the stem (not the extension) so typing immediately
+    // replaces the meaningful part of the name, same as Finder/Explorer
+    // rename-in-place.
+    if (inputRef.current) {
+      const dot = doc.filename.lastIndexOf(".");
+      inputRef.current.focus();
+      inputRef.current.setSelectionRange(0, dot > 0 ? dot : doc.filename.length);
+    }
+  }, []);
+
+  const save = async () => {
+    const trimmed = name.trim();
+    if (!trimmed || trimmed === doc.filename) { onClose(); return; }
+    if (trimmed.includes("/") || trimmed.includes("\\")) { setError("Filename can't contain / or \\"); return; }
+    setBusy(true);
+    setError(null);
+    try { await onSave(trimmed); onClose(); }
+    catch (e) { setError(e.message || "Rename failed."); setBusy(false); }
+  };
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={e => e.stopPropagation()} style={{position:"relative", maxWidth:420}}>
+        <button className="close-x" onClick={onClose}>{"\u2715"}</button>
+        <h2>Rename file</h2>
+        <p style={{color:"var(--text-mute)", fontSize:12, marginTop:6}}>
+          Renames the actual file on disk in place — same folder, new name.
+        </p>
+        <input ref={inputRef} className="btn" style={{width:"100%"}} type="text" value={name}
+          onChange={e => setName(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter") save(); if (e.key === "Escape") onClose(); }} />
+        {error && <div style={{color:"#F87171", fontSize:12, marginTop:8}}>{error}</div>}
+        <div style={{display:"flex", justifyContent:"flex-end", gap:8, marginTop:14}}>
+          <button className="btn" onClick={onClose} disabled={busy}>Cancel</button>
+          <button className="btn primary" disabled={busy} onClick={save}>Save</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* =========================== NEW APPLICATION MODAL =========================== */
+// Creates Applications/<Company>/[<Role>/] on disk (via POST
+// /api/applications/new, backed by build_index.py's
+// create_application_folder — the exact same helper the Streamlit app's
+// "+ New Application" form uses) and does a full rebuild, then hands back
+// the new item_id so the caller can jump straight to it in Pipeline. This
+// is the only place in the app that creates a folder rather than just
+// reading/renaming/trashing files inside ones that already exist.
+function NewApplicationModal({onClose, onCreate, meta}){
+  const [company, setCompany] = useState("");
+  const [role, setRole] = useState("");
+  const [status, setStatus] = useState("drafted");
+  const [selectedFiles, setSelectedFiles] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const inputRef = useRef(null);
+  const fileInputRef = useRef(null);
+  const statusOrder = (meta && meta.status_order) || DEFAULT_STATUS_ORDER;
+
+  useEffect(() => { if (inputRef.current) inputRef.current.focus(); }, []);
+
+  const addFiles = (fileList) => {
+    if (!fileList || !fileList.length) return;
+    setSelectedFiles(prev => [...prev, ...Array.from(fileList)]);
+  };
+  const removeFile = (idx) => setSelectedFiles(prev => prev.filter((_, i) => i !== idx));
+
+  const create = async () => {
+    const trimmed = company.trim();
+    if (!trimmed) { setError("Company name is required."); return; }
+    setBusy(true);
+    setError(null);
+    try { await onCreate(trimmed, role.trim(), selectedFiles, status); onClose(); }
+    catch (e) { setError(e.message || "Couldn't create application."); setBusy(false); }
+  };
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={e => e.stopPropagation()} style={{position:"relative", maxWidth:460}}>
+        <button className="close-x" onClick={onClose}>{"\u2715"}</button>
+        <h2>New application</h2>
+        <p style={{color:"var(--text-mute)", fontSize:12, marginTop:6}}>
+          Creates a real folder — <code>Applications/{company.trim() || "Company"}{role.trim() ? `/${role.trim()}` : ""}</code> —
+          then rebuilds the index. Nothing else on disk is touched.
+        </p>
+
+        <div className="section-label" style={{marginTop:14}}>Company</div>
+        <input ref={inputRef} className="btn" style={{width:"100%"}} type="text" value={company}
+          placeholder="e.g. Acme Corp" onChange={e => setCompany(e.target.value)}
+          onKeyDown={e => { if (e.key === "Escape") onClose(); }} />
+
+        <div className="section-label" style={{marginTop:12}}>Role (optional)</div>
+        <input className="btn" style={{width:"100%"}} type="text" value={role}
+          placeholder="e.g. Software Engineer II" onChange={e => setRole(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter" && !busy) create(); if (e.key === "Escape") onClose(); }} />
+
+        <div className="section-label" style={{marginTop:12}}>Status</div>
+        <select className="btn" style={{width:"100%"}} value={status} onChange={e => setStatus(e.target.value)}>
+          {statusOrder.map(s => <option key={s} value={s}>{s[0].toUpperCase()+s.slice(1)}</option>)}
+        </select>
+        <p style={{color:"var(--text-mute)", fontSize:11, marginTop:4}}>
+          Defaults to Drafted. Pick Applied/Interviewing if you're logging one you already sent.
+        </p>
+
+        <div className="section-label" style={{marginTop:12}}>Starting documents (optional)</div>
+        <div className={"dropzone compact" + (busy ? " busy" : "")}
+          onDragOver={e => e.preventDefault()}
+          onDrop={e => { e.preventDefault(); addFiles(e.dataTransfer.files); }}
+          onClick={() => !busy && fileInputRef.current && fileInputRef.current.click()}>
+          <input ref={fileInputRef} type="file" multiple style={{display:"none"}}
+            onChange={e => { addFiles(e.target.files); e.target.value = ""; }} />
+          <span className="dropzone-icon">{"\u{1F4CE}"}</span>
+          <span>Drag a resume/cover letter here, or click to browse</span>
+        </div>
+        {selectedFiles.length > 0 && (
+          <div style={{marginTop:8, display:"flex", flexDirection:"column", gap:4}}>
+            {selectedFiles.map((f, i) => (
+              <div key={i} style={{display:"flex", alignItems:"center", justifyContent:"space-between", fontSize:12, color:"var(--text-soft)"}}>
+                <span>{f.name}</span>
+                <button className="btn subtle" style={{padding:"2px 8px"}} disabled={busy} onClick={() => removeFile(i)}>Remove</button>
+              </div>
+            ))}
+          </div>
+        )}
+        {selectedFiles.length === 0 && (
+          <p style={{color:"var(--text-mute)", fontSize:11, marginTop:6}}>
+            No files? A placeholder note gets added so the application still shows up right away.
+          </p>
+        )}
+
+        {error && <div style={{color:"#F87171", fontSize:12, marginTop:10}}>{error}</div>}
+        <div style={{display:"flex", justifyContent:"flex-end", gap:8, marginTop:14}}>
+          <button className="btn" onClick={onClose} disabled={busy}>Cancel</button>
+          <button className="btn primary" disabled={busy || !company.trim()} onClick={create}>
+            {busy ? "Creating\u2026" : "Create application"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* =========================== NEW CATEGORY MODAL =========================== */
+// Creates a brand-new top-level folder (via POST /api/categories/new,
+// backed by build_index.py's create_category_folder — the category
+// sibling of create_application_folder) and does a full rebuild, so it
+// shows up as a real Browse tab right away. Sibling to
+// NewApplicationModal above; simpler since a category is just one flat
+// folder, not a Company/Role/files/status form.
+function NewCategoryModal({onClose, onCreate}){
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const inputRef = useRef(null);
+
+  useEffect(() => { if (inputRef.current) inputRef.current.focus(); }, []);
+
+  const create = async () => {
+    const trimmed = name.trim();
+    if (!trimmed) { setError("Category name is required."); return; }
+    setBusy(true);
+    setError(null);
+    try { await onCreate(trimmed); onClose(); }
+    catch (e) { setError(e.message || "Couldn't create category."); setBusy(false); }
+  };
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={e => e.stopPropagation()} style={{position:"relative", maxWidth:420}}>
+        <button className="close-x" onClick={onClose}>{"\u2715"}</button>
+        <h2>New category</h2>
+        <p style={{color:"var(--text-mute)", fontSize:12, marginTop:6}}>
+          Creates a real top-level folder — <code>{name.trim() || "Category Name"}</code> — then
+          rebuilds the index. It becomes its own Browse tab. Nothing else on disk is touched.
+        </p>
+
+        <div className="section-label" style={{marginTop:14}}>Quick picks</div>
+        <div style={{display:"flex", flexWrap:"wrap", gap:6}}>
+          {NEW_CATEGORY_PRESETS.map(p => (
+            <button key={p} className={"btn subtle" + (name.trim() === p ? " active" : "")}
+              style={{padding:"4px 10px", fontSize:12.5}} disabled={busy}
+              onClick={() => setName(p)}>{p}</button>
+          ))}
+        </div>
+
+        <div className="section-label" style={{marginTop:12}}>Category name</div>
+        <input ref={inputRef} className="btn" style={{width:"100%"}} type="text" value={name}
+          placeholder="e.g. Case Management, or type your own"
+          onChange={e => setName(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter" && !busy) create(); if (e.key === "Escape") onClose(); }} />
+        <p style={{color:"var(--text-mute)", fontSize:11, marginTop:6}}>
+          Pick a quick pick above or type any name of your own — either way it's just filling in
+          this field, so you can always edit it before creating.
+        </p>
+
+        {error && <div style={{color:"#F87171", fontSize:12, marginTop:10}}>{error}</div>}
+        <div style={{display:"flex", justifyContent:"flex-end", gap:8, marginTop:14}}>
+          <button className="btn" onClick={onClose} disabled={busy}>Cancel</button>
+          <button className="btn primary" disabled={busy || !name.trim()} onClick={create}>
+            {busy ? "Creating\u2026" : "Create category"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* =========================== SETTINGS MODAL =========================== */
+function SettingsModal({onClose, onRebuild, status, themePref, themeApplied, setTheme}){
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  const doRebuild = async () => {
+    setBusy(true); setError(null);
+    try { await onRebuild(); onClose(); }
+    catch (e) { setError(String(e.message || e)); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={e => e.stopPropagation()} style={{position:"relative"}}>
+        <button className="close-x" onClick={onClose}>{"\u2715"}</button>
+        <h2>Settings</h2>
+
+        <div className="section-label" style={{marginTop:16}}>Appearance</div>
+        <div className="theme-switch">
+          {["system","light","dark"].map(t => (
+            <button key={t} className={themePref === t ? "active" : ""} onClick={() => setTheme(t)}>
+              <span style={{fontSize:15}}>{THEME_ICONS[t]}</span>
+              {t[0].toUpperCase()+t.slice(1)}
+            </button>
+          ))}
+        </div>
+        <p style={{color:"var(--text-mute)", fontSize:11, marginTop:6}}>
+          System follows your OS's light/dark setting automatically (currently {themeApplied}).
+        </p>
+
+        <div className="section-label">Index</div>
+        <p style={{color:"var(--text-soft)", fontSize:12.5, lineHeight:1.5}}>
+          <code>_app/</code> lives nested one level inside your JobTracker folder, so it always
+          indexes the folder it's sitting in — nothing to configure. Rebuild any time you add,
+          move, or rename folders. Nothing on disk is ever modified.
+        </p>
+        {status && (
+          <p style={{color:"var(--text-mute)", fontSize:11.5, marginTop:12}}>
+            Root: <code>{status.root}</code><br/>
+            Index: jobtracker.db {status.index_built ? `\u2022 ${status.doc_count} documents` : "\u2022 not built yet"}<br/>
+            Overrides: overrides.db (never touched by rebuild)
+          </p>
+        )}
+        {error && <div className="warning-banner" style={{marginTop:12}}>{error}</div>}
+        <div className="modal-foot">
+          <button className="btn" onClick={onClose}>Close</button>
+          <button className="btn primary" disabled={busy} onClick={doRebuild}>{busy ? "Rebuilding…" : "\u{1F504} Rebuild index"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* =========================== COMMAND PALETTE (⌘K / Ctrl+K) =========================== */
+function CommandPalette({apps, onClose, setPage, setSelectedKey, doRebuild, fireToast, onNewApp, onNewCategory}){
+  const [q, setQ] = useState("");
+  const [activeIdx, setActiveIdx] = useState(0);
+  const inputRef = useRef(null);
+
+  useEffect(() => { if (inputRef.current) inputRef.current.focus(); }, []);
+
+  const navActions = [
+    {id:"new-app", label:"New application", sub:"Action", run:() => { onClose(); onNewApp(); }},
+    {id:"new-category", label:"New category", sub:"Action", run:() => { onClose(); onNewCategory(); }},
+    {id:"nav-pipeline", label:"Go to Pipeline", sub:"View", run:() => setPage("pipeline")},
+    {id:"nav-attention", label:"Go to Needs Attention", sub:"View", run:() => setPage("attention")},
+    {id:"nav-browse", label:"Go to Browse by Section", sub:"View", run:() => setPage("browse")},
+    {id:"nav-hub", label:"Go to Search Hub", sub:"View", run:() => setPage("hub")},
+    {id:"nav-insights", label:"Go to Insights", sub:"View", run:() => setPage("insights")},
+    {id:"nav-manage", label:"Go to Manage", sub:"View", run:() => setPage("manage")},
+    {id:"rebuild", label:"Rebuild index", sub:"Action", run:async () => { fireToast("Rebuilding…"); await doRebuild(); }},
+  ];
+
+  const ql = q.trim().toLowerCase();
+  const matchedApps = ql
+    ? apps.filter(a => (a.effective_company + " " + a.role_label).toLowerCase().includes(ql)).slice(0, 8)
+    : [];
+  const matchedActions = ql ? navActions.filter(a => a.label.toLowerCase().includes(ql)) : navActions;
+
+  const results = [
+    ...matchedActions.map(a => ({kind:"action", ...a})),
+    ...matchedApps.map(a => ({kind:"app", id:a.id, label:a.effective_company, sub:a.role_label !== "(root)" ? a.role_label : "Application", app:a})),
+  ];
+
+  useEffect(() => { setActiveIdx(0); }, [q]);
+
+  const runResult = (r) => {
+    if (!r) return;
+    if (r.kind === "action") { r.run(); }
+    else { setPage("pipeline"); setSelectedKey(r.app.id); }
+    onClose();
+  };
+
+  const onKeyDown = (e) => {
+    if (e.key === "ArrowDown") { e.preventDefault(); setActiveIdx(i => Math.min(results.length - 1, i + 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setActiveIdx(i => Math.max(0, i - 1)); }
+    else if (e.key === "Enter") { e.preventDefault(); runResult(results[activeIdx]); }
+    else if (e.key === "Escape") { e.preventDefault(); onClose(); }
+  };
+
+  return (
+    <div className="palette-backdrop" onClick={onClose}>
+      <div className="palette" onClick={e => e.stopPropagation()}>
+        <ClearableInput inputRef={inputRef} className="palette-input" wrapStyle={{width:"100%"}}
+          placeholder={`Search ${apps.length} applications, jump to a view, or rebuild the index…`}
+          value={q} onChange={e => setQ(e.target.value)} onKeyDown={onKeyDown} />
+        <div className="palette-results">
+          {results.length === 0 && <div className="palette-empty">No matches.</div>}
+          {matchedActions.length > 0 && <div className="palette-group">Views &amp; actions</div>}
+          {matchedActions.map((a, i) => (
+            <div key={a.id} className={"palette-item" + (results[activeIdx] && results[activeIdx].id===a.id ? " active":"")}
+              onMouseEnter={() => setActiveIdx(results.findIndex(r => r.id===a.id))}
+              onClick={() => runResult({kind:"action", ...a})}>
+              <span>{a.label}</span><span className="sub">{a.sub}</span>
+            </div>
+          ))}
+          {matchedApps.length > 0 && <div className="palette-group">Applications</div>}
+          {matchedApps.map(a => {
+            const r = {kind:"app", id:a.id, label:a.effective_company, sub:a.role_label !== "(root)" ? a.role_label : "Application", app:a};
+            return (
+              <div key={a.id} className={"palette-item" + (results[activeIdx] && results[activeIdx].id===r.id ? " active":"")}
+                onMouseEnter={() => setActiveIdx(results.findIndex(x => x.id===r.id))}
+                onClick={() => runResult(r)}>
+                <span><Highlight text={r.label} query={q} /></span><span className="sub">{r.sub}</span>
+              </div>
+            );
+          })}
+        </div>
+        <div className="palette-footer">
+          <span><span className="kbd">↑</span><span className="kbd">↓</span> navigate</span>
+          <span><span className="kbd">Enter</span> select</span>
+          <span><span className="kbd">Esc</span> close</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* =========================== INLINE DOCUMENT VIEWER DRAWER (glassmorphic) =========================== */
+function ViewerDrawer({doc, onClose, onOpen}){
+  const ext = ((doc && doc.ext) || "").toLowerCase();
+  const [docxHtml, setDocxHtml] = useState(null);
+  const [docxErr, setDocxErr] = useState(null);
+  const [docxLoading, setDocxLoading] = useState(false);
+
+  // Runs whenever the viewed doc changes (not just on mount) — the drawer
+  // stays mounted while you click between docs, so this can't be a
+  // one-time fetch. .docx has no browser-native renderer, unlike the
+  // plain-text/PDF formats below, so it needs a converted-HTML round trip
+  // to the backend instead of pointing an <iframe> straight at /api/file.
+  useEffect(() => {
+    setDocxHtml(null); setDocxErr(null);
+    if (!doc || ext !== ".docx") return;
+    setDocxLoading(true);
+    apiGet(`/api/preview-docx?relpath=${encodeURIComponent(doc.relpath)}`)
+      .then(r => setDocxHtml(r.html))
+      .catch(e => setDocxErr(String(e.message || e)))
+      .finally(() => setDocxLoading(false));
+  }, [doc && doc.relpath]);
+
+  if (!doc) return null;
+  const src = `${API_BASE}/api/file?relpath=${encodeURIComponent(doc.relpath)}`;
+  const isFrameable = ext === ".pdf" || ext === ".md" || ext === ".markdown" || ext === ".txt" || ext === ".tex";
+  return (
+    <div className="viewer-backdrop" onClick={onClose}>
+      <div className="viewer-drawer" onClick={e => e.stopPropagation()}>
+        <div className="viewer-header">
+          <div className="viewer-title" title={doc.filename}>{doc.filename}</div>
+          <button className="btn small" onClick={() => onOpen(doc.relpath)}>Open in OS</button>
+          <button className="btn small" onClick={onClose}>{"\u2715 Close (Esc)"}</button>
+        </div>
+        <div className="viewer-body">
+          {ext === ".pdf"
+            ? <embed className="viewer-frame" src={src} type="application/pdf" />
+            : ext === ".docx"
+              ? (docxLoading
+                  ? <div className="viewer-unsupported">{"\u23F3"} Converting for preview…</div>
+                  : docxErr
+                    ? (
+                      <div className="viewer-unsupported">
+                        <div>{"\u{1F4C4}"} Couldn't preview this .docx ({docxErr}).</div>
+                        <button className="btn primary" onClick={() => onOpen(doc.relpath)}>Open in OS</button>
+                      </div>
+                    )
+                    : <iframe className="viewer-frame" title={doc.filename}
+                        srcDoc={`<style>body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:760px;margin:24px auto;padding:0 24px 40px;line-height:1.55;color:#1e293b;}img{max-width:100%;}</style>${docxHtml || ""}`} />
+                )
+              : isFrameable
+                ? <iframe className="viewer-frame" src={src} title={doc.filename} />
+                : (
+                  <div className="viewer-unsupported">
+                    <div>{"\u{1F4C4}"} No inline preview for this file type.</div>
+                    <button className="btn primary" onClick={() => onOpen(doc.relpath)}>Open in OS</button>
+                  </div>
+                )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* =========================== ONBOARDING / CONNECTION SCREENS =========================== */
+function ConnectionError(){
+  return (
+    <div className="center-screen">
+      <div className="onboard-card">
+        <h1>Can't reach the API server</h1>
+        <p>Start the backend from inside the <code>_app</code> folder, then reload this page:</p>
+        <p><code>pip install -r requirements.txt</code><br/><br/><code>uvicorn api:app --reload --port 8000</code></p>
+        <p>Then open <code>http://localhost:8000</code> — the server hosts this page itself, so nothing else needs to run. It never leaves your machine.</p>
+      </div>
+    </div>
+  );
+}
+
+function Onboarding({root, onRebuild}){
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const submit = async () => {
+    setBusy(true); setError(null);
+    try { await onRebuild(); }
+    catch (e) { setError(String(e.message || e)); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div className="center-screen">
+      <div className="onboard-card">
+        <h1>{"\u{1F5C2}\uFE0F"} Welcome to your JobTracker Hub</h1>
+        <p>
+          <code>_app/</code> is nested inside your JobTracker folder, so it already knows what to
+          index — <code>{root || "the folder it's sitting in"}</code>. Click below to build the
+          index. Nothing on disk is modified — this only reads your files to build a searchable index.
+        </p>
+        {error && <div className="warning-banner">{error}</div>}
+        <button className="btn primary" disabled={busy} onClick={submit} style={{width:"100%", marginTop:8, padding:"10px 0"}}>
+          {busy ? "Scanning your folders…" : "\u{1F504} Build index"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* =========================== APP ROOT =========================== */
+// Top-level safety net: without this, an uncaught render error anywhere in
+// the tree (a bad CDN load, an unexpected API shape, etc.) unmounts the
+// entire app and leaves a blank white page with no way back except a full
+// reload. This catches it, shows what broke, and offers a reload — so one
+// page's bug can't take down navigation, pipeline, everything.
+class ErrorBoundary extends React.Component {
+  constructor(props){ super(props); this.state = {error: null}; }
+  static getDerivedStateFromError(error){ return {error}; }
+  componentDidCatch(error, info){ console.error("Render error:", error, info); }
+  render(){
+    if (this.state.error) {
+      return (
+        <div className="center-screen">
+          <div className="onboard-card">
+            <h1>{"\u26A0\uFE0F"} Something went wrong</h1>
+            <p>{String(this.state.error.message || this.state.error)}</p>
+            <button className="btn primary" style={{width:"100%", marginTop:8, padding:"10px 0"}}
+              onClick={() => { this.setState({error: null}); window.location.reload(); }}>
+              Reload
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+function App(){
+  const cached = useMemo(loadCache, []);
+  const initialUrl = useMemo(readUrlState, []);
+  const theme = useTheme();
+
+  const [connError, setConnError] = useState(false);
+  const [statusInfo, setStatusInfo] = useState(cached && cached.statusInfo || null);
+  const [apps, setApps] = useState(cached && cached.apps || []);
+  const [docsByItemId, setDocsByItemId] = useState({});
+  // Bumped on every document mutation (upload/rename/delete/fix-type).
+  // Pipeline reads straight from docsByItemId, but Browse fetches its own
+  // copy via /api/browse independently — this is what tells Browse its
+  // copy is stale without duplicating the same patch logic in two places.
+  const [docsVersion, setDocsVersion] = useState(0);
+  // Docs mid undo-window: hidden immediately on delete-click, actually
+  // trashed only once the window elapses (see requestDelete below).
+  const [pendingDeleteIds, setPendingDeleteIds] = useState(() => new Set());
+  const [undoToast, setUndoToast] = useState(null); // {id, filename}
+  // Separate from the normal 2.2s auto-toast: delete/upload failures can
+  // carry a long, specific explanation (e.g. a macOS permissions fix) that
+  // needs actual read time and a manual dismiss, not a quick flash.
+  const [errorToast, setErrorToast] = useState(null); // {message}
+  const deleteTimers = useRef({});
+  const [page, setPageState] = useState(initialUrl.view);
+  const [selectedKey, setSelectedKeyState] = useState(initialUrl.selected);
+  const [searchQuery, setSearchQuery] = useState("");
+  // Browse-by-Section defaults to the grouped, per-application view (full
+  // document set, with delete/rename/fix-type actions) even while a search
+  // query is typed — it used to swap entirely to the flat SearchPage, which
+  // has no doc-management actions on it at all and only shows one row per
+  // matching file. The flat view is still available via the toggle above.
+  const [browseSearchMode, setBrowseSearchMode] = useState("grouped");
+  const [showPersonal, setShowPersonal] = useState(false);
+  const [showSource, setShowSource] = useState(false);
+  const [fixTypeDoc, setFixTypeDoc] = useState(null);
+  const [renameDoc, setRenameDoc] = useState(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [newAppOpen, setNewAppOpen] = useState(false);
+  const [newCategoryOpen, setNewCategoryOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [workspacePopoverOpen, setWorkspacePopoverOpen] = useState(false);
+  const [viewerDoc, setViewerDoc] = useState(null);
+  const [pendingIds, setPendingIds] = useState(() => new Set());
+  const [toast, fireToast] = useToast();
+
+  const meta = statusInfo || {};
+
+  // URL-driven state: ?view=&selected= always mirrors {page, selectedKey}
+  // (selectedKey is the numeric application id) so the current view/
+  // selection is a shareable/bookmarkable link.
+  const setPage = useCallback((p) => setPageState(p), []);
+  const setSelectedKey = useCallback((k) => setSelectedKeyState(k), []);
+  useEffect(() => { writeUrlState(page, selectedKey); }, [page, selectedKey]);
+
+  const refreshStatus = useCallback(() => apiGet("/api/status").then(s => { setStatusInfo(s); setConnError(false); return s; }).catch(() => { setConnError(true); throw new Error("offline"); }), []);
+  const refreshApps = useCallback(() => apiGet("/api/applications").then(setApps).catch(() => {}), []);
+
+  useEffect(() => {
+    refreshStatus().then(s => { if (s.index_built) refreshApps(); }).catch(() => {});
+    const iv = setInterval(() => { refreshStatus().catch(()=>{}); }, 15000);
+    return () => clearInterval(iv);
+  }, []);
+
+  // Keep the localStorage cache warm so the next launch paints instantly.
+  useEffect(() => { if (statusInfo) saveCache(statusInfo, apps); }, [statusInfo, apps]);
+
+  const ensureDocs = useCallback((itemId) => {
+    setDocsByItemId(prev => {
+      if (prev[itemId]) return prev;
+      apiGet(`/api/applications/${itemId}/documents`).then(docs => {
+        setDocsByItemId(p => ({...p, [itemId]: docs}));
+      });
+      return prev;
+    });
+  }, []);
+
+  // Numeric-id override save (fixes the old double-URL-encoded item_key
+  // route — see api.py's save_override for the full story).
+  const saveOverride = useCallback(async (appId, fields) => {
+    await apiPost(`/api/applications/${appId}/override`, fields);
+    fireToast("Saved.");
+    await refreshApps();
+  }, [refreshApps]);
+
+  const bulkOverride = useCallback(async (appIds, fields) => {
+    if (!appIds.length) return;
+    const r = await apiPost("/api/applications/bulk-override", {item_ids: appIds, ...fields});
+    fireToast(`Updated ${r.count} application(s).`);
+    await refreshApps();
+  }, [refreshApps]);
+
+  // Optimistic status move for Kanban drag-and-drop: update local state
+  // immediately (card jumps to the new column right away), fire the
+  // override API in the background, and roll back + toast an error if it
+  // fails. `pendingIds` drives the .optimistic CSS class (dimmed) while
+  // the request is in flight.
+  const moveStatus = useCallback(async (app, newStatus) => {
+    const prevApps = apps;
+    setApps(prev => prev.map(a => a.id === app.id ? {...a, effective_status: newStatus, manual_status: newStatus} : a));
+    setPendingIds(prev => new Set(prev).add(app.id));
+    try {
+      await apiPost(`/api/applications/${app.id}/override`, {manual_status: newStatus});
+      fireToast(`Moved ${app.effective_company} to ${newStatus}.`);
+      await refreshApps();
+    } catch (e) {
+      setApps(prevApps);
+      fireToast("Couldn't move — reverted.");
+    } finally {
+      setPendingIds(prev => { const next = new Set(prev); next.delete(app.id); return next; });
+    }
+  }, [apps, refreshApps]);
+
+  const openFile = useCallback(async (relpath) => {
+    try { const r = await apiPost("/api/open", {relpath}); fireToast(`Opened ${r.opened}`); }
+    catch (e) { fireToast("Couldn't open file"); }
+  }, []);
+
+  // Multipart upload — separate from apiPost since that helper always
+  // sends JSON. Writes go straight into the application's real folder on
+  // disk (see api.py); the response already contains the refreshed
+  // document list for this item, so we drop it straight into the cache
+  // instead of round-tripping through another GET.
+  // Actually performs the trash-move + cache update. No toast of its own —
+  // it fires silently once the undo window in requestDelete below elapses.
+  const performDelete = useCallback(async (doc) => {
+    await apiPost("/api/documents/delete", {relpath: doc.relpath});
+    setDocsByItemId(prev => {
+      const next = {...prev};
+      if (next[doc.item_id]) next[doc.item_id] = next[doc.item_id].filter(d => d.relpath !== doc.relpath);
+      return next;
+    });
+    setDocsVersion(v => v + 1);
+  }, []);
+
+  const renameDocument = useCallback(async (doc, newFilename) => {
+    const data = await apiPost("/api/documents/rename", {relpath: doc.relpath, new_filename: newFilename});
+    if (data.documents) setDocsByItemId(prev => ({...prev, [doc.item_id]: data.documents}));
+    setDocsVersion(v => v + 1);
+    fireToast(`Renamed to ${newFilename}.`);
+  }, [fireToast]);
+
+  // Delete is already non-destructive (real file goes to OS Trash, never
+  // unlinked) — so instead of a blocking "are you sure?", the card hides
+  // immediately and a toast offers Undo for a few seconds. The actual
+  // trash-move (performDelete) is delayed until the window elapses; Undo
+  // just cancels that pending call, nothing has touched disk yet.
+  const UNDO_WINDOW_MS = 6000;
+  const requestDelete = useCallback((doc) => {
+    setPendingDeleteIds(prev => new Set(prev).add(doc.id));
+    setUndoToast({id: doc.id, filename: doc.filename});
+    const timeoutId = setTimeout(async () => {
+      delete deleteTimers.current[doc.id];
+      try { await performDelete(doc); }
+      catch (e) { setErrorToast({message: `Couldn't delete ${doc.filename}: ${e.message}`}); }
+      finally {
+        setPendingDeleteIds(prev => { const next = new Set(prev); next.delete(doc.id); return next; });
+        setUndoToast(cur => (cur && cur.id === doc.id) ? null : cur);
+      }
+    }, UNDO_WINDOW_MS);
+    deleteTimers.current[doc.id] = timeoutId;
+  }, [performDelete, fireToast]);
+
+  const undoDelete = useCallback((docId) => {
+    const t = deleteTimers.current[docId];
+    if (t) { clearTimeout(t); delete deleteTimers.current[docId]; }
+    setPendingDeleteIds(prev => { const next = new Set(prev); next.delete(docId); return next; });
+    setUndoToast(cur => (cur && cur.id === docId) ? null : cur);
+  }, []);
+
+  const uploadDocuments = useCallback(async (itemId, fileList) => {
+    const form = new FormData();
+    for (const f of fileList) form.append("files", f);
+    const res = await fetch(`${API_BASE}/api/applications/${itemId}/documents`, {method: "POST", body: form});
+    if (!res.ok) { const t = await res.text(); throw new Error(t || res.statusText); }
+    const data = await res.json();
+    setDocsByItemId(prev => ({...prev, [itemId]: data.documents}));
+    setDocsVersion(v => v + 1);
+    fireToast(fileList.length > 1 ? `Added ${fileList.length} files.` : `Added ${fileList[0].name}.`);
+    return data.documents;
+  }, [fireToast]);
+
+  const openViewer = useCallback((doc) => setViewerDoc(doc), []);
+
+  const saveDocTypeOverride = useCallback(async (relpath, doc_type_override) => {
+    const data = await apiPost("/api/documents/override", {relpath, doc_type_override});
+    fireToast(doc_type_override ? "Document type corrected." : "Correction cleared.");
+    // Patch the affected item's cache entry in place (server now returns its
+    // refreshed doc list) instead of wiping the whole cache — wiping it left
+    // docsByItemId[selected.id] undefined with nothing left to re-fetch it,
+    // since Pipeline's ensureDocs effect only re-runs when the selected app
+    // id changes, not when the cache is cleared. That's what made the
+    // application look like it disappeared after a doc-type correction.
+    if (data.item_id != null) {
+      setDocsByItemId(prev => ({...prev, [data.item_id]: data.documents}));
+    }
+    setDocsVersion(v => v + 1);
+  }, [fireToast]);
+
+  const doRebuild = useCallback(async () => {
+    await apiPost("/api/rebuild", {});
+    fireToast("Index rebuilt. Notes and overrides were kept.");
+    await refreshStatus();
+    await refreshApps();
+  }, [refreshStatus, refreshApps]);
+
+  // Multipart, like uploadDocuments — creates the real
+  // Applications/<Company>/[<Role>/] folder on disk, optionally seeds it
+  // with the picked files, and does a full rebuild server-side so the new
+  // item shows up through the exact same path any manually-created folder
+  // would. Jumps straight to it in Pipeline once refreshApps resolves.
+  const createApplication = useCallback(async (company, roleLabel, fileList, status) => {
+    const form = new FormData();
+    form.append("company", company);
+    form.append("role_label", roleLabel || "");
+    form.append("status", status || "");
+    for (const f of (fileList || [])) form.append("files", f);
+    const res = await fetch(`${API_BASE}/api/applications/new`, {method: "POST", body: form});
+    if (!res.ok) { const t = await res.text(); throw new Error(extractErrorMessage(t, res.statusText)); }
+    const data = await res.json();
+    fireToast(`Created ${company}${roleLabel ? " — " + roleLabel : ""}${status ? ` (${status})` : ""}.`);
+    await refreshStatus();
+    await refreshApps();
+    if (data.item_id != null) { setPage("pipeline"); setSelectedKey(data.item_id); }
+    return data;
+  }, [fireToast, refreshStatus, refreshApps, setPage, setSelectedKey]);
+
+  // Same shape as createApplication above but for a bare category folder
+  // (no Company/Role, no files, no status) — creates it, rebuilds (via
+  // docsVersion, which BrowsePage watches), and navigates to Browse,
+  // where the new category now shows up as its own tab.
+  const createCategory = useCallback(async (name) => {
+    const form = new FormData();
+    form.append("name", name);
+    const res = await fetch(`${API_BASE}/api/categories/new`, {method: "POST", body: form});
+    if (!res.ok) { const t = await res.text(); throw new Error(extractErrorMessage(t, res.statusText)); }
+    const data = await res.json();
+    fireToast(`Created category "${name}".`);
+    await refreshStatus();
+    setDocsVersion(v => v + 1);
+    setPage("browse");
+    return data;
+  }, [fireToast, refreshStatus, setPage]);
+
+  // Global hotkeys: ⌘K/Ctrl+K opens the command palette; Esc closes
+  // whatever's on top (palette > viewer > settings), in that priority order.
+  useEffect(() => {
+    const handler = (e) => {
+      const metaKey = e.metaKey || e.ctrlKey;
+      if (metaKey && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPaletteOpen(o => !o);
+        return;
+      }
+      if (e.key === "Escape") {
+        if (paletteOpen) setPaletteOpen(false);
+        else if (viewerDoc) setViewerDoc(null);
+        else if (settingsOpen) setSettingsOpen(false);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [paletteOpen, viewerDoc, settingsOpen]);
+
+  if (connError) return <ConnectionError />;
+  if (!statusInfo) return <div className="center-screen"><div style={{color:"var(--text-soft)"}}>Loading…</div></div>;
+  if (!statusInfo.index_built) return <Onboarding root={statusInfo.root} onRebuild={doRebuild} />;
+
+  const attentionCount = apps.filter(a => !a.archived && !a.is_snoozed && (a.is_stale || a.next_action_due)).length;
+
+  return (
+    <ShowSourceContext.Provider value={{showSource, setShowSource}}>
+    <PendingDeleteContext.Provider value={{pendingDeleteIds}}>
+    <div className="app-shell">
+      <Rail page={page} setPage={setPage} attentionCount={attentionCount} onOpenPalette={() => setPaletteOpen(true)}
+        onOpenSettings={() => setSettingsOpen(true)}
+        workspacePopoverOpen={workspacePopoverOpen}
+        onToggleWorkspacePopover={() => setWorkspacePopoverOpen(o => !o)}
+        onCloseWorkspacePopover={() => setWorkspacePopoverOpen(false)}
+        trackerName={statusInfo && statusInfo.workspace && statusInfo.workspace.name} />
+      <div className="main">
+        <div className="topbar">
+          <ClearableInput className="search-input" wrapStyle={{flex:1, minWidth:220, maxWidth:520}}
+            placeholder={`\u{1F50D} Search ${apps.length} applications… (\u2318K for command palette)`}
+            value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
+          <label style={{display:"flex", alignItems:"center", gap:6, color:"var(--text-soft)", fontSize:12}}>
+            <input type="checkbox" checked={showPersonal} onChange={e => setShowPersonal(e.target.checked)} /> Show personal
+          </label>
+          <label style={{display:"flex", alignItems:"center", gap:6, color:"var(--text-soft)", fontSize:12}} title="Source files (.tex) stay indexed and searchable — this only controls whether they show in document lists.">
+            <input type="checkbox" checked={showSource} onChange={e => setShowSource(e.target.checked)} /> Show source files
+          </label>
+          <div style={{flex:1}} />
+          <ThemeToggle pref={theme.pref} applied={theme.applied} setTheme={theme.setTheme} />
+          <button className="btn primary" onClick={() => setNewAppOpen(true)}>{"\u2795"} New application</button>
+          <button className="btn" onClick={() => setNewCategoryOpen(true)}>{"\u{1F5C2}\uFE0F"} New category</button>
+          <button className="btn" onClick={() => setPaletteOpen(true)}>{"\u2318K"}</button>
+          <button className="btn" onClick={() => setSettingsOpen(true)}>{"\u2699\uFE0F"} Settings</button>
+        </div>
+        <div className="content">
+          {page === "pipeline" && (
+            <PipelinePage apps={apps} meta={meta} docsByItemId={docsByItemId} ensureDocs={ensureDocs}
+              onSaveOverride={saveOverride} onMoveStatus={moveStatus} pendingIds={pendingIds}
+              onOpen={openFile} onView={openViewer} onFixType={setFixTypeDoc} onUpload={uploadDocuments}
+              onRename={setRenameDoc} onDelete={requestDelete} searchQuery={searchQuery}
+              selectedKey={selectedKey} setSelectedKey={setSelectedKey} active={page==="pipeline"} />
+          )}
+          {page === "attention" && (
+            <AttentionPage apps={apps} meta={meta} docsByItemId={docsByItemId} ensureDocs={ensureDocs}
+              onSaveOverride={saveOverride} onBulkOverride={bulkOverride} onOpen={openFile} onView={openViewer} active={page==="attention"} />
+          )}
+          {page === "browse" && (
+            <div>
+              {searchQuery && (
+                <div style={{display:"flex", gap:8, marginBottom:12}}>
+                  <button className={"btn subtle" + (browseSearchMode==="grouped" ? " active" : "")}
+                    style={{background: browseSearchMode==="grouped" ? "var(--border)" : "transparent"}}
+                    onClick={() => setBrowseSearchMode("grouped")}>Grouped by application</button>
+                  <button className={"btn subtle" + (browseSearchMode==="flat" ? " active" : "")}
+                    style={{background: browseSearchMode==="flat" ? "var(--border)" : "transparent"}}
+                    onClick={() => setBrowseSearchMode("flat")}>Flat document list</button>
+                </div>
+              )}
+              {searchQuery && browseSearchMode === "flat" ? (
+                <SearchPage searchQuery={searchQuery} showPersonal={showPersonal} meta={meta} onOpen={openFile} onView={openViewer} />
+              ) : (
+                <BrowsePage searchQuery={searchQuery} showPersonal={showPersonal} meta={meta} onOpen={openFile} onView={openViewer}
+                  onFixType={setFixTypeDoc} onUpload={uploadDocuments} onRename={setRenameDoc} onDelete={requestDelete} docsVersion={docsVersion} />
+              )}
+            </div>
+          )}
+          {page === "insights" && <InsightsPage apps={apps} meta={meta} themeTick={theme.applied} />}
+          {page === "hub" && <SearchHubPage />}
+          {page === "manage" && <ManagePage onRefreshApps={refreshApps} meta={meta} onCategoriesChanged={() => setDocsVersion(v => v + 1)} />}
+        </div>
+      </div>
+      {settingsOpen && (
+        <SettingsModal status={statusInfo} onClose={() => setSettingsOpen(false)} onRebuild={doRebuild}
+          themePref={theme.pref} themeApplied={theme.applied} setTheme={theme.setTheme} />
+      )}
+      {newAppOpen && (
+        <NewApplicationModal onClose={() => setNewAppOpen(false)} onCreate={createApplication} meta={meta} />
+      )}
+      {newCategoryOpen && (
+        <NewCategoryModal onClose={() => setNewCategoryOpen(false)} onCreate={createCategory} />
+      )}
+      {paletteOpen && (
+        <CommandPalette apps={apps} onClose={() => setPaletteOpen(false)} setPage={setPage}
+          setSelectedKey={setSelectedKey} doRebuild={doRebuild} fireToast={fireToast}
+          onNewApp={() => setNewAppOpen(true)} onNewCategory={() => setNewCategoryOpen(true)} />
+      )}
+      {viewerDoc && <ViewerDrawer doc={viewerDoc} onClose={() => setViewerDoc(null)} onOpen={openFile} />}
+      {fixTypeDoc && (
+        <FixTypeModal doc={fixTypeDoc} docTypeLabels={meta.doc_type_labels}
+          onClose={() => setFixTypeDoc(null)}
+          onSave={async (val) => { await saveDocTypeOverride(fixTypeDoc.relpath, val); setFixTypeDoc(null); }} />
+      )}
+      {renameDoc && (
+        <RenameModal doc={renameDoc}
+          onClose={() => setRenameDoc(null)}
+          onSave={(newName) => renameDocument(renameDoc, newName)} />
+      )}
+      <div className="toast-stack">
+        {errorToast && (
+          <div className="toast error-toast">
+            <span>{errorToast.message}</span>
+            <button className="toast-undo-btn" onClick={() => setErrorToast(null)}>Dismiss</button>
+          </div>
+        )}
+        {undoToast && (
+          <div className="toast undo-toast">
+            <span>{"Moved "}{undoToast.filename}{" to Trash."}</span>
+            <button className="toast-undo-btn" onClick={() => undoDelete(undoToast.id)}>Undo</button>
+          </div>
+        )}
+        {toast && <div className="toast">{toast}</div>}
+      </div>
+    </div>
+    </PendingDeleteContext.Provider>
+    </ShowSourceContext.Provider>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<ErrorBoundary><App /></ErrorBoundary>);
+</script>
+</body>
+</html>

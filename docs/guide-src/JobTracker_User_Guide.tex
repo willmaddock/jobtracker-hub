@@ -1,0 +1,546 @@
+\documentclass[11pt]{article}
+
+% JobTracker Hub User Guide
+% Design direction adapted from Overleaf's "Technical Document Template"
+% (https://www.overleaf.com/latex/templates/technical-document-template/mdgftpdfbvbs)
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[expansion=false]{microtype}
+\usepackage[a4paper,top=2.2cm,bottom=2.2cm,left=2.3cm,right=2.3cm]{geometry}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage{fancyhdr}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage[most]{tcolorbox}
+\usepackage{amsmath}
+
+\definecolor{ink}{HTML}{17202A}
+\definecolor{muted}{HTML}{566573}
+\definecolor{accent}{HTML}{2563EB}
+\definecolor{accentdark}{HTML}{1D4ED8}
+\definecolor{panel}{HTML}{F4F7FB}
+\definecolor{panelblue}{HTML}{EEF4FF}
+\definecolor{rule}{HTML}{D8E0EA}
+\definecolor{codebg}{HTML}{F7F8FA}
+\definecolor{success}{HTML}{0F766E}
+\definecolor{warning}{HTML}{B45309}
+\hypersetup{
+  colorlinks=true,
+  linkcolor=accentdark,
+  urlcolor=accentdark,
+  citecolor=accentdark,
+  pdftitle={JobTracker Hub — User Guide},
+  pdfauthor={JobTracker Hub},
+  pdfsubject={Local-first job application tracking}
+}
+
+\pagestyle{fancy}
+\setlength{\headheight}{24pt}
+\fancyhf{}
+\lhead{\textbf{JobTracker Hub}}
+\rhead{User Guide}
+\cfoot{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\headrule}{\hbox to\headwidth{\color{rule}\leaders\hrule height \headrulewidth\hfill}}
+
+\titleformat{\section}{\Large\bfseries\color{ink}}{\thesection}{0.65em}{}
+\titleformat{\subsection}{\large\bfseries\color{ink}}{\thesubsection}{0.55em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries\color{accentdark}}{\thesubsubsection}{0.5em}{}
+\titlespacing*{\section}{0pt}{2.0ex plus .5ex}{1.0ex}
+\titlespacing*{\subsection}{0pt}{1.6ex plus .4ex}{0.7ex}
+
+\setlist[itemize]{leftmargin=1.4em,itemsep=0.25em,topsep=0.4em}
+\setlist[enumerate]{leftmargin=1.6em,itemsep=0.35em,topsep=0.4em}
+
+\newtcolorbox{infobox}[1][]{
+  enhanced,
+  colback=panelblue,
+  colframe=panelblue,
+  boxrule=0pt,
+  arc=2mm,
+  left=6pt,right=6pt,top=6pt,bottom=6pt,
+  #1
+}
+
+\newtcolorbox{warningbox}[1][]{
+  enhanced,
+  colback=orange!7,
+  colframe=orange!25,
+  boxrule=0.6pt,
+  arc=2mm,
+  left=7pt,right=7pt,top=6pt,bottom=6pt,
+  #1
+}
+
+\newtcolorbox{codebox}[1][]{
+  enhanced,
+  colback=codebg,
+  colframe=rule,
+  boxrule=0.5pt,
+  arc=1.5mm,
+  left=7pt,right=7pt,top=6pt,bottom=6pt,
+  #1
+}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{codebg},
+  frame=none,
+  breaklines=true,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+  keywordstyle=\color{accentdark},
+  commentstyle=\color{muted},
+}
+
+\newcommand{\cmd}[1]{\texttt{\detokenize{#1}}}
+\newcommand{\file}[1]{\texttt{\detokenize{#1}}}
+\newcommand{\app}[1]{\textbf{#1}}
+\newcommand{\screenshot}[3][\textwidth]{%
+  \begin{center}
+  \fbox{\includegraphics[width=#1]{#2}}\\[3pt]
+  {\small\color{muted} #3}
+  \end{center}
+  \vspace{2pt}
+}
+
+\begin{document}
+
+% --- Cover ---
+\begin{titlepage}
+\thispagestyle{empty}
+\vspace*{1.4cm}
+{\color{accent}\rule{\textwidth}{2pt}}\\[1.2cm]
+{\fontsize{32}{36}\selectfont\bfseries\color{ink} JobTracker Hub}\par
+\vspace{0.25cm}
+{\Large\color{muted} User Guide \& Workflow Playbook}\par
+\vspace{1.0cm}
+\begin{infobox}
+\textbf{What it is.} JobTracker Hub is a local-first dashboard for the job-application documents you already keep on disk. It builds a searchable application index, gives you a real pipeline and triage workflow, and keeps the underlying files under your control.
+\end{infobox}
+\vspace{0.9cm}
+\begin{tabularx}{\textwidth}{@{}>{\bfseries}lX@{}}
+Runs locally & FastAPI web UI; no account required.\\
+Data model & Your existing folders + two local SQLite databases.\\
+Privacy posture & Binds to localhost; no cloud service is required by the application.\\
+License & MIT (see repository \file{LICENSE}).
+\end{tabularx}
+\vfill
+\textbf{Repository:} JobTracker Hub — this guide lives in \file{docs/} alongside the code it documents.\par
+\textbf{Guide version:} 1.2 \quad | \quad \textbf{Updated:} August 25, 2026\par
+\vspace{0.6cm}
+{\small\color{muted} Layout direction informed by Overleaf's \emph{Technical Document Template}, adapted for JobTracker Hub.}
+\end{titlepage}
+
+\setcounter{tocdepth}{1}
+\tableofcontents
+\newpage
+
+\section{Start Here}
+
+\subsection{What JobTracker Hub actually does}
+
+JobTracker Hub sits one level inside a folder that already contains your job-search material. It indexes the files on disk, infers useful metadata from folder and filename conventions, and presents the result through a local dashboard.
+
+The important design choice is that the application does \emph{not} require you to migrate your existing documents into a hosted database. Your tracker remains a normal folder you can inspect in Finder or Explorer.
+
+\begin{infobox}
+\textbf{The core mental model:} your filesystem is the source of truth. \file{jobtracker.db} is a rebuildable index, while \file{overrides.db} holds the durable choices you make in the app, such as status overrides, notes, dates, snoozes, archives, and company merges.
+\end{infobox}
+
+\subsection{Quick start}
+
+The repository includes a fake \file{sample-tracker/} so you can verify the installation before pointing the application at real documents.
+
+\begin{enumerate}
+  \item Copy \file{sample-tracker/} to a new folder, for example \file{my-tracker/}.
+  \item Copy the repository's \file{\_app/} directory into \file{my-tracker/}.
+  \item Create a virtual environment and install the dependencies.
+  \item Start the recommended web application.
+  \item Open \url{http://127.0.0.1:8000} and choose \textbf{Build index} the first time.
+\end{enumerate}
+
+\begin{codebox}
+\begin{lstlisting}[language=bash]
+cp -r sample-tracker my-tracker
+cp -r _app my-tracker/_app
+cd my-tracker/_app
+python3 -m venv .venv
+source .venv/bin/activate       # Windows: .venv\\Scripts\\activate
+pip install -r requirements.txt
+uvicorn api:app --reload --port 8000
+\end{lstlisting}
+\end{codebox}
+
+The frontend's requests are relative to that origin, so open the app at \url{http://127.0.0.1:8000} rather than opening \file{frontend/index.html} directly as a file — a bare file won't be able to reach the API.
+
+\subsection{Requirements}
+
+\begin{itemize}
+  \item Python 3.9 or newer.
+  \item A modern web browser for the web UI.
+  \item A local filesystem containing the documents you want to track.
+\end{itemize}
+
+\subsection{Running the app}
+
+JobTracker runs as a single FastAPI process, \cmd{uvicorn api:app --port 8000}, which both exposes the backend as JSON and serves the frontend (\file{frontend/index.html}) itself. Open \cmd{http://127.0.0.1:8000} in your browser — the frontend's requests are relative to that origin, so it needs to be loaded from the running server rather than opened as a bare file. This gets you the full feature set: the dark master-detail UI, Kanban, command palette, document operations, and workspaces.
+
+\section{How Your Folder Becomes a Tracker}
+
+\subsection{The recommended layout}
+
+The application expects \file{\_app/} to live directly inside the folder it should index:
+
+\begin{codebox}
+\begin{lstlisting}
+MyTracker/
+|-- Applications/
+|   |-- Acme Robotics/
+|   |   |-- resume.pdf
+|   |   `-- coverletter.pdf
+|   `-- Riverbend Public Library/
+|       `-- interview-notes.txt
+|-- Certifications/
+|-- References/
+|-- Resume Library/
+`-- _app/
+    |-- api.py
+    |-- db.py
+    |-- build_index.py
+    |-- classify.py
+    `-- frontend/index.html
+\end{lstlisting}
+\end{codebox}
+
+The tracker root is determined automatically: the application uses the parent directory of \file{\_app/}. There is normally no path you need to enter into a settings screen.
+
+\subsection{What the indexer ignores}
+
+The filesystem walker deliberately skips the application's own \file{\_app/} directory, hidden files and folders, common virtual environments, dependency folders, archives, and database files. This prevents the tracker from turning its own implementation or backups into job documents.
+
+\subsection{What counts as an application}
+
+Under \file{Applications/}, the standard grouping is based on the folder hierarchy. In the common case, the company folder is the company and the next role folder becomes the role label. That means you can organize documents naturally instead of entering every document into a separate form.
+
+\section{First Build: What to Expect}
+
+When you click \app{Build index}, JobTracker walks the tracker root and rebuilds the disposable index from the files currently on disk.
+
+\begin{warningbox}
+\textbf{Rebuild is not a reset of your personal tracking data.} \file{jobtracker.db} is regenerated. \file{overrides.db} is intentionally preserved so notes, manual status changes, dates, snoozes, archives, and company merges survive an index rebuild.
+\end{warningbox}
+
+A first rebuild is the point where you should check whether your folder names and filenames are being classified the way you expect.
+
+\subsection{Classification is intentionally simple}
+
+JobTracker primarily uses filename and folder heuristics rather than opening every PDF and trying to understand its prose. This keeps indexing fast and predictable.
+
+Typical filename signals include:
+
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}lX@{}}
+\toprule
+\textbf{Filename signal} & \textbf{Likely document type} \\
+\midrule
+\cmd{resume} & Resume \\
+\cmd{cover letter}, \cmd{coverletter} & Cover letter \\
+\cmd{interview}, \cmd{phone screen}, \cmd{screener}, \cmd{schedule} & Interview / scheduling material \\
+\cmd{cheat sheet}, \cmd{interview prep}, \cmd{mock}, \cmd{study} & Interview preparation \\
+\cmd{reject}, \cmd{not referred} & Rejection / non-referral \\
+\cmd{thank you}, \cmd{application received}, \cmd{confirmation} & Application confirmation \\
+\cmd{job bulletin}, \cmd{job description}, \cmd{job id} & Job posting \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Customize classification with one file}
+
+The primary configuration file is \file{\_app/classify_config.json}. It contains section rules and an optional nested-application pattern for compliance folders.
+
+This is the file to customize first. The generic classifier in \file{classify.py} is intended to work out of the box and generally should not need editing unless your filename conventions are unusual.
+
+After changing classification rules, rebuild the index. Your \file{overrides.db} is not rewritten by that rebuild.
+
+\section{The Web Dashboard}
+
+The web UI is the recommended interface because it exposes the full workflow in one place.
+
+\subsection{Pipeline}
+
+The \app{Pipeline} is the main application-management view. It supports both a list representation and a drag-and-drop Kanban board grouped by status.
+
+A typical application card can surface:
+
+\begin{itemize}
+  \item company and role information,
+  \item how long the application has been sitting,
+  \item staleness / follow-up indicators,
+  \item attached documents,
+  \item status and manual overrides,
+  \item application dates, notes, and next actions.
+\end{itemize}
+
+Dropping a card into a different Kanban column updates the status immediately.
+
+\screenshot{images/pipeline-list.png}{The Pipeline in list view: status counts, filters, and the detail pane for the selected application.}
+
+\screenshot{images/pipeline-kanban.png}{The same Pipeline in Kanban view — drag a card between columns, or use each card's status dropdown.}
+
+\subsection{Needs Attention}
+
+\app{Needs Attention} is the triage queue. It identifies applications that have gone quiet and applications whose next-action date has arrived.
+
+The default staleness thresholds in the current implementation are:
+
+\begin{itemize}
+  \item applied or interviewing: 21+ days without an update,
+  \item drafted or unknown: 14+ days without an update.
+\end{itemize}
+
+From this view you can mark follow-up work, snooze an item for seven days, archive it, or perform supported bulk actions. Archive is intentionally non-destructive: it changes tracking state rather than deleting your files.
+
+\screenshot[0.85\textwidth]{images/needs-attention.png}{Needs Attention with an empty queue — the state you want to see most mornings.}
+
+\subsection{Search}
+
+Search covers indexed filename, company, role, and full-text search data exposed by the backend. Matching terms are highlighted in the results as you type.
+
+This is particularly useful when the folder tree is large and you remember a company, title, keyword, or document name but not its exact location.
+
+\subsection{Browse}
+
+Everything outside \file{Applications/} can be surfaced as configurable sections, such as credentials, network, resume library, leads, compliance, personal material, or your own categories.
+
+The classifier creates a stable section identifier from custom top-level folder names when no explicit mapping exists.
+
+\subsection{Insights}
+
+\app{Insights} turns the indexed application history into a small set of useful metrics, including:
+
+\begin{itemize}
+  \item response rate,
+  \item interview rate,
+  \item average time to response,
+  \item application velocity over time,
+  \item status distribution.
+\end{itemize}
+
+\begin{infobox}
+\textbf{Tip:} set a real \textbf{Date applied} on active applications. File modification time can change when documents are copied, synced, or reorganized, while Date applied preserves the meaning of the application timeline and improves the velocity analysis.
+\end{infobox}
+
+\subsection{Manage}
+
+\app{Manage} handles higher-level housekeeping:
+
+\begin{itemize}
+  \item merge companies that were split across multiple folder names,
+  \item undo a merge,
+  \item review archived applications,
+  \item restore archived items.
+\end{itemize}
+
+Company merges affect the application's logical view; they do not require you to rename the underlying files.
+
+\section{Working With Documents}
+
+\subsection{Upload}
+
+The web app allows documents to be dragged onto an application. New files are written into the application's folder and become visible after the index is updated.
+
+\subsection{Rename}
+
+Documents can be renamed in place through the web interface. This changes the real file on disk, not merely a label in the database.
+
+\subsection{Delete safely}
+
+Delete operations are designed around the operating system Trash rather than a permanent unlink. The current implementation also exposes an undo affordance before the trash move is committed.
+
+\begin{warningbox}
+\textbf{Still treat delete as a real filesystem operation.} The app's safety behavior is better than a hard delete, but the file you are working with is your actual document. Verify the target before confirming a destructive action.
+\end{warningbox}
+
+\subsection{Source files}
+
+\file{.tex} source files are indexed and searchable, but they are hidden from normal document lists by default. Enable \textbf{Show source files} when you want to work with LaTeX sources alongside their generated PDFs.
+
+\subsection{Inline previews}
+
+The web app can open supported PDFs in a side drawer and can preview DOCX content through the backend's document-preview path. Text-based sources are also surfaced where appropriate.
+
+\section{Command Palette and Keyboard Workflow}
+
+The web UI includes a command palette:
+
+\begin{center}
+\begin{tabularx}{0.82\textwidth}{@{}>{\bfseries}lX@{}}
+\toprule
+Shortcut & Action \\
+\midrule
+\cmd{Cmd+K} / \cmd{Ctrl+K} & Open the command palette \\
+\cmd{j} / \cmd{k} & Move focus in list views \\
+\cmd{Arrow keys} & Move through list items \\
+\cmd{Enter} & Open the first PDF inline \\
+\cmd{Esc} & Close the active drawer / view \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+The command palette also exposes view jumps, application search, and the rebuild action.
+
+\section{Multiple Trackers and Workspaces}
+
+A single running JobTracker instance can manage more than one tracker through its workspace switcher — click the \app{J} logo, top-left, to open it. Every tracker you have is listed there, with a checkmark on the active one; clicking a different row switches to it instantly. Switching does not start a second server or duplicate the running application — it repoints the one running instance at a different data folder and database pair.
+
+\screenshot[0.5\textwidth]{images/switcher-collapsed.png}{The tracker switcher. Each row has rename (pencil) and export (download) actions; every tracker but the first can also be deleted.}
+
+\subsection{Creating and importing trackers}
+
+\app{New tracker} creates a fresh, empty tracker as a sibling folder next to your original one. \app{Import tracker} brings in an existing folder of documents as a new tracker, two ways: drag a \file{.zip} onto the dropzone (or click to browse to one), or click \app{Choose a folder instead} to import directly from a folder picker. Both paths land the same way and apply the same filtering — the application's own \file{\_app/} directory is never carried into the new tracker, even if it happens to be present in what you're importing.
+
+\screenshot[0.42\textwidth]{images/new-import-panel.png}{The New tracker / Import tracker panel, with both zip and folder import options.}
+
+\subsection{Exporting and deleting a tracker}
+
+\app{Export} (the download-arrow icon on a tracker's row) zips up that tracker's data — \file{Applications/}, \file{Certifications/}, \file{References/}, and so on — and downloads it, always excluding \file{\_app/} itself. This is the supported way to back up a tracker or hand its data to a genuinely separate installation.
+
+\app{Delete} removes a tracker from the switcher \emph{and} sends its folder to the operating system Trash — recoverable there, not a hard, permanent delete. The very first tracker (the one \file{\_app/} is physically nested inside — see Section~2) is the one exception: it can't be deleted this way, since removing it would mean removing the application's own home. Rename it instead if you want to repurpose it.
+
+\begin{infobox}
+\textbf{Keep the distinction clear:} a workspace is a logical tracker inside the running application; a separate installation is a separate copy of the application code and its local databases, made by copying \file{\_app/} into another tracker root.
+\end{infobox}
+
+\section{Privacy and Local Data}
+
+JobTracker Hub is designed around local execution.
+
+\subsection{Network surface}
+
+The API is configured to bind to \file{127.0.0.1}/localhost. The web frontend talks to that local server, and CORS is restricted to localhost origins plus the \file{file://} origin used when opening the static frontend directly.
+
+This architecture means the repository itself does not require a hosted backend, login, or cloud account.
+
+\subsection{What is stored locally}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}lXX@{}}
+\toprule
+\textbf{File} & \textbf{Purpose} & \textbf{Lifecycle} \\
+\midrule
+\file{jobtracker.db} & Indexed filesystem/application data & Rebuilt from disk whenever you rebuild the index. \\
+\file{overrides.db} & Your manual tracking state & Durable; rebuilds deliberately preserve it. \\
+\file{workspaces.json} / workspace state & Multi-tracker configuration & Local application state. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+These files are gitignored in the repository because they can contain personal job-search data.
+
+\section{A Recommended Daily Workflow}
+
+The software becomes most useful when the filesystem and the tracking metadata have complementary jobs.
+
+\begin{enumerate}
+  \item \textbf{Keep documents organized naturally.} Put the resume, cover letter, job posting, interview notes, and confirmation material for an application under the same company/role area.
+  \item \textbf{Rebuild after structural changes.} If you add or move a large batch of files in Finder/Explorer, rebuild the index so the dashboard reflects the filesystem.
+  \item \textbf{Record the meaningful dates.} Set Date applied rather than relying on file modification dates.
+  \item \textbf{Use Needs Attention as the morning queue.} Handle due follow-ups and stale applications first.
+  \item \textbf{Keep source documents on disk.} Let JobTracker add structure around them instead of replacing your existing document-management habits.
+  \item \textbf{Archive instead of deleting.} Use archive for old applications you want out of the active workflow while retaining their history.
+\end{enumerate}
+
+\section{Troubleshooting}
+
+\subsection{The dashboard is empty}
+
+Confirm that:
+
+\begin{enumerate}
+  \item \file{\_app/} is nested exactly one level inside the tracker root.
+  \item The tracker root contains at least one real, non-ignored document.
+  \item You clicked \textbf{Build index} after starting the app.
+\end{enumerate}
+
+\subsection{A folder appears in the wrong section}
+
+Edit \file{\_app/classify_config.json}, adjust the section rule, and rebuild. Do not rewrite \file{classify.py} unless you are changing filename-level document-type heuristics.
+
+\subsection{My notes or status changed unexpectedly after a rebuild}
+
+A rebuild is not supposed to erase \file{overrides.db}. Check that the file still exists in the active tracker and that you have not created or switched to a different workspace.
+
+\subsection{The browser cannot reach the API}
+
+Verify that the terminal running Uvicorn is still active and that it is listening on port 8000. A minimal command is:
+
+\begin{codebox}
+\begin{lstlisting}[language=bash]
+uvicorn api:app --reload --port 8000
+\end{lstlisting}
+\end{codebox}
+
+Then refresh the frontend.
+
+\subsection{A document is missing}
+
+First check whether it is hidden because it is a source file such as \file{.tex}. Then rebuild the index. Also check whether the filename, folder, or extension matches one of the ignored patterns documented in \file{classify.py}.
+
+\section{Repository Map for Contributors}
+
+The current repository keeps the implementation intentionally small and readable:
+
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}lX@{}}
+\toprule
+\textbf{File / directory} & \textbf{Role} \\
+\midrule
+\file{\_app/api.py} & FastAPI backend and local file/API operations. \\
+\file{\_app/db.py} & Data access, effective status/company state, staleness, and Insights calculations. \\
+\file{\_app/build_index.py} & Filesystem parser and disposable index builder. \\
+\file{\_app/overrides_store.py} & Durable user-owned tracking overrides. \\
+\file{\_app/classify.py} & Filename and section heuristics. \\
+\file{\_app/classify_config.json} & User-editable folder-to-section rules. \\
+\file{\_app/frontend/index.html} & Single-file React-based web frontend, loaded from a CDN. \\
+\file{\_app/workspace.py} & Multiple-tracker/workspace bookkeeping. \\
+\file{\_app/labels.py} & Section and document-type display labels used by the frontend. \\
+\file{sample-tracker/} & Safe fake data for first-run exploration. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\section{Repository Safety Notes}
+
+JobTracker can manipulate real files, so a few conventions are intentionally strict:
+
+\begin{itemize}
+  \item Path resolution in file endpoints is constrained to the tracker root.
+  \item The indexer skips its own application directory and common generated artifacts.
+  \item Database files are gitignored and should not be committed as part of normal development.
+  \item The sample tracker uses fake organizations and placeholder content so you can test without exposing real applications.
+\end{itemize}
+
+\section{License}
+
+JobTracker Hub is distributed under the MIT License. See the repository's \file{LICENSE} file for the authoritative license text.
+
+\section*{Source and Design Notes}
+
+This guide was written against the repository snapshot supplied with the project on August 25, 2026. Feature descriptions are based on the repository README and the implementation in \file{\_app/}. The visual direction was adapted from Overleaf's \emph{Technical Document Template}, an example software-manual template published in the Overleaf template gallery.\footnote{Overleaf, \emph{Technical Document Template}, \url{https://www.overleaf.com/latex/templates/technical-document-template/mdgftpdfbvbs}.}
+
+The guide deliberately describes the behavior that the current code establishes rather than carrying forward features from an earlier draft. In particular, the application is a single FastAPI web app (Streamlit has been retired — see \textit{Revision 1.2} below) with multiple workspaces/trackers (with per-tracker export and Trash-based delete), Needs Attention triage, local document operations, configurable folder classification, and local SQLite state.
+
+\textit{Revision 1.1} adds screenshots of the Pipeline (list and Kanban), Needs Attention, and the tracker switcher, and rewrites Section~7 to match the switcher's current export and delete behavior.
+
+\textit{Revision 1.2} removes the Streamlit interface from this guide. The repository's \file{app.py}, \file{ui.py}, and \file{views\_*.py} were deleted; the two label dicts the web app actually depended on moved to a new, dependency-free \file{labels.py}. The web app was already the more capable interface (see Section~4) and never needed Streamlit to run — \file{api.py} serves \file{frontend/index.html} itself, so \textit{running it} is now a single command and a single address rather than a choice between two interfaces.
+
+\end{document}

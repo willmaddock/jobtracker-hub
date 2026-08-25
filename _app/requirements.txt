@@ -1,0 +1,6 @@
+fastapi>=0.115
+uvicorn>=0.30
+pydantic>=2.7
+python-multipart>=0.0.9
+Send2Trash>=1.8
+mammoth>=1.8  # .docx -> HTML, for inline preview only (never writes back to the .docx)

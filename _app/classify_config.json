@@ -1,0 +1,25 @@
+{
+  "_readme": "Edit this file to fit YOUR folder structure — it's the one file you're expected to customize. Nothing in here is code; rebuild the index after any change and your notes/status in overrides.db are untouched. See README.md > 'Customizing classification' for the full guide.",
+
+  "section_rules": [
+    { "pattern": "^applications$", "section": "applications" },
+    { "pattern": "^certifications?$", "section": "credentials" },
+    { "pattern": "^(degree|transcripts?)", "section": "credentials" },
+    { "pattern": "^references?$", "section": "network" },
+    { "pattern": "^(people|contacts)$", "section": "network" },
+    { "pattern": "^resume library", "section": "resume_library" },
+    { "pattern": "^(solicited|master) resume", "section": "resume_library" },
+    { "pattern": "^leads$", "section": "leads" },
+    { "pattern": "^case management$", "section": "compliance" }
+  ],
+
+  "nested_application_markers": [
+    {
+      "_comment": "DISABLED EXAMPLE. This recreates a pattern from the original author's setup: a state workforce-center folder whose 'Jobs Applied For/<Month>/<Company>/' subfolders should each be tracked as a real application, while everything else directly in that folder (case-management reports, workshop notices) stays grouped as one compliance item instead of being counted as a fake job application. Set enabled to true and change 'folder' to match your own government/compliance folder name if you have a similar setup (e.g. a state unemployment/workforce portal that requires proof of job-search activity).",
+      "enabled": false,
+      "folder": "Workforce Center Compliance",
+      "path_after_folder": ["Jobs Applied For"],
+      "role_label_template": "via {folder} ({date_segment})"
+    }
+  ]
+}
