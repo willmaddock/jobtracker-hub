@@ -135,7 +135,7 @@ License & MIT (see repository \file{LICENSE}).
 \end{tabularx}
 \vfill
 \textbf{Repository:} JobTracker Hub — this guide lives in \file{docs/} alongside the code it documents.\par
-\textbf{Guide version:} 1.2 \quad | \quad \textbf{Updated:} August 25, 2026\par
+\textbf{Guide version:} 1.5 \quad | \quad \textbf{Updated:} August 26, 2026\par
 \vspace{0.6cm}
 {\small\color{muted} Layout direction informed by Overleaf's \emph{Technical Document Template}, adapted for JobTracker Hub.}
 \end{titlepage}
@@ -162,7 +162,7 @@ The repository includes a fake \file{sample-tracker/} so you can verify the inst
 
 \begin{enumerate}
   \item Copy \file{sample-tracker/} to a new folder, for example \file{my-tracker/}.
-  \item Copy the repository's \file{\_app/} directory into \file{my-tracker/}.
+  \item Copy the repository's \file{_app/} directory into \file{my-tracker/}.
   \item Create a virtual environment and install the dependencies.
   \item Start the recommended web application.
   \item Open \url{http://127.0.0.1:8000} and choose \textbf{Build index} the first time.
@@ -182,6 +182,43 @@ uvicorn api:app --reload --port 8000
 
 The frontend's requests are relative to that origin, so open the app at \url{http://127.0.0.1:8000} rather than opening \file{frontend/index.html} directly as a file — a bare file won't be able to reach the API.
 
+\subsection{Installing the macOS desktop app}
+
+If you were given a \file{JobTracker Hub.dmg} instead of the repository, you don't need Python, a virtual environment, or a terminal at all — the desktop build packages the backend and frontend together into a single double-clickable app.
+
+\begin{enumerate}
+  \item Double-click \file{JobTracker Hub.dmg} to mount it. A window opens showing the \app{JobTracker Hub} icon and an \app{Applications} shortcut, connected by an arrow.
+  \item Drag the \app{JobTracker Hub} icon onto the \app{Applications} shortcut to install it.
+  \item Eject the mounted disk image (the \app{JobTracker Hub} entry under \textbf{Locations} in Finder's sidebar), then open the app from your \file{Applications} folder as usual.
+\end{enumerate}
+
+\screenshot[0.62\textwidth]{images/dmg-install-window.png}{The installer window: drag the app icon onto the Applications shortcut to install. Two optional shortcuts sit below it -- \app{Learn More} and \app{User Guide}.}
+
+Below the main drag-and-drop row, the same window has two optional shortcuts that don't affect the install itself:
+
+\begin{itemize}
+  \item \app{Learn More} opens the project's portfolio page in your browser -- it's an Internet shortcut, not part of the app.
+  \item \app{User Guide} is this document. Double-click it to open the PDF directly from the install window, before the app is even copied to \file{Applications}.
+\end{itemize}
+
+\begin{infobox}
+\textbf{First launch.} The very first time you open the app, it asks you to choose a folder — this becomes your tracker root, exactly like the \file{my-tracker/} folder in the command-line quick start above. Pick an empty folder for a fresh tracker, or an existing one if you're migrating from a manual install. The app remembers this choice and opens straight to your dashboard on every future launch.
+\end{infobox}
+
+\begin{warningbox}
+\textbf{"App is damaged" or an unidentified-developer warning.} This is normal for an app downloaded outside the App Store and not notarized by Apple. Right-click (or Control-click) the app in \file{Applications}, choose \textbf{Open}, then confirm in the dialog that appears. You only need to do this once.
+\end{warningbox}
+
+Unlike the command-line install, the desktop app writes its data to a per-user Application Support folder rather than next to the code, since the installed \file{.app} bundle itself is read-only:
+
+\begin{codebox}
+\begin{lstlisting}
+~/Library/Application Support/JobTracker Hub
+\end{lstlisting}
+\end{codebox}
+
+See Section~\ref{sec:troubleshooting} if the app doesn't open, or opens to a blank window.
+
 \subsection{Requirements}
 
 \begin{itemize}
@@ -198,7 +235,7 @@ JobTracker runs as a single FastAPI process, \cmd{uvicorn api:app --port 8000}, 
 
 \subsection{The recommended layout}
 
-The application expects \file{\_app/} to live directly inside the folder it should index:
+The application expects \file{_app/} to live directly inside the folder it should index:
 
 \begin{codebox}
 \begin{lstlisting}
@@ -221,11 +258,11 @@ MyTracker/
 \end{lstlisting}
 \end{codebox}
 
-The tracker root is determined automatically: the application uses the parent directory of \file{\_app/}. There is normally no path you need to enter into a settings screen.
+The tracker root is determined automatically: the application uses the parent directory of \file{_app/}. There is normally no path you need to enter into a settings screen.
 
 \subsection{What the indexer ignores}
 
-The filesystem walker deliberately skips the application's own \file{\_app/} directory, hidden files and folders, common virtual environments, dependency folders, archives, and database files. This prevents the tracker from turning its own implementation or backups into job documents.
+The filesystem walker deliberately skips the application's own \file{_app/} directory, hidden files and folders, common virtual environments, dependency folders, archives, and database files. This prevents the tracker from turning its own implementation or backups into job documents.
 
 \subsection{What counts as an application}
 
@@ -265,7 +302,7 @@ Typical filename signals include:
 
 \subsection{Customize classification with one file}
 
-The primary configuration file is \file{\_app/classify_config.json}. It contains section rules and an optional nested-application pattern for compliance folders.
+The primary configuration file is \file{_app/classify_config.json}. It contains section rules and an optional nested-application pattern for compliance folders.
 
 This is the file to customize first. The generic classifier in \file{classify.py} is intended to work out of the box and generally should not need editing unless your filename conventions are unusual.
 
@@ -406,18 +443,18 @@ A single running JobTracker instance can manage more than one tracker through it
 
 \subsection{Creating and importing trackers}
 
-\app{New tracker} creates a fresh, empty tracker as a sibling folder next to your original one. \app{Import tracker} brings in an existing folder of documents as a new tracker, two ways: drag a \file{.zip} onto the dropzone (or click to browse to one), or click \app{Choose a folder instead} to import directly from a folder picker. Both paths land the same way and apply the same filtering — the application's own \file{\_app/} directory is never carried into the new tracker, even if it happens to be present in what you're importing.
+\app{New tracker} creates a fresh, empty tracker as a sibling folder next to your original one. \app{Import tracker} brings in an existing folder of documents as a new tracker, two ways: drag a \file{.zip} onto the dropzone (or click to browse to one), or click \app{Choose a folder instead} to import directly from a folder picker. Both paths land the same way and apply the same filtering — the application's own \file{_app/} directory is never carried into the new tracker, even if it happens to be present in what you're importing.
 
 \screenshot[0.42\textwidth]{images/new-import-panel.png}{The New tracker / Import tracker panel, with both zip and folder import options.}
 
 \subsection{Exporting and deleting a tracker}
 
-\app{Export} (the download-arrow icon on a tracker's row) zips up that tracker's data — \file{Applications/}, \file{Certifications/}, \file{References/}, and so on — and downloads it, always excluding \file{\_app/} itself. This is the supported way to back up a tracker or hand its data to a genuinely separate installation.
+\app{Export} (the download-arrow icon on a tracker's row) zips up that tracker's data — \file{Applications/}, \file{Certifications/}, \file{References/}, and so on — and downloads it, always excluding \file{_app/} itself. This is the supported way to back up a tracker or hand its data to a genuinely separate installation.
 
-\app{Delete} removes a tracker from the switcher \emph{and} sends its folder to the operating system Trash — recoverable there, not a hard, permanent delete. The very first tracker (the one \file{\_app/} is physically nested inside — see Section~2) is the one exception: it can't be deleted this way, since removing it would mean removing the application's own home. Rename it instead if you want to repurpose it.
+\app{Delete} removes a tracker from the switcher \emph{and} sends its folder to the operating system Trash — recoverable there, not a hard, permanent delete. The very first tracker (the one \file{_app/} is physically nested inside — see Section~2) is the one exception: it can't be deleted this way, since removing it would mean removing the application's own home. Rename it instead if you want to repurpose it.
 
 \begin{infobox}
-\textbf{Keep the distinction clear:} a workspace is a logical tracker inside the running application; a separate installation is a separate copy of the application code and its local databases, made by copying \file{\_app/} into another tracker root.
+\textbf{Keep the distinction clear:} a workspace is a logical tracker inside the running application; a separate installation is a separate copy of the application code and its local databases, made by copying \file{_app/} into another tracker root.
 \end{infobox}
 
 \section{Privacy and Local Data}
@@ -460,20 +497,31 @@ The software becomes most useful when the filesystem and the tracking metadata h
 \end{enumerate}
 
 \section{Troubleshooting}
+\label{sec:troubleshooting}
+
+\subsection{The desktop app won't open, or quits immediately}
+
+The desktop build keeps a log of its startup backend and, if it can't start, shows a dialog explaining why instead of quitting silently.
+
+\begin{enumerate}
+  \item If a dialog appears, read it — it names the problem and points to the log file directly.
+  \item If nothing appears at all, open \app{JobTracker Hub}, click the \app{J} logo, choose \app{Settings}, and expand \app{Diagnostics}. This shows the port, state directory, and log file path for the current session, plus a \app{Reveal log file} button and a \app{Copy diagnostic report} button for sharing what's wrong.
+  \item Relaunch the app once. A single failed launch is occasionally a slow-machine timing issue; a repeated failure is worth checking the log for.
+\end{enumerate}
 
 \subsection{The dashboard is empty}
 
 Confirm that:
 
 \begin{enumerate}
-  \item \file{\_app/} is nested exactly one level inside the tracker root.
+  \item \file{_app/} is nested exactly one level inside the tracker root.
   \item The tracker root contains at least one real, non-ignored document.
   \item You clicked \textbf{Build index} after starting the app.
 \end{enumerate}
 
 \subsection{A folder appears in the wrong section}
 
-Edit \file{\_app/classify_config.json}, adjust the section rule, and rebuild. Do not rewrite \file{classify.py} unless you are changing filename-level document-type heuristics.
+Edit \file{_app/classify_config.json}, adjust the section rule, and rebuild. Do not rewrite \file{classify.py} unless you are changing filename-level document-type heuristics.
 
 \subsection{My notes or status changed unexpectedly after a rebuild}
 
@@ -504,15 +552,15 @@ The current repository keeps the implementation intentionally small and readable
 \toprule
 \textbf{File / directory} & \textbf{Role} \\
 \midrule
-\file{\_app/api.py} & FastAPI backend and local file/API operations. \\
-\file{\_app/db.py} & Data access, effective status/company state, staleness, and Insights calculations. \\
-\file{\_app/build_index.py} & Filesystem parser and disposable index builder. \\
-\file{\_app/overrides_store.py} & Durable user-owned tracking overrides. \\
-\file{\_app/classify.py} & Filename and section heuristics. \\
-\file{\_app/classify_config.json} & User-editable folder-to-section rules. \\
-\file{\_app/frontend/index.html} & Single-file React-based web frontend, loaded from a CDN. \\
-\file{\_app/workspace.py} & Multiple-tracker/workspace bookkeeping. \\
-\file{\_app/labels.py} & Section and document-type display labels used by the frontend. \\
+\file{_app/api.py} & FastAPI backend and local file/API operations. \\
+\file{_app/db.py} & Data access, effective status/company state, staleness, and Insights calculations. \\
+\file{_app/build_index.py} & Filesystem parser and disposable index builder. \\
+\file{_app/overrides_store.py} & Durable user-owned tracking overrides. \\
+\file{_app/classify.py} & Filename and section heuristics. \\
+\file{_app/classify_config.json} & User-editable folder-to-section rules. \\
+\file{_app/frontend/index.html} & Single-file React-based web frontend, loaded from a CDN. \\
+\file{_app/workspace.py} & Multiple-tracker/workspace bookkeeping. \\
+\file{_app/labels.py} & Section and document-type display labels used by the frontend. \\
 \file{sample-tracker/} & Safe fake data for first-run exploration. \\
 \bottomrule
 \end{tabularx}
@@ -535,12 +583,18 @@ JobTracker Hub is distributed under the MIT License. See the repository's \file{
 
 \section*{Source and Design Notes}
 
-This guide was written against the repository snapshot supplied with the project on August 25, 2026. Feature descriptions are based on the repository README and the implementation in \file{\_app/}. The visual direction was adapted from Overleaf's \emph{Technical Document Template}, an example software-manual template published in the Overleaf template gallery.\footnote{Overleaf, \emph{Technical Document Template}, \url{https://www.overleaf.com/latex/templates/technical-document-template/mdgftpdfbvbs}.}
+This guide was written against the repository snapshot supplied with the project on August 25, 2026. Feature descriptions are based on the repository README and the implementation in \file{_app/}. The visual direction was adapted from Overleaf's \emph{Technical Document Template}, an example software-manual template published in the Overleaf template gallery.\footnote{Overleaf, \emph{Technical Document Template}, \url{https://www.overleaf.com/latex/templates/technical-document-template/mdgftpdfbvbs}.}
 
 The guide deliberately describes the behavior that the current code establishes rather than carrying forward features from an earlier draft. In particular, the application is a single FastAPI web app (Streamlit has been retired — see \textit{Revision 1.2} below) with multiple workspaces/trackers (with per-tracker export and Trash-based delete), Needs Attention triage, local document operations, configurable folder classification, and local SQLite state.
 
 \textit{Revision 1.1} adds screenshots of the Pipeline (list and Kanban), Needs Attention, and the tracker switcher, and rewrites Section~7 to match the switcher's current export and delete behavior.
 
-\textit{Revision 1.2} removes the Streamlit interface from this guide. The repository's \file{app.py}, \file{ui.py}, and \file{views\_*.py} were deleted; the two label dicts the web app actually depended on moved to a new, dependency-free \file{labels.py}. The web app was already the more capable interface (see Section~4) and never needed Streamlit to run — \file{api.py} serves \file{frontend/index.html} itself, so \textit{running it} is now a single command and a single address rather than a choice between two interfaces.
+\textit{Revision 1.2} removes the Streamlit interface from this guide. The repository's \file{app.py}, \file{ui.py}, and \file{views_*.py} were deleted; the two label dicts the web app actually depended on moved to a new, dependency-free \file{labels.py}. The web app was already the more capable interface (see Section~4) and never needed Streamlit to run — \file{api.py} serves \file{frontend/index.html} itself, so \textit{running it} is now a single command and a single address rather than a choice between two interfaces.
+
+\textit{Revision 1.3} adds Section~3.2, \textbf{Installing the macOS desktop app}, covering the \file{.dmg} drag-to-Applications install flow and first-launch folder picker, and adds a Troubleshooting entry for the desktop app's startup log and the new Settings~\textgreater~Diagnostics panel.
+
+\textit{Revision 1.4} documents the \app{Learn More} and \app{User Guide} shortcuts added to the installer window below the main drag-and-drop row, and redraws the installer-window figure with higher-contrast labels.
+
+\textit{Revision 1.5} corrects the installer-window figure and \file{package-dmg.sh} icon positions: the \app{Optional extras} row was drawn 40px lower than where Finder actually places those icons, causing the row-2 icons to overlap the caption above them on a real build. Verified against a screenshot of an actual install.
 
 \end{document}

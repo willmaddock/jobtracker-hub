@@ -42,3 +42,6 @@ __pycache__/
 Thumbs.db
 .vscode/
 .idea/
+
+dist/
+build/

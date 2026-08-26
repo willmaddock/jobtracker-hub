@@ -1,5 +1,9 @@
 # JobTracker Hub
 
+[![Download for macOS](https://img.shields.io/badge/Download-macOS%20.dmg-0d1117?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/willmaddock/jobtracker-hub/releases/latest)
+[![License: MIT](https://img.shields.io/badge/License-MIT-3fb950?style=for-the-badge)](LICENSE)
+[![Platform](https://img.shields.io/badge/Platform-macOS-lightgrey?style=for-the-badge&logo=apple&logoColor=white)](#-download-for-macos)
+
 **v1.0.0**
 
 A local, private dashboard over a folder of job-application documents you
@@ -7,9 +11,25 @@ already keep on disk — a real pipeline view (list + drag-and-drop Kanban),
 follow-up tracking, notes, search, and light document management (upload,
 rename, delete) — with everything staying on your machine.
 
+![JobTracker Hub demo — installing from the DMG and touring the Pipeline, Kanban, Needs Attention, and Search Hub views](docs/media/jobtracker-hub-demo.gif)
+
 No account, no cloud, no server other than the one you run yourself on
 `localhost`. It reads whatever folder structure you already use for job
 hunting and turns it into a dashboard; it never uploads anything anywhere.
+
+## 📦 Download for macOS
+
+The easiest way to run JobTracker Hub — no Python, no Terminal, no setup.
+
+**[⬇ Download JobTracker Hub.dmg](https://github.com/willmaddock/jobtracker-hub/releases/latest)**
+
+Open the `.dmg`, drag **JobTracker Hub** into **Applications**, then launch
+it like any other Mac app. First launch will ask you to pick (or create)
+the folder you want it to track — everything after that happens in the
+window shown above.
+
+> Prefer to run from source, or want to poke at the code? Skip to
+> [Quickstart](#quickstart-try-it-with-sample-data-first) below.
 
 **Full user guide:** [`docs/JobTracker_User_Guide.pdf`](docs/JobTracker_User_Guide.pdf)
 — a longer walkthrough of every screen and workflow, if you want more than
