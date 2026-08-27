@@ -118,11 +118,12 @@
   .rail-collapse-btn{color:var(--text-mute);}
 
   /* ---------- workspace switcher popover ---------- */
-  .workspace-pop{position:absolute;top:0;left:52px;z-index:70;width:240px;
+  .workspace-pop{position:absolute;top:0;left:52px;z-index:70;width:280px;
     background:var(--panel-glass);-webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px);
     border:1px solid var(--border);border-radius:12px;padding:8px;box-shadow:0 12px 40px #0007;}
   .workspace-pop-title{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--text-soft);
-    padding:6px 8px 8px;}
+    padding:6px 8px 2px;}
+  .workspace-pop-hint{font-size:11.5px;line-height:1.4;color:var(--text-soft);padding:0 8px 8px;}
   .workspace-pop-err{font-size:12px;color:var(--red-text);padding:4px 8px 8px;}
   .workspace-pop-loading{font-size:12px;color:var(--text-soft);padding:4px 8px;}
   .workspace-row{display:flex;align-items:center;gap:4px;border-radius:8px;}
@@ -520,6 +521,23 @@ async function apiDelete(path){
   return res.json();
 }
 
+// Opens an external URL (job boards, career pages, AI assistants, etc.)
+// in the user's actual default browser. We ask the backend to shell out
+// to the OS opener rather than calling window.open() directly, because
+// window.open() from inside this app's embedded webview shell doesn't
+// reliably spawn a real browser tab — it's not a full browser, so the
+// popup often just silently goes nowhere. Falls back to window.open()
+// only if the backend call itself fails (e.g. dev/browser preview mode
+// where there's no local API to hit).
+async function openExternalUrl(url){
+  if (!url) return;
+  try {
+    await apiPost("/api/open-url", { url });
+  } catch (e) {
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
+}
+
 function useToast(){
   const [msg, setMsg] = useState(null);
   const fire = useCallback((m) => {
@@ -873,6 +891,10 @@ function WorkspacePopover({onClose, anchorRef}){
   return (
     <div ref={popRef} className="workspace-pop" role="menu">
       <div className="workspace-pop-title">Trackers</div>
+      <div className="workspace-pop-hint">
+        Each tracker points at one folder on disk. Anything you add or
+        import for a tracker lives inside that tracker's folder.
+      </div>
       {err && <div className="workspace-pop-err">{err}</div>}
       {!data && !err && <div className="workspace-pop-loading">Loading…</div>}
       {data && data.workspaces.map(w => (
@@ -1851,12 +1873,12 @@ function HubLinkCard({link, accent, override, onSaveOverride, location}){
           <div className="hub-card-name">{effectiveTitle}</div>
           <div className="hub-card-desc">{link.desc}</div>
           {effectiveUrl ? (
-            <button className="btn small hub-open" onClick={() => window.open(effectiveUrl, "_blank", "noopener,noreferrer")}>
+            <button className="btn small hub-open" onClick={() => openExternalUrl(effectiveUrl)}>
               Open {"\u2197"}
             </button>
           ) : (
             <button className="btn small hub-open" title="No link saved yet — this searches for it instead"
-              onClick={() => window.open(searchUrl(), "_blank", "noopener,noreferrer")}>
+              onClick={() => openExternalUrl(searchUrl())}>
               Search {"\u2197"}
             </button>
           )}
@@ -1914,7 +1936,7 @@ function CustomHubCard({card, accent, onSave, onDelete}){
           <div className="hub-card-name">{card.title}</div>
           {card.note && <div className="hub-card-desc">{card.note}</div>}
           {card.url && (
-            <button className="btn small hub-open" onClick={() => window.open(card.url, "_blank", "noopener,noreferrer")}>
+            <button className="btn small hub-open" onClick={() => openExternalUrl(card.url)}>
               Open {"\u2197"}
             </button>
           )}
@@ -2881,6 +2903,80 @@ function NewCategoryModal({onClose, onCreate}){
 }
 
 /* =========================== SETTINGS MODAL =========================== */
+function DiagnosticsSection(){
+  const [open, setOpen] = useState(false);
+  const [data, setData] = useState(null);
+  const [error, setError] = useState(null);
+  const [revealMsg, setRevealMsg] = useState(null);
+  const [copyMsg, setCopyMsg] = useState(null);
+
+  const toggle = async () => {
+    const next = !open;
+    setOpen(next);
+    if (next && !data && !error) {
+      try { setData(await apiGet("/api/diagnostics")); }
+      catch (e) { setError(String(e.message || e)); }
+    }
+  };
+
+  const revealLog = async () => {
+    setRevealMsg(null);
+    try { await apiPost("/api/diagnostics/reveal-log"); setRevealMsg("Opened."); }
+    catch (e) { setRevealMsg(String(e.message || e)); }
+  };
+
+  const copyReport = async () => {
+    const report = JSON.stringify(data, null, 2);
+    try { await navigator.clipboard.writeText(report); setCopyMsg("Copied."); }
+    catch (e) { setCopyMsg("Couldn't copy — select and copy manually."); }
+  };
+
+  return (
+    <>
+      <div className="section-label" style={{marginTop:16, cursor:"pointer", display:"flex", alignItems:"center", gap:6}} onClick={toggle}>
+        <span style={{fontSize:9, transform: open ? "rotate(90deg)" : "none", display:"inline-block", transition:"transform .12s"}}>{"\u25B6"}</span>
+        Diagnostics
+      </div>
+      {open && (
+        <div>
+          {error && <div className="warning-banner" style={{marginTop:6}}>{error}</div>}
+          {!error && !data && <p style={{color:"var(--text-mute)", fontSize:11.5}}>Loading…</p>}
+          {data && (
+            <>
+              <p style={{color:"var(--text-mute)", fontSize:11.5, lineHeight:1.6, fontFamily:"monospace"}}>
+                Mode: {data.packaged ? "packaged" : "dev"}<br/>
+                Port: {data.port || "n/a"}<br/>
+                Platform: {data.platform}<br/>
+                Python: {data.python_version}<br/>
+                {data.state_dir && <>State dir: <code>{data.state_dir}</code><br/></>}
+                {data.log_path && <>Log file: <code>{data.log_path}</code> {data.log_exists ? "" : "(not written yet)"}<br/></>}
+                {data.workspace ? (
+                  <>Workspace: {data.workspace.name} {"\u2022"} {data.workspace.index_built ? "index built" : "index not built"}</>
+                ) : (
+                  <>Workspace: none linked yet</>
+                )}
+              </p>
+              <div style={{display:"flex", gap:8, marginTop:8, flexWrap:"wrap", alignItems:"center"}}>
+                <button className="btn small" onClick={revealLog} disabled={!data.state_dir}>
+                  Reveal log file
+                </button>
+                <button className="btn small" onClick={copyReport}>Copy diagnostic report</button>
+                {revealMsg && <span style={{color:"var(--text-mute)", fontSize:11}}>{revealMsg}</span>}
+                {copyMsg && <span style={{color:"var(--text-mute)", fontSize:11}}>{copyMsg}</span>}
+              </div>
+              {!data.state_dir && (
+                <p style={{color:"var(--text-mute)", fontSize:11, marginTop:6}}>
+                  Running in dev mode — logs go straight to this terminal, there's no separate log file.
+                </p>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
 function SettingsModal({onClose, onRebuild, status, themePref, themeApplied, setTheme}){
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
@@ -2925,6 +3021,9 @@ function SettingsModal({onClose, onRebuild, status, themePref, themeApplied, set
           </p>
         )}
         {error && <div className="warning-banner" style={{marginTop:12}}>{error}</div>}
+
+        <DiagnosticsSection />
+
         <div className="modal-foot">
           <button className="btn" onClick={onClose}>Close</button>
           <button className="btn primary" disabled={busy} onClick={doRebuild}>{busy ? "Rebuilding…" : "\u{1F504} Rebuild index"}</button>

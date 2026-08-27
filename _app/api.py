@@ -258,6 +258,10 @@ class OpenFileRequest(BaseModel):
     relpath: str
 
 
+class OpenUrlRequest(BaseModel):
+    url: str
+
+
 class MergeRequest(BaseModel):
     names: list[str]
     canonical: str
@@ -288,20 +292,114 @@ class BulkDeleteApplicationsRequest(BaseModel):
 # --- status / config -------------------------------------------------------
 @app.get("/api/status")
 def status():
+    # Only reachable in packaged mode before the first tracker is
+    # linked/created (dev mode always has "default"). Return a clear
+    # "no workspace yet" shape instead of letting resolve_active()'s
+    # WorkspaceError turn into an unhandled 500 — the frontend/first-run
+    # picker checks /api/workspaces for this state anyway, but any client
+    # hitting /api/status directly during that window should still get a
+    # sane, documented response rather than a crash.
+    try:
+        root, db_path, _ov_path, entry = _active()
+    except ws.WorkspaceError:
+        return {"workspace": None, "index_built": False, "doc_count": 0}
     return {
-        "root": str(current_root()),
-        "index_built": current_db_path().exists(),
+        "root": str(root),
+        "index_built": db_path.exists(),
         "doc_count": (
-            db.get_jt_conn(current_db_path()).execute("SELECT COUNT(*) FROM documents").fetchone()[0]
-            if current_db_path().exists() else 0
+            db.get_jt_conn(db_path).execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+            if db_path.exists() else 0
         ),
         "status_order": db.STATUS_ORDER,
         "status_colors": db.STATUS_COLORS,
         "status_icons": db.STATUS_ICONS,
         "section_labels": labels.SECTION_LABELS,
         "doc_type_labels": labels.DOC_TYPE_LABELS,
-        "workspace": {"id": _active()[3]["id"], "name": _active()[3]["name"]},
+        "workspace": {"id": entry["id"], "name": entry["name"]},
     }
+
+
+# --- diagnostics --------------------------------------------------------
+# Everything a user (or whoever's helping them) needs to troubleshoot a
+# stuck/misbehaving app, surfaced in Settings > Diagnostics. Deliberately
+# separate from /api/status: this can be called and stay useful even if
+# resolve_active() is failing, since half the point is diagnosing exactly
+# that kind of thing.
+@app.get("/api/diagnostics")
+def diagnostics():
+    import os
+    import platform as platform_mod
+    import sys as sys_mod
+
+    state_dir = os.environ.get("JOBTRACKER_STATE_DIR")
+    log_path = Path(state_dir) / "backend.log" if state_dir else None
+
+    try:
+        root, db_path, ov_path, entry = _active()
+        workspace = {
+            "name": entry["name"],
+            "root": str(root),
+            "index_built": db_path.exists(),
+            "index_db": str(db_path),
+            "overrides_db": str(ov_path),
+        }
+    except ws.WorkspaceError:
+        workspace = None
+
+    return {
+        "port": os.environ.get("JOBTRACKER_PORT"),
+        "packaged": os.environ.get("JOBTRACKER_PACKAGED") == "1",
+        "state_dir": state_dir,
+        "log_path": str(log_path) if log_path else None,
+        "log_exists": log_path.exists() if log_path else False,
+        "platform": platform_mod.platform(),
+        "python_version": platform_mod.python_version(),
+        "executable_frozen": getattr(sys_mod, "frozen", False),
+        "workspace": workspace,
+    }
+
+
+@app.post("/api/diagnostics/reveal-log")
+def reveal_log():
+    """Same cross-platform 'shell out to the OS's default opener' approach
+    as /api/open, but for the backend log file specifically -- reveals it
+    in Finder/Explorer/file manager rather than opening it in an editor,
+    since a user forwarding a bug report usually wants to attach/drag the
+    file, not read it."""
+    import os
+    state_dir = os.environ.get("JOBTRACKER_STATE_DIR")
+    if not state_dir:
+        raise HTTPException(status_code=404, detail="No state directory configured (not running packaged).")
+    log_path = Path(state_dir) / "backend.log"
+    if not log_path.exists():
+        raise HTTPException(status_code=404, detail="No log file yet -- nothing has been written this session.")
+
+    import platform
+    import subprocess
+
+    system = platform.system()
+    try:
+        if system == "Darwin":
+            subprocess.run(["open", "-R", str(log_path)], check=False)
+        elif system == "Windows":
+            subprocess.run(["explorer", "/select,", str(log_path)], check=False)
+        else:
+            subprocess.run(["xdg-open", str(log_path.parent)], check=False)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Could not reveal log file: {e}")
+    return {"ok": True}
+
+
+# --- health ------------------------------------------------------------------
+# Deliberately independent of workspace/db state — used by
+# desktop/launcher.py to poll while waiting for the bundled backend
+# subprocess to come up. Must return 200 even before any tracker has been
+# linked (packaged mode's pre-first-run state), so the launcher can tell
+# "process is alive" apart from "a tracker exists" (see /api/workspaces
+# for the latter).
+@app.get("/api/health")
+def health():
+    return {"ok": True}
 
 
 # --- workspaces (multiple isolated trackers) --------------------------------
@@ -317,6 +415,11 @@ class RenameWorkspaceRequest(BaseModel):
     name: str
 
 
+class LinkWorkspaceRequest(BaseModel):
+    name: str
+    path: str
+
+
 @app.get("/api/workspaces")
 def list_workspaces():
     return ws.list_workspaces()
@@ -330,6 +433,25 @@ def create_and_switch_workspace(req: CreateWorkspaceRequest):
     trackers, including the original, are completely untouched."""
     try:
         entry = ws.create_workspace(req.name)
+        ws.set_active(entry["id"])
+    except ws.WorkspaceError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    build(current_root(), current_db_path())
+    return {"ok": True, "workspace": {"id": entry["id"], "name": entry["name"]}}
+
+
+@app.post("/api/workspaces/link")
+def link_workspace(req: LinkWorkspaceRequest):
+    """Registers an EXISTING folder as a tracker in place (nothing
+    copied) and switches to it immediately. This is what
+    desktop/launcher.py's native folder-picker flow calls — see
+    workspace.link_workspace for why linking, not copying, is the right
+    behavior for a packaged app pointed at a user's own existing
+    job-search folder. Also reachable from a browser dev workflow if a
+    "Link existing folder" action is ever added to the web UI; nothing
+    about this endpoint is packaged-mode-only."""
+    try:
+        entry = ws.link_workspace(req.name, req.path)
         ws.set_active(entry["id"])
     except ws.WorkspaceError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -1474,6 +1596,37 @@ def open_file(req: OpenFileRequest):
     return {"ok": True, "opened": full_path.name}
 
 
+# --- opening external links in the system's default browser -------------
+# Search Hub cards call this instead of the browser's own window.open(),
+# because window.open() from inside the pywebview/WKWebView shell this app
+# runs in does not reliably spawn the user's actual default browser (it's
+# an embedded webview, not a full browser, so popups it can't handle are
+# often just silently dropped). Shelling out to the OS opener sidesteps
+# that entirely — same approach as /api/open above, just for URLs instead
+# of local files.
+@app.post("/api/open-url")
+def open_url(req: OpenUrlRequest):
+    url = (req.url or "").strip()
+    if not (url.startswith("http://") or url.startswith("https://")):
+        raise HTTPException(status_code=400, detail="Only http:// and https:// URLs can be opened.")
+
+    import platform
+    import subprocess
+
+    system = platform.system()
+    try:
+        if system == "Darwin":
+            subprocess.run(["open", url], check=False)
+        elif system == "Windows":
+            import os
+            os.startfile(url)  # type: ignore[attr-defined]
+        else:
+            subprocess.run(["xdg-open", url], check=False)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Couldn't open {url}: {exc}") from exc
+    return {"ok": True}
+
+
 @app.get("/api/file")
 def serve_file(relpath: str):
     """Streams a file's raw bytes so the frontend can embed it inline
@@ -1558,8 +1711,17 @@ app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="fronte
 
 
 if __name__ == "__main__":
+    import os
+
     import uvicorn
+
+    # Configurable via JOBTRACKER_PORT for desktop/launcher.py, which picks
+    # a free port at runtime (a fixed port would collide if the app is ever
+    # opened twice, or with anything else already using 8000). Defaults to
+    # the original fixed 8000 so the existing dev workflow — `python api.py`
+    # or `uvicorn api:app --reload --port 8000` — is completely unaffected.
+    port = int(os.environ.get("JOBTRACKER_PORT", "8000"))
 
     # 127.0.0.1 only — this is a single-user local tool, never meant to be
     # exposed on your network.
-    uvicorn.run("api:app", host="127.0.0.1", port=8000, reload=False)
+    uvicorn.run("api:app", host="127.0.0.1", port=port, reload=False)
