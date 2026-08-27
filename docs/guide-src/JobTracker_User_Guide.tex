@@ -135,7 +135,7 @@ License & MIT (see repository \file{LICENSE}).
 \end{tabularx}
 \vfill
 \textbf{Repository:} JobTracker Hub — this guide lives in \file{docs/} alongside the code it documents.\par
-\textbf{Guide version:} 1.5 \quad | \quad \textbf{Updated:} August 26, 2026\par
+\textbf{Guide version:} 1.6 \quad | \quad \textbf{Updated:} August 26, 2026\par
 \vspace{0.6cm}
 {\small\color{muted} Layout direction informed by Overleaf's \emph{Technical Document Template}, adapted for JobTracker Hub.}
 \end{titlepage}
@@ -206,7 +206,15 @@ Below the main drag-and-drop row, the same window has two optional shortcuts tha
 \end{infobox}
 
 \begin{warningbox}
-\textbf{"App is damaged" or an unidentified-developer warning.} This is normal for an app downloaded outside the App Store and not notarized by Apple. Right-click (or Control-click) the app in \file{Applications}, choose \textbf{Open}, then confirm in the dialog that appears. You only need to do this once.
+\textbf{"Not Opened" warning on first launch.} This is normal for an app downloaded outside the App Store and not notarized by Apple — it is not a sign anything is actually wrong. The very first time you open \app{JobTracker Hub}, macOS shows a dialog titled \textbf{"JobTracker Hub.app" Not Opened} with two buttons: \textbf{Move to Trash} and \textbf{Done}. There is no \textbf{Open Anyway} button in this first dialog, so:
+
+\begin{enumerate}
+  \item Click \textbf{Done} — \emph{not} \textbf{Move to Trash}.
+  \item In \file{Applications}, right-click (or Control-click) \app{JobTracker Hub} and choose \textbf{Open} from the menu. A second dialog appears; this one has an \textbf{Open} button — click it.
+  \item If right-clicking doesn't offer \textbf{Open}, go to \textbf{System Settings \textgreater{} Privacy \& Security}, scroll to the \textbf{Security} section, and click \textbf{Open Anyway} next to the message about \app{JobTracker Hub} being blocked.
+\end{enumerate}
+
+You only need to do this once — macOS remembers your choice for future launches.
 \end{warningbox}
 
 Unlike the command-line install, the desktop app writes its data to a per-user Application Support folder rather than next to the code, since the installed \file{.app} bundle itself is read-only:
@@ -596,5 +604,7 @@ The guide deliberately describes the behavior that the current code establishes 
 \textit{Revision 1.4} documents the \app{Learn More} and \app{User Guide} shortcuts added to the installer window below the main drag-and-drop row, and redraws the installer-window figure with higher-contrast labels.
 
 \textit{Revision 1.5} corrects the installer-window figure and \file{package-dmg.sh} icon positions: the \app{Optional extras} row was drawn 40px lower than where Finder actually places those icons, causing the row-2 icons to overlap the caption above them on a real build. Verified against a screenshot of an actual install.
+
+\textit{Revision 1.6} rewrites the Gatekeeper warning box in Section~3.2 to match the actual first-launch dialog (titled "Not Opened," offering only \textbf{Move to Trash} and \textbf{Done} — no \textbf{Open Anyway} button), replacing the previous "App is damaged" wording. Adds the explicit \textbf{Done}, then right-click \textbf{Open}, then \textbf{System Settings \textgreater{} Privacy \& Security \textgreater{} Open Anyway} fallback sequence, verified against screenshots of an actual blocked launch.
 
 \end{document}

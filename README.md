@@ -17,16 +17,39 @@ No account, no cloud, no server other than the one you run yourself on
 `localhost`. It reads whatever folder structure you already use for job
 hunting and turns it into a dashboard; it never uploads anything anywhere.
 
+## Contents
+
+- [📦 Download for macOS](#-download-for-macos)
+  - [🔓 macOS blocked the app? (first launch)](#-macos-blocked-the-app-first-launch)
+- [Quickstart (try it with sample data first)](#quickstart-try-it-with-sample-data-first)
+- [Zero-config layout: drop `_app/` inside your own tracker folder](#zero-config-layout-drop-_app-inside-your-own-tracker-folder)
+- [Customizing classification for your own folders](#customizing-classification-for-your-own-folders)
+- [Running it](#running-it)
+- [Two local databases, two very different lifetimes](#two-local-databases-two-very-different-lifetimes)
+- [What it does](#what-it-does)
+- [Power-user features](#power-user-features)
+- [Multiple trackers / a second, independent installation](#multiple-trackers--a-second-independent-installation)
+- [Why "Date applied" matters more than file dates](#why-date-applied-matters-more-than-file-dates)
+- [Files](#files)
+- [Building the macOS app (.dmg) from source](#building-the-macos-app-dmg-from-source)
+- [License](#license)
+- [Author](#author)
+
 ## 📦 Download for macOS
 
 The easiest way to run JobTracker Hub — no Python, no Terminal, no setup.
 
 **[⬇ Download JobTracker Hub.dmg](https://github.com/willmaddock/jobtracker-hub/releases/latest)**
 
-Open the `.dmg`, drag **JobTracker Hub** into **Applications**, then launch
-it like any other Mac app. First launch will ask you to pick (or create)
-the folder you want it to track — everything after that happens in the
-window shown above.
+1. Open the downloaded `.dmg` and drag **JobTracker Hub** into
+   **Applications**.
+2. Open **JobTracker Hub** from your **Applications** folder. macOS will
+   block it the first time — this is expected for an unsigned,
+   non-notarized build, not a sign anything's wrong. See
+   **[macOS blocked the app? Click here ▸](#-macos-blocked-the-app-first-launch)**
+   for the exact steps.
+3. First launch will ask you to pick (or create) the folder you want it
+   to track — everything after that happens in the window shown above.
 
 > Prefer to run from source, or want to poke at the code? Skip to
 > [Quickstart](#quickstart-try-it-with-sample-data-first) below.
@@ -35,6 +58,26 @@ window shown above.
 — a longer walkthrough of every screen and workflow, if you want more than
 this README. LaTeX source lives in `docs/guide-src/` if you want to edit
 or rebuild it.
+
+### 🔓 macOS blocked the app? (first launch)
+
+This happens on **every** first launch of this app — downloaded `.dmg`
+or self-built — because it's an unsigned, ad-hoc build (no Apple
+Developer ID). It doesn't mean anything is wrong with it.
+
+The first dialog you'll see is titled **"JobTracker Hub.app" Not
+Opened**, with only two buttons: **Move to Trash** and **Done** — there's
+no **Open Anyway** button here yet.
+
+1. Click **Done** — not "Move to Trash."
+2. In **Applications**, right-click (or Control-click) **JobTracker
+   Hub** and choose **Open**. A second dialog appears, this one with an
+   actual **Open** button — click it.
+3. If right-click doesn't offer **Open**, go to **System Settings →
+   Privacy & Security**, scroll to **Security**, and click **Open
+   Anyway** next to the message about JobTracker Hub being blocked.
+
+You only need to do this once — macOS remembers your choice after that.
 
 ## Quickstart (try it with sample data first)
 
@@ -282,11 +325,10 @@ touch your normal `_app/.venv`. Both `dist/` and `build/` are gitignored,
 so nothing from a build gets committed; every maintainer builds locally
 from the same source.
 
-**Note on Gatekeeper:** this is an unsigned, ad-hoc build (no Apple
-Developer ID), so macOS will flag it as being from an "unidentified
-developer" on first launch. Right-click the app (or the `.dmg`'s app
-icon) and choose **Open**, or go to **System Settings → Privacy &
-Security → Open Anyway**, instead of double-clicking.
+**Note on Gatekeeper:** your own build hits the same unsigned/non-notarized
+warning as the downloaded `.dmg` — see
+**[macOS blocked the app? ▸](#-macos-blocked-the-app-first-launch)**
+near the top of this README for the exact click-through steps.
 
 ## License
 
