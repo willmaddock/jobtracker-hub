@@ -265,6 +265,29 @@ Documentation:
 - `docs/guide-src/` — its LaTeX source and screenshots, if you want to
   edit or rebuild the PDF.
 
+## Building the macOS app (.dmg) from source
+
+The desktop-app packaging tooling lives in `scripts/`, `desktop/`, and
+`assets/`, alongside `_app/`. To build your own `.dmg`:
+
+```bash
+chmod +x scripts/*.sh
+./scripts/build-macos.sh      # creates dist/JobTracker Hub.app
+./scripts/package-dmg.sh      # wraps it into dist/JobTracker Hub.dmg
+```
+
+`build-macos.sh` creates its own build-only virtualenv (`.build-venv/`,
+gitignored) and runs PyInstaller against `desktop/entry.py` — it doesn't
+touch your normal `_app/.venv`. Both `dist/` and `build/` are gitignored,
+so nothing from a build gets committed; every maintainer builds locally
+from the same source.
+
+**Note on Gatekeeper:** this is an unsigned, ad-hoc build (no Apple
+Developer ID), so macOS will flag it as being from an "unidentified
+developer" on first launch. Right-click the app (or the `.dmg`'s app
+icon) and choose **Open**, or go to **System Settings → Privacy &
+Security → Open Anyway**, instead of double-clicking.
+
 ## License
 
 MIT — see `LICENSE`. Use it, fork it, sell your own hosted version of it,
