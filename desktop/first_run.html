@@ -1,0 +1,81 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Welcome to JobTracker Hub</title>
+<style>
+  html, body {
+    margin: 0; height: 100%;
+    background: #0F172A;
+    color: #E5E9F0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .card { max-width: 460px; text-align: center; padding: 32px; }
+  h1 { font-size: 20px; margin-bottom: 8px; }
+  p { color: #9aa4b2; font-size: 14px; line-height: 1.5; }
+  ul.tips { text-align: left; color: #9aa4b2; font-size: 13px; line-height: 1.6; margin: 16px 0 0; padding-left: 20px; }
+  ul.tips li { margin-bottom: 6px; }
+  ul.tips b { color: #c7cedb; }
+  button {
+    margin-top: 20px;
+    background: #4a9eff; color: white; border: none;
+    border-radius: 8px; padding: 10px 20px; font-size: 14px;
+    cursor: pointer;
+  }
+  button:hover { background: #3d8ce6; }
+  button:disabled { background: #5b6472; cursor: default; }
+  .status { margin-top: 12px; font-size: 13px; color: #ff5c5c; min-height: 18px; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>Welcome to JobTracker Hub</h1>
+    <p>Pick (or create) a folder for this tracker. JobTracker Hub reads it
+       in place — nothing is copied or moved — and everything you add or
+       import here (resumes, cover letters, imported zips) lives inside
+       that same folder.</p>
+    <ul class="tips">
+      <li><b>Starting fresh?</b> Click "New Folder" in the dialog that
+          opens and create one inside Documents, or inside a cloud-synced
+          folder (iCloud Drive, Google Drive, Dropbox, OneDrive) if you
+          want it backed up automatically.</li>
+      <li><b>Already have a folder</b> of applications, resumes, or a
+          previous export? Point at that instead — nothing inside it will
+          be changed.</li>
+      <li>You can add more trackers for other folders later, or import a
+          tracker .zip, from the sidebar once you're in.</li>
+    </ul>
+    <button id="choose-btn" onclick="chooseFolder()">Choose Folder…</button>
+    <div class="status" id="status"></div>
+  </div>
+
+<script>
+  // pywebview injects window.pywebview.api once the window is ready.
+  // The bridge methods (choose_folder) live in desktop/launcher.py's
+  // Api class.
+  async function chooseFolder() {
+    const btn = document.getElementById('choose-btn');
+    const status = document.getElementById('status');
+    btn.disabled = true;
+    status.textContent = '';
+    try {
+      const result = await window.pywebview.api.choose_folder();
+      if (result && result.error) {
+        status.textContent = result.error;
+        btn.disabled = false;
+      } else {
+        // Success: the backend opens a full-size window for the real
+        // app and this small window closes itself shortly after --
+        // nothing left to do here but wait.
+        status.style.color = '#9aa4b2';
+        status.textContent = 'Opening JobTracker Hub…';
+      }
+    } catch (err) {
+      status.textContent = 'Something went wrong -- please try again.';
+      btn.disabled = false;
+    }
+  }
+</script>
+</body>
+</html>
