@@ -203,6 +203,32 @@ def _validate_name(name: str, existing_names: set[str], *, exclude_id: str | Non
     return name
 
 
+_OWNED_ROOT_PREFIX = "JobTracker — "
+
+
+def _strip_owned_prefix(name: str) -> str:
+    """Strips a leading "JobTracker — " from a proposed tracker name.
+
+    Every owned tracker's root folder is named "JobTracker — <name>"
+    (see _new_sibling_root). That prefix can leak back in as a *name*
+    two ways: importing a zip whose suggested/default name comes from
+    the export's own filename (which is itself already
+    "JobTracker — <name>.zip" in some flows), or -- the more common
+    case -- picking an existing app-owned folder as an import source,
+    where the packaged app's native folder picker defaults the name to
+    the folder's own basename (desktop/launcher.py's import_folder).
+    Left unstripped, _new_sibling_root would prepend the prefix a
+    second time ("JobTracker — JobTracker — <name>"), and it would
+    compound further on every subsequent export/reimport cycle.
+    Only applied where a name is about to become (part of) a new owned
+    root's folder name -- link_workspace/rename_workspace never add
+    this prefix, so they leave whatever the user typed alone."""
+    if name.startswith(_OWNED_ROOT_PREFIX):
+        stripped = name[len(_OWNED_ROOT_PREFIX):].strip()
+        return stripped or name
+    return name
+
+
 def _owned_siblings_dir() -> Path:
     """Where app-created ("owned") sibling tracker folders go — used by
     create_workspace() and both import paths. In dev mode this is just
@@ -230,17 +256,12 @@ def create_workspace(name: str) -> dict:
     with _lock:
         data = _load_raw()
         existing_names = {w["name"] for w in data["workspaces"].values()}
-        clean_name = _validate_name(name, existing_names)
+        clean_name = _strip_owned_prefix(_validate_name(name, existing_names))
 
         base_slug = _slugify(clean_name)
         workspace_id = f"{base_slug}-{uuid.uuid4().hex[:6]}"
 
-        siblings_dir = _owned_siblings_dir()
-        root = siblings_dir / f"JobTracker — {clean_name}"
-        suffix = 2
-        while root.exists():
-            root = siblings_dir / f"JobTracker — {clean_name} ({suffix})"
-            suffix += 1
+        root = _new_sibling_root(clean_name)
         (root / "Applications").mkdir(parents=True, exist_ok=True)
 
         ws_dir = WORKSPACES_DB_DIR / workspace_id
@@ -412,7 +433,7 @@ def import_workspace_from_zip(name: str, zip_path: Path) -> dict:
     with _lock:
         data = _load_raw()
         existing_names = {w["name"] for w in data["workspaces"].values()}
-        clean_name = _validate_name(name, existing_names)
+        clean_name = _strip_owned_prefix(_validate_name(name, existing_names))
 
         try:
             zf = zipfile.ZipFile(zip_path)
@@ -466,7 +487,7 @@ def import_workspace_from_files(name: str, files: list[tuple[str, object]]) -> d
     with _lock:
         data = _load_raw()
         existing_names = {w["name"] for w in data["workspaces"].values()}
-        clean_name = _validate_name(name, existing_names)
+        clean_name = _strip_owned_prefix(_validate_name(name, existing_names))
 
         names = [relpath for relpath, _ in files]
         if not names:
@@ -484,6 +505,69 @@ def import_workspace_from_files(name: str, files: list[tuple[str, object]]) -> d
             dest.parent.mkdir(parents=True, exist_ok=True)
             with dest.open("wb") as out:
                 shutil.copyfileobj(stream, out)
+            extracted_any = True
+
+        entry = _finish_import(
+            clean_name, root, extracted_any,
+            "Nothing importable was found in that folder — it may not be a "
+            "JobTracker tracker folder, or everything in it was filtered "
+            "out (app files, hidden files, caches).",
+        )
+        data["workspaces"][entry["id"]] = entry
+        _save_raw(data)
+        return entry
+
+
+def import_workspace_from_local_folder(name: str, folder: str | Path) -> dict:
+    """Same as import_workspace_from_files, but for a folder already
+    sitting on this machine's disk (packaged desktop's native
+    FOLDER_DIALOG hands back a real path, not browser File objects) --
+    used by desktop/launcher.py's Api.import_folder via
+    /api/workspaces/import-folder-local. Unlike link_workspace(), this
+    COPIES the folder's contents into a brand-new sibling root rather
+    than pointing a tracker at it in place, matching the other two
+    import paths (zip / browser folder picker) rather than link's
+    behavior -- "Import tracker" always means "copy in", "Link existing
+    folder" (first-run only) always means "use in place".
+
+    Same top-level-prefix stripping and should_ignore() filtering as the
+    other import paths. The source folder is only ever read here, never
+    modified or deleted."""
+    with _lock:
+        data = _load_raw()
+        existing_names = {w["name"] for w in data["workspaces"].values()}
+        clean_name = _strip_owned_prefix(_validate_name(name, existing_names))
+
+        src = Path(folder)
+        if not src.is_dir():
+            raise WorkspaceError("That folder doesn't exist or isn't a folder.")
+        resolved_src = src.resolve()
+
+        rel_paths = [
+            str(p.relative_to(src)).replace("\\", "/")
+            for p in src.rglob("*")
+            if p.is_file()
+        ]
+        if not rel_paths:
+            raise WorkspaceError("That folder is empty.")
+        # Picking a folder directly (rather than its parent) never
+        # yields a shared top-level prefix the way a zip or a browser
+        # webkitdirectory selection can -- rglob's paths are already
+        # relative to the chosen folder itself, so there's no wrapping
+        # layer to strip. strip_prefix stays None here; _resolve_import_dest
+        # still applies the same should_ignore() filtering either way.
+
+        root = _new_sibling_root(clean_name)
+        resolved_root = root.resolve()
+
+        extracted_any = False
+        for rel in rel_paths:
+            dest = _resolve_import_dest(root, resolved_root, rel, None)
+            if dest is None:
+                continue
+            src_file = resolved_src / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src_file, dest)
             extracted_any = True
 
         entry = _finish_import(
@@ -515,13 +599,30 @@ def export_workspace_to_zip(workspace_id: str, dest_zip: Path) -> str:
         raise WorkspaceError(f"This tracker's folder no longer exists: {root}")
 
     with zipfile.ZipFile(dest_zip, "w", zipfile.ZIP_DEFLATED) as zf:
-        for path in sorted(root.rglob("*")):
-            if path.is_dir():
-                continue
-            relparts = path.relative_to(root).parts
-            if any(should_ignore(part) for part in relparts):
-                continue
-            zf.write(path, arcname="/".join(relparts))
+        # os.walk (not Path.rglob) so ignored directories can be pruned
+        # *before* descending into them, and so followlinks=False can be
+        # set explicitly. This matters for "linked" workspaces (a real,
+        # pre-existing folder the user pointed us at, as opposed to an
+        # app-owned one) — those can contain things an app-owned tracker
+        # never would: huge unrelated subtrees a naive rglob would still
+        # walk into even though should_ignore() would filter their
+        # files, or, worse, a symlink cycle (common in synced folders)
+        # that Path.rglob would follow forever, hanging the export with
+        # no error and no way to tell it apart from "just slow."
+        for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+            dirnames[:] = [d for d in dirnames if not should_ignore(d)]
+            for filename in filenames:
+                if should_ignore(filename):
+                    continue
+                file_path = Path(dirpath) / filename
+                relparts = file_path.relative_to(root).parts
+                try:
+                    zf.write(file_path, arcname="/".join(relparts))
+                except OSError:
+                    # Permission-denied, broken symlink, file removed
+                    # mid-walk, etc. -- skip that one file rather than
+                    # aborting the whole export over it.
+                    continue
 
     date_str = datetime.now().strftime("%Y-%m-%d")
     return f"{_slugify(entry['name'])}-{date_str}.zip"
@@ -553,53 +654,66 @@ def rename_workspace(workspace_id: str, new_name: str) -> dict:
 
 def delete_workspace(workspace_id: str) -> None:
     """Removes the workspace from the registry, deletes its own DB pair
-    (_app/workspaces/<id>/jobtracker.db, overrides.db), and sends its
-    `root` folder to the OS Trash/Recycle Bin — recoverable there, same
-    as document/category deletion elsewhere in this app, just no longer
-    left behind untouched on disk.
+    (_app/workspaces/<id>/jobtracker.db, overrides.db), and — for an
+    app-owned workspace only — sends its `root` folder to the OS
+    Trash/Recycle Bin, recoverable there, same as document/category
+    deletion elsewhere in this app.
 
-    This is safe precisely because every non-default workspace's root is
-    a folder *this app created* — a fresh sibling ("JobTracker — <name>")
-    made by create_workspace() or one of the import paths, which only
-    ever copies files into it, never moves the original source. So
-    trashing it here never touches anything the app didn't create itself
-    — the "never destructive to something it didn't create" rule this
-    app follows everywhere else still holds; it's just that an
-    app-created folder is fair game once you've asked to remove it.
+    Trashing the root is safe for an "owned" workspace precisely
+    because that folder is one *this app created* — a fresh sibling
+    ("JobTracker — <name>") made by create_workspace() or one of the
+    import paths, which only ever copies files into it, never moves
+    the original source. So trashing it here never touches anything
+    the app didn't create itself.
+
+    A "linked" workspace's root is different: it's an existing folder
+    the user pointed the app at in place (see link_workspace()) —
+    trashing it would destroy files the app never created and doesn't
+    own. Deleting a linked workspace must only remove it from the
+    registry (and clean up this app's own DB pair for it); the
+    user's folder itself is never touched.
 
     The default workspace's root is the one exception, and it's already
     excluded below: it's your original folder, not something the app
     made, so it's never a candidate for this at all. The default
-    workspace (and the last remaining workspace of any kind) can't be
-    removed — there always has to be one."""
+    workspace can't be removed — there always has to be one of those in
+    dev mode (see the self-heal in _load_raw). Packaged mode has no
+    default at all, so there it's fine to delete down to zero
+    workspaces — that's the same legitimate "no tracker yet" state a
+    fresh install starts in (see /api/status's workspace: None), and
+    the user can always link or create another."""
     with _lock:
         data = _load_raw()
         if workspace_id not in data["workspaces"]:
             raise WorkspaceError(f"No such tracker: {workspace_id}")
         if workspace_id == DEFAULT_ID:
             raise WorkspaceError("The original tracker can't be removed — you can rename it instead.")
-        if len(data["workspaces"]) <= 1:
-            raise WorkspaceError("Can't remove the only remaining tracker.")
-        root = Path(data["workspaces"][workspace_id]["root"])
+        entry = data["workspaces"][workspace_id]
+        root = Path(entry["root"])
+        is_owned = entry.get("kind") == "owned"
         del data["workspaces"][workspace_id]
         if data["active"] == workspace_id:
             # DEFAULT_ID doesn't exist as a workspace in packaged mode, so
             # falling back to it unconditionally would leave "active"
             # pointing at nothing. Fall back to any remaining workspace
-            # instead. In dev mode that's still effectively DEFAULT_ID,
-            # since it can never be the one just deleted (guarded above).
-            data["active"] = next(iter(data["workspaces"]))
+            # instead, or None if that was the last one (packaged mode
+            # only -- dev mode always still has DEFAULT_ID left, since it
+            # can never be the one just deleted, guarded above).
+            data["active"] = next(iter(data["workspaces"]), None)
         _save_raw(data)
 
     # Outside the lock (registry write is already durable) — best-effort
     # from here down. A failure trashing the folder (already gone,
     # permissions, no trash helper on this OS) should never leave the
     # workspace stuck half-deleted in the registry, so this never raises.
-    try:
-        if root.exists():
-            send2trash(str(root))
-    except Exception:
-        pass
+    # Only ever trash an app-owned root -- a linked folder is the
+    # user's own and must survive deletion untouched.
+    if is_owned:
+        try:
+            if root.exists():
+                send2trash(str(root))
+        except Exception:
+            pass
 
     # Best-effort cleanup of this workspace's own DB folder. Only ever
     # removes _app/workspaces/<id>/, never anything under the

@@ -407,6 +407,7 @@
   .viewer-body{flex:1;min-height:0;background:#000;}
   .viewer-frame{width:100%;height:100%;border:none;background:#fff;}
   .viewer-unsupported{height:100%;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px;color:var(--text-soft);padding:30px;text-align:center;}
+  .viewer-pdf-hint{padding:6px 18px;font-size:11px;color:var(--text-soft);border-bottom:1px solid var(--border-soft);background:var(--panel-glass);}
 </style>
 </head>
 <body>
@@ -735,7 +736,7 @@ function ThemeToggle({pref, applied, setTheme}){
 // (each one a fully separate Applications/ folder + its own two DBs — see
 // workspace.py), switch between them, rename, delete (removes it from this
 // list only — nothing on disk is ever touched), or start a brand-new one.
-function WorkspacePopover({onClose, anchorRef}){
+function WorkspacePopover({onClose, anchorRef, packaged}){
   const [data, setData] = useState(null);   // {active, workspaces:[...]}
   const [err, setErr] = useState(null);
   const [busyId, setBusyId] = useState(null);
@@ -830,6 +831,30 @@ function WorkspacePopover({onClose, anchorRef}){
     } catch (e) { setErr(String(e.message || e)); setBusyId(null); }
   }
 
+  // Packaged-desktop-only path for "Choose a folder instead": no local
+  // FileList to preview or attach to a later "Import tracker" click --
+  // pywebview's native folder dialog resolves directly to success/failure,
+  // so picking the folder *is* the import (same shape as first_run.html's
+  // chooseFolder()). Bridge method lives in desktop/launcher.py's
+  // Api.import_folder; it derives a name from the folder itself when
+  // importName is still blank, same as the browser path does from
+  // webkitRelativePath.
+  async function doImportFolderNative(){
+    if (!window.pywebview || !window.pywebview.api || !window.pywebview.api.import_folder) {
+      setErr("Native folder import isn't available in this build.");
+      return;
+    }
+    setBusyId("__import__");
+    setErr(null);
+    try {
+      const result = await window.pywebview.api.import_folder(importName.trim());
+      if (result && result.cancelled) { setBusyId(null); return; }
+      if (result && result.error) { setErr(result.error); setBusyId(null); return; }
+      clearCache();
+      window.location.reload();
+    } catch (e) { setErr(String(e.message || e)); setBusyId(null); }
+  }
+
   async function doRename(id){
     const name = renameVal.trim();
     if (!name) { setRenamingId(null); return; }
@@ -847,7 +872,30 @@ function WorkspacePopover({onClose, anchorRef}){
     finally { setBusyId(null); }
   }
 
-  async function doExport(id){
+  async function doExport(id, name){
+    // Packaged desktop: the browser-only blob-download trick below
+    // (fetch -> Blob -> ObjectURL -> hidden <a download> .click()) is a
+    // silent no-op in WKWebView -- nothing throws, so the try/catch
+    // never sees an error, the zip just never reaches disk. Bridge
+    // method lives in desktop/launcher.py's Api.export_workspace: it
+    // fetches the same bytes over HTTP from Python instead of the
+    // browser, and uses a native SAVE_DIALOG so the user picks where
+    // the file goes.
+    if (packaged) {
+      if (!window.pywebview || !window.pywebview.api || !window.pywebview.api.export_workspace) {
+        setErr("Native export isn't available in this build.");
+        return;
+      }
+      setBusyId(id);
+      setErr(null);
+      try {
+        const safeName = (name || "tracker").replace(/[\/\\:*?"<>|]+/g, "_");
+        const result = await window.pywebview.api.export_workspace(id, `${safeName}.zip`);
+        if (result && result.error) { setErr(result.error); }
+      } catch (e) { setErr(String(e.message || e)); }
+      finally { setBusyId(null); }
+      return;
+    }
     // fetch + blob (rather than a plain <a href> download) so we can show
     // a busy state on the button while the server builds the zip — for a
     // big tracker that can take a moment, and a silent click with no
@@ -922,7 +970,7 @@ function WorkspacePopover({onClose, anchorRef}){
               <button className={"workspace-row-btn" + (busyId === w.id ? " spinning" : "")}
                 disabled={busyId === w.id}
                 title={busyId === w.id ? "Exporting\u2026" : "Export as zip"}
-                onClick={() => doExport(w.id)}>{"\u2913"}</button>
+                onClick={() => doExport(w.id, w.name)}>{"\u2913"}</button>
               {w.id !== "default" && (
                 <button className="workspace-row-btn" title="Delete (its cache is removed; its tracker folder is sent to the Trash)"
                   onClick={() => doDelete(w.id, w.name)}>{"\u2715"}</button>
@@ -987,23 +1035,40 @@ function WorkspacePopover({onClose, anchorRef}){
           </div>
           <div className="workspace-import-or">
             <span>or</span>
-            <button className="link-btn" type="button"
-              onClick={() => importFolderInputRef.current && importFolderInputRef.current.click()}>
+            <button className="link-btn" type="button" disabled={busyId === "__import__"}
+              onClick={() => {
+                // Packaged desktop: pick the folder AND import it right
+                // here (pywebview's dialog gives us a path, not a
+                // FileList to preview first). Browser: fall back to the
+                // hidden webkitdirectory input's usual pick-then-preview
+                // flow, submitted later via "Import tracker" below.
+                if (packaged) { doImportFolderNative(); }
+                else { importFolderInputRef.current && importFolderInputRef.current.click(); }
+              }}>
               {"\u{1F4C1}"} Choose a folder instead
             </button>
-            <input
-              ref={importFolderInputRef} type="file" webkitdirectory="" directory="" multiple style={{display:"none"}}
-              onChange={e => {
-                const list = e.target.files;
-                if (!list || !list.length) return;
-                setImportFolderFiles(list); setImportFile(null);
-                if (!importName.trim()) {
-                  const top = (list[0].webkitRelativePath || list[0].name).split("/")[0];
-                  setImportName(top);
-                }
-              }}
-            />
+            {!packaged && (
+              <input
+                ref={importFolderInputRef} type="file" webkitdirectory="" directory="" multiple style={{display:"none"}}
+                onChange={e => {
+                  const list = e.target.files;
+                  if (!list || !list.length) return;
+                  setImportFolderFiles(list); setImportFile(null);
+                  if (!importName.trim()) {
+                    const top = (list[0].webkitRelativePath || list[0].name).split("/")[0];
+                    setImportName(top);
+                  }
+                }}
+              />
+            )}
           </div>
+          {packaged && (
+            <div className="workspace-pop-hint">
+              Picking a folder above imports it immediately — no need to
+              use "Import tracker" below for folders (that button is for
+              .zip files only in this app).
+            </div>
+          )}
           <div className="workspace-import-actions">
             <button className="btn" onClick={() => { setImporting(false); setImportFile(null); setImportFolderFiles(null); }}>Cancel</button>
             <button className="btn primary" disabled={busyId === "__import__" || !importName.trim() || (!importFile && !(importFolderFiles && importFolderFiles.length))}
@@ -1021,7 +1086,7 @@ function WorkspacePopover({onClose, anchorRef}){
 
 /* =========================== ICON RAIL =========================== */
 const RAIL_EXPANDED_KEY = "jth_rail_expanded"; // "1"/"0" — whether the rail shows text labels, saved locally only
-function Rail({page, setPage, attentionCount, onOpenPalette, onOpenSettings, workspacePopoverOpen, onToggleWorkspacePopover, onCloseWorkspacePopover, trackerName}){
+function Rail({page, setPage, attentionCount, onOpenPalette, onOpenSettings, workspacePopoverOpen, onToggleWorkspacePopover, onCloseWorkspacePopover, trackerName, packaged}){
   const logoRef = useRef(null);
   const [expanded, setExpanded] = useState(() => {
     try { return localStorage.getItem(RAIL_EXPANDED_KEY) === "1"; } catch(e) { return false; }
@@ -1053,7 +1118,7 @@ function Rail({page, setPage, attentionCount, onOpenPalette, onOpenSettings, wor
           <button ref={logoRef} className={"rail-logo" + (workspacePopoverOpen ? " open" : "")}
             title="JobTracker Hub — click to switch trackers" onClick={onToggleWorkspacePopover}>J</button>
         )}
-        {workspacePopoverOpen && <WorkspacePopover onClose={onCloseWorkspacePopover} anchorRef={logoRef} />}
+        {workspacePopoverOpen && <WorkspacePopover onClose={onCloseWorkspacePopover} anchorRef={logoRef} packaged={packaged} />}
       </div>
       <div className="rail-nav">
         {items.map(it => (
@@ -3149,8 +3214,29 @@ function ViewerDrawer({doc, onClose, onOpen}){
         <div className="viewer-header">
           <div className="viewer-title" title={doc.filename}>{doc.filename}</div>
           <button className="btn small" onClick={() => onOpen(doc.relpath)}>Open in OS</button>
+          {/* Real <a download> on a real (non-blob) URL -- not a stand-in
+              for the WKWebView PDF plugin's own broken toolbar button.
+              pywebview's Cocoa delegate specifically watches for
+              shouldPerformDownload() on a genuine link navigation (added
+              5.4, "Cocoa: support for the download attribute on links")
+              and routes it to a native save panel via ALLOW_DOWNLOADS.
+              That's a different code path from the inline PDF plugin's
+              own UI, which has no such hook -- see launcher.py's
+              ALLOW_DOWNLOADS comment for why that one can't be fixed the
+              same way. Works unchanged in a plain browser tab too. */}
+          <a className="btn small" href={src} download={doc.filename}>Download</a>
           <button className="btn small" onClick={onClose}>{"\u2715 Close (Esc)"}</button>
         </div>
+        {/* The PDF pane below embeds WebKit's own native PDF plugin, whose
+            save/download icon is a closed native affordance we can't wire
+            up (see the Download button comment above) -- zoom in that same
+            toolbar does work, since it's render-only. This hint just steers
+            people to the buttons above that actually save the file, instead
+            of them bouncing off the native icon and assuming the app is
+            broken. */}
+        {ext === ".pdf" && (
+          <div className="viewer-pdf-hint">Use Download or Open in OS above to save this file.</div>
+        )}
         <div className="viewer-body">
           {ext === ".pdf"
             ? <embed className="viewer-frame" src={src} type="application/pdf" />
@@ -3529,7 +3615,8 @@ function App(){
         workspacePopoverOpen={workspacePopoverOpen}
         onToggleWorkspacePopover={() => setWorkspacePopoverOpen(o => !o)}
         onCloseWorkspacePopover={() => setWorkspacePopoverOpen(false)}
-        trackerName={statusInfo && statusInfo.workspace && statusInfo.workspace.name} />
+        trackerName={statusInfo && statusInfo.workspace && statusInfo.workspace.name}
+        packaged={!!(statusInfo && statusInfo.packaged)} />
       <div className="main">
         <div className="topbar">
           <ClearableInput className="search-input" wrapStyle={{flex:1, minWidth:220, maxWidth:520}}

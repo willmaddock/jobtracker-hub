@@ -47,3 +47,12 @@ dist/
 build/
 
 _app.bak-*/
+
+# --- Workspaces accidentally created inside this repo -----------------------
+# The app's default naming for a new tracker is "JobTracker — <name>-<date>".
+# If the dev backend is ever run with cwd inside this repo (instead of a
+# copied-out folder like my-tracker/_app per the Quickstart), a new tracker
+# lands right here as a sibling of _app/ -- ignore it outright instead of
+# relying on remembering to add it by name each time real data shows up.
+/JobTracker — */
+/my-tracker/

@@ -25,6 +25,7 @@ hunting and turns it into a dashboard; it never uploads anything anywhere.
 - [Zero-config layout: drop `_app/` inside your own tracker folder](#zero-config-layout-drop-_app-inside-your-own-tracker-folder)
 - [Customizing classification for your own folders](#customizing-classification-for-your-own-folders)
 - [Running it](#running-it)
+- [Running the tests](#running-the-tests)
 - [Two local databases, two very different lifetimes](#two-local-databases-two-very-different-lifetimes)
 - [What it does](#what-it-does)
 - [Power-user features](#power-user-features)
@@ -195,6 +196,48 @@ here is reachable from your LAN or the internet. File endpoints resolve
 every path against the tracker root and refuse anything that would
 escape it.
 
+## Running the tests
+
+The backend has a pytest suite (`tests/`) covering workspace
+linking/switching/deletion, `/api/file`'s path-traversal and symlink
+protections, and export-zip integrity. Run it from the **repository
+root** (not from inside `_app/`) — that's where `pytest.ini` and
+`requirements-dev.txt` live, and where the paths in the commands below
+resolve from:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+pip install -r _app/requirements.txt -r requirements-dev.txt
+pytest
+```
+
+**Prerequisites:** the same Python 3 you'd use for `_app/` itself (3.10+
+recommended) — everything else needed comes from those two requirements
+files (`_app/requirements.txt` for the app's own runtime deps, plus
+`requirements-dev.txt` for `pytest`/`httpx`, the test-only additions).
+No separate services, no real tracker folder, and nothing macOS-only —
+the suite runs the same way on Linux/Windows CI.
+
+This test venv is intentionally separate from `_app/.venv` created in
+[Running it](#running-it) above, so `pytest`/`httpx` never end up bundled
+into the shipped app's own dependencies. The suite also runs in a
+throwaway, session-scoped state directory (`JOBTRACKER_STATE_DIR`,
+env var set in `tests/conftest.py`) instead of your real
+`~/Library/Application Support/JobTracker Hub` — safe to run against a
+real checkout without touching (or losing) any tracker you already have
+set up.
+
+A clean run reports `18 passed`:
+
+```bash
+$ pytest
+========================= test session starts ==========================
+collected 18 items
+...
+==================== 18 passed, 1 warning in 0.34s =====================
+```
+
 ## Two local databases, two very different lifetimes
 
 - **`jobtracker.db`** — the disposable, auto-built index. Every click of
@@ -269,6 +312,16 @@ meant to be committed.
   are this tracker's own local state, not code. It auto-detects its root
   as whatever folder `_app/` is sitting inside, exactly like the original.
 
+**Fixing a tracker named "JobTracker — JobTracker — \<name\>":** versions
+before this fix could double-prefix an owned tracker's name/folder if you
+imported from an existing app-owned tracker folder without typing an
+explicit name (see `workspace._strip_owned_prefix`'s docstring for why).
+If you already have one of these, quit the app and run
+`scripts/fix_doubled_tracker_names.py` (dry run by default; add `--apply`
+to actually rename things) — it collapses the name and folder back to a
+single prefix and leaves everything else untouched. It only ever touches
+app-owned trackers, never a linked folder.
+
 ## Why "Date applied" matters more than file dates
 
 "Last activity" purely from file modification time breaks the moment you
@@ -307,6 +360,17 @@ Documentation:
 - `docs/JobTracker_User_Guide.pdf` — the full user guide.
 - `docs/guide-src/` — its LaTeX source and screenshots, if you want to
   edit or rebuild the PDF.
+
+Tests:
+- `tests/` — the pytest suite; see [Running the tests](#running-the-tests).
+- `requirements-dev.txt` — test-only dependencies (`pytest`, `httpx`),
+  installed alongside `_app/requirements.txt`.
+- `pytest.ini` — points pytest at `tests/`.
+
+Maintenance scripts:
+- `scripts/fix_doubled_tracker_names.py` — one-off cleanup for a tracker
+  name/folder doubled by a since-fixed bug — see "Multiple trackers"
+  above.
 
 ## Building the macOS app (.dmg) from source
 

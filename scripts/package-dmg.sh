@@ -134,6 +134,21 @@ tell application "Finder"
     set position of item "User Guide.pdf" of container window to {${GUIDE_ICON_X}, ${GUIDE_ICON_Y}}
     close
     open
+    -- Re-apply bounds/view options after the close+reopen above.
+    -- Finder does not reliably keep everything set on the FIRST open --
+    -- in particular the window bounds can silently revert to whatever
+    -- Finder last remembered for a volume with this name (e.g. from an
+    -- earlier build during development, or from resizing the window by
+    -- hand while testing), leaving the background image anchored at its
+    -- native 660x600 in a window Finder actually drew larger -- which
+    -- shows up as a wide plain-white margin. Setting bounds/view options
+    -- again here, on the window Finder is *actually* about to display,
+    -- makes that stick instead.
+    set the bounds of container window to {200, 120, 200 + ${WINDOW_W}, 120 + ${WINDOW_H}}
+    set theViewOptions to the icon view options of container window
+    set arrangement of theViewOptions to not arranged
+    set icon size of theViewOptions to ${ICON_SIZE}
+    set background picture of theViewOptions to file ".background:background.png"
     update without registering applications
     delay 1
   end tell

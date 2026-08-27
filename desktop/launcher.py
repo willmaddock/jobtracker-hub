@@ -209,6 +209,113 @@ class Api:
 
         return {"error": None}
 
+    def import_folder(self, name: str) -> dict:
+        """Native counterpart to the web UI's "Choose a folder instead"
+        button (Import tracker panel). That button is a plain
+        <input type="file" webkitdirectory> and depends on the *browser*
+        walking the picked folder and stamping every File with
+        .webkitRelativePath -- a real-browser-only behavior that
+        pywebview's file-input substitution never implements, so in the
+        packaged app that button silently returns nothing usable. This
+        method sidesteps <input type="file"> entirely: it opens
+        pywebview's own FOLDER_DIALOG (same call choose_folder() above
+        uses) to get a real filesystem path, then hits
+        /api/workspaces/import-folder-local with that path directly --
+        the backend does its own os.walk-equivalent (see
+        workspace.import_workspace_from_local_folder), no upload
+        involved. Called from the main app window (not first_run.html),
+        so unlike choose_folder() there's no window to swap out --
+        success just means the frontend reloads onto the new workspace.
+        """
+        import webview
+
+        window = self._window_ref[0]
+        result = window.create_file_dialog(webview.FOLDER_DIALOG)
+        if not result:
+            return {"cancelled": True}
+        folder = result[0]
+        # If the picked folder is itself an app-owned tracker (named
+        # "JobTracker — <name>" — see workspace._new_sibling_root), its
+        # bare basename would otherwise become the *new* tracker's name
+        # and get the same prefix prepended again when the backend
+        # builds its sibling folder ("JobTracker — JobTracker — <name>").
+        # The backend also guards against this (workspace._strip_owned_prefix),
+        # but stripping it here too keeps the name offered to
+        # import-folder-local sane even if this default is ever surfaced
+        # to the user before submission.
+        folder_name = Path(folder).name
+        if folder_name.startswith("JobTracker — "):
+            folder_name = folder_name[len("JobTracker — "):].strip() or folder_name
+        clean_name = name.strip() or folder_name or "Imported Tracker"
+        try:
+            _http_json(
+                f"{_api_base(self._port)}/api/workspaces/import-folder-local",
+                method="POST",
+                payload={"name": clean_name, "path": folder},
+            )
+        except (urllib.error.HTTPError, urllib.error.URLError) as e:
+            detail = str(e)
+            if isinstance(e, urllib.error.HTTPError):
+                try:
+                    detail = json.loads(e.read().decode("utf-8")).get("detail", detail)
+                except Exception:
+                    pass
+            return {"error": detail}
+
+        return {"error": None}
+
+    def export_workspace(self, workspace_id: str, suggested_filename: str) -> dict:
+        """Native counterpart to the web UI's "Export as zip" button
+        (workspace switcher, the down-arrow icon on each tracker row).
+        /api/workspaces/{id}/export already builds a correct zip
+        server-side -- this isn't a repeat of the folder-import bug's
+        root cause. The browser-side half of that button is what breaks:
+        fetch() the zip -> wrap it in a Blob -> ObjectURL -> a hidden
+        <a download> element gets .click()'d, and it's *that* click a
+        real browser turns into a save-to-Downloads action. WKWebView
+        (what pywebview uses on macOS) doesn't intercept synthetic
+        clicks on blob: URLs as downloads the way Safari does, so the
+        click is a silent no-op -- no error, because nothing in the JS
+        actually failed, the fetch/blob/click all "succeed", the save
+        step attached to that click by the browser just never happens.
+        Same shape as import_folder() above: fetch the zip bytes
+        ourselves over HTTP from Python (bypassing the browser's
+        blob-download step entirely) and use pywebview's native
+        SAVE_DIALOG so the user picks where it lands, rather than
+        assuming a Downloads folder the way the browser flow did.
+        """
+        import urllib.parse
+
+        import webview
+
+        window = self._window_ref[0]
+        result = window.create_file_dialog(
+            webview.SAVE_DIALOG, save_filename=suggested_filename,
+        )
+        if not result:
+            return {"cancelled": True}
+        dest = result if isinstance(result, str) else result[0]
+
+        url = f"{_api_base(self._port)}/api/workspaces/{urllib.parse.quote(workspace_id, safe='')}/export"
+        try:
+            with urllib.request.urlopen(url, timeout=300) as resp:
+                data = resp.read()
+        except (urllib.error.HTTPError, urllib.error.URLError) as e:
+            detail = str(e)
+            if isinstance(e, urllib.error.HTTPError):
+                try:
+                    detail = json.loads(e.read().decode("utf-8")).get("detail", detail)
+                except Exception:
+                    pass
+            return {"error": detail}
+
+        try:
+            Path(dest).write_bytes(data)
+        except OSError as e:
+            return {"error": f"Couldn't write the zip to that location: {e}"}
+
+        return {"error": None}
+
 
 def main() -> None:
     port = _free_port()
@@ -230,6 +337,16 @@ def main() -> None:
         # itself is broken/missing, that's a separate, less common failure
         # mode, and _show_fatal_error above must not depend on it anyway.
         import webview
+
+        # Off by default in pywebview -- without this, WKWebView silently
+        # drops *any* native download, not just ones our own JS triggers.
+        # That's what broke the in-app PDF preview's built-in download
+        # button: that control bar is WebKit's own chrome for embedded
+        # PDFs, not something our frontend renders or can attach a click
+        # handler to, so there was no JS-side workaround available the
+        # way there was for the folder-picker/export buttons. Must be set
+        # before webview.start().
+        webview.settings["ALLOW_DOWNLOADS"] = True
 
         first_run = _needs_first_run(port)
         window_ref: list = [None]

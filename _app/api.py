@@ -299,10 +299,13 @@ def status():
     # picker checks /api/workspaces for this state anyway, but any client
     # hitting /api/status directly during that window should still get a
     # sane, documented response rather than a crash.
+    import os
+
+    packaged = os.environ.get("JOBTRACKER_PACKAGED") == "1"
     try:
         root, db_path, _ov_path, entry = _active()
     except ws.WorkspaceError:
-        return {"workspace": None, "index_built": False, "doc_count": 0}
+        return {"workspace": None, "index_built": False, "doc_count": 0, "packaged": packaged}
     return {
         "root": str(root),
         "index_built": db_path.exists(),
@@ -316,6 +319,14 @@ def status():
         "section_labels": labels.SECTION_LABELS,
         "doc_type_labels": labels.DOC_TYPE_LABELS,
         "workspace": {"id": entry["id"], "name": entry["name"]},
+        # Lets the frontend tell "running inside the packaged desktop
+        # shell (pywebview)" apart from "plain browser" -- used to swap
+        # the folder-import flow, since pywebview substitutes its own
+        # file dialog for <input type="file"> and never does the
+        # browser-only webkitdirectory walk. See
+        # /api/workspaces/import-folder-local and desktop/launcher.py's
+        # Api.import_folder.
+        "packaged": packaged,
     }
 
 
@@ -509,6 +520,36 @@ async def import_workspace_folder(name: str = Form(...), files: list[UploadFile]
 
     try:
         entry = ws.import_workspace_from_files(name, entries)
+        ws.set_active(entry["id"])
+    except ws.WorkspaceError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    build(current_root(), current_db_path())
+    return {"ok": True, "workspace": {"id": entry["id"], "name": entry["name"]}}
+
+
+class ImportLocalFolderRequest(BaseModel):
+    name: str
+    path: str
+
+
+@app.post("/api/workspaces/import-folder-local")
+def import_workspace_folder_local(req: ImportLocalFolderRequest):
+    """Packaged-desktop counterpart to /api/workspaces/import-folder above.
+    The browser version has to upload every file because a webpage can't
+    read the filesystem directly -- but the packaged app's backend and
+    its pywebview frontend are the same machine, so desktop/launcher.py's
+    Api.import_folder can hand over a plain local folder path from its
+    native FOLDER_DIALOG instead of re-uploading the whole folder over
+    HTTP. Trusts the given path the same way /api/workspaces/link
+    already does (both are only ever called by the local desktop shell,
+    never reachable from the packaged app's web UI in a browser). See
+    workspace.import_workspace_from_local_folder for the shared
+    prefix-stripping/should_ignore() filtering (identical behavior to
+    both other import paths). The source folder is only ever read from,
+    never modified."""
+    try:
+        entry = ws.import_workspace_from_local_folder(req.name, req.path)
         ws.set_active(entry["id"])
     except ws.WorkspaceError as e:
         raise HTTPException(status_code=400, detail=str(e))
