@@ -135,7 +135,7 @@ License & MIT (see repository \file{LICENSE}).
 \end{tabularx}
 \vfill
 \textbf{Repository:} JobTracker Hub — this guide lives in \file{docs/} alongside the code it documents.\par
-\textbf{Guide version:} 1.6 \quad | \quad \textbf{Updated:} August 26, 2026\par
+\textbf{Guide version:} 1.7 \quad | \quad \textbf{Updated:} August 28, 2026\par
 \vspace{0.6cm}
 {\small\color{muted} Layout direction informed by Overleaf's \emph{Technical Document Template}, adapted for JobTracker Hub.}
 \end{titlepage}
@@ -202,8 +202,10 @@ Below the main drag-and-drop row, the same window has two optional shortcuts tha
 \end{itemize}
 
 \begin{infobox}
-\textbf{First launch.} The very first time you open the app, it asks you to choose a folder — this becomes your tracker root, exactly like the \file{my-tracker/} folder in the command-line quick start above. Pick an empty folder for a fresh tracker, or an existing one if you're migrating from a manual install. The app remembers this choice and opens straight to your dashboard on every future launch.
+\textbf{First launch.} The very first time you open the app, it shows a welcome screen and a \textbf{Choose Folder…} button — this becomes your tracker root, exactly like the \file{my-tracker/} folder in the command-line quick start above. After you pick a folder, the app previews what it found there (empty, an existing tracker, or something else entirely) before anything is committed; edit the tracker name if you like, then click \textbf{Use this folder} to confirm, or \textbf{Choose a different folder} to pick again. The app remembers this choice and opens straight to your dashboard on every future launch.
 \end{infobox}
+
+\screenshot[0.42\textwidth]{images/first-run-preview.png}{The first-run screen after picking a folder: JobTracker Hub previews what it found before you commit.}
 
 \begin{warningbox}
 \textbf{"Not Opened" warning on first launch.} This is normal for an app downloaded outside the App Store and not notarized by Apple — it is not a sign anything is actually wrong. The very first time you open \app{JobTracker Hub}, macOS shows a dialog titled \textbf{"JobTracker Hub.app" Not Opened} with two buttons: \textbf{Move to Trash} and \textbf{Done}. There is no \textbf{Open Anyway} button in this first dialog, so:
@@ -368,6 +370,21 @@ Everything outside \file{Applications/} can be surfaced as configurable sections
 
 The classifier creates a stable section identifier from custom top-level folder names when no explicit mapping exists.
 
+\subsection{Search Hub}
+
+\app{Search Hub} is a curated directory of external job-search sites — higher-ed, K-12, government, mainstream job boards, and AI-powered job-search assistants — grouped by category, so you're not re-Googling the same list every week.
+
+Set your \textbf{target role} and \textbf{location} once at the top of the page and Search Hub uses them to build a ready-to-paste AI prompt plus per-site search links across every card below.
+
+\begin{itemize}
+  \item Cards with a built-in link go straight to \app{Open} or \app{Search}; cards without one prompt you to save your own via the pencil icon.
+  \item Add your own custom cards, or override any built-in card's title or URL, with \app{Reset all to defaults} available if you want to start over.
+\end{itemize}
+
+\screenshot[0.9\textwidth]{images/search-hub.png}{Part of the AI-powered job search \& career assistants row in Search Hub.}
+
+Everything here — your target role/location, custom cards, and overrides — is saved server-side with the rest of your tracker's data, so it travels with the tracker through export and import instead of being pinned to one browser.
+
 \subsection{Insights}
 
 \app{Insights} turns the indexed application history into a small set of useful metrics, including:
@@ -451,9 +468,17 @@ A single running JobTracker instance can manage more than one tracker through it
 
 \subsection{Creating and importing trackers}
 
-\app{New tracker} creates a fresh, empty tracker as a sibling folder next to your original one. \app{Import tracker} brings in an existing folder of documents as a new tracker, two ways: drag a \file{.zip} onto the dropzone (or click to browse to one), or click \app{Choose a folder instead} to import directly from a folder picker. Both paths land the same way and apply the same filtering — the application's own \file{_app/} directory is never carried into the new tracker, even if it happens to be present in what you're importing.
+The switcher offers up to three ways to add a tracker, depending on how you're running JobTracker Hub:
 
-\screenshot[0.42\textwidth]{images/new-import-panel.png}{The New tracker / Import tracker panel, with both zip and folder import options.}
+\begin{itemize}
+  \item \app{Create New Tracker} starts a fresh, empty tracker as a sibling folder next to your original one.
+  \item \app{Import a Copy} brings in an existing folder of documents as a new, independent tracker. Drag a \file{.zip} export onto the dropzone (or click to browse to one), or click \app{Choose a folder instead} to pick a folder directly — picking a folder shows the same preview described in Section~3.2 before anything is copied, so there's no need to also use the \app{Import a Copy} button for folders; that one is for \file{.zip} files only.
+  \item \app{Use an Existing Folder} (desktop app only) points a new tracker straight at a folder in place — nothing is copied. It's the same pick-preview-confirm flow as first launch, just reachable again later from the switcher.
+\end{itemize}
+
+All three paths apply the same filtering — the application's own \file{_app/} directory is never carried into a new tracker, even if it happens to be present in what you're importing or linking.
+
+\screenshot[0.5\textwidth]{images/new-import-panel.png}{The switcher's \app{Import a Copy} panel, with both \file{.zip} and folder import options.}
 
 \subsection{Exporting and deleting a tracker}
 
@@ -516,6 +541,8 @@ The desktop build keeps a log of its startup backend and, if it can't start, sho
   \item If nothing appears at all, open \app{JobTracker Hub}, click the \app{J} logo, choose \app{Settings}, and expand \app{Diagnostics}. This shows the port, state directory, and log file path for the current session, plus a \app{Reveal log file} button and a \app{Copy diagnostic report} button for sharing what's wrong.
   \item Relaunch the app once. A single failed launch is occasionally a slow-machine timing issue; a repeated failure is worth checking the log for.
 \end{enumerate}
+
+\screenshot[0.45\textwidth]{images/settings-diagnostics.png}{Settings \textgreater{} Diagnostics: index root, state directory, log file path, and the report/rebuild actions.}
 
 \subsection{The dashboard is empty}
 
@@ -606,5 +633,7 @@ The guide deliberately describes the behavior that the current code establishes 
 \textit{Revision 1.5} corrects the installer-window figure and \file{package-dmg.sh} icon positions: the \app{Optional extras} row was drawn 40px lower than where Finder actually places those icons, causing the row-2 icons to overlap the caption above them on a real build. Verified against a screenshot of an actual install.
 
 \textit{Revision 1.6} rewrites the Gatekeeper warning box in Section~3.2 to match the actual first-launch dialog (titled "Not Opened," offering only \textbf{Move to Trash} and \textbf{Done} — no \textbf{Open Anyway} button), replacing the previous "App is damaged" wording. Adds the explicit \textbf{Done}, then right-click \textbf{Open}, then \textbf{System Settings \textgreater{} Privacy \& Security \textgreater{} Open Anyway} fallback sequence, verified against screenshots of an actual blocked launch.
+
+\textit{Revision 1.7} updates Section~3.2's first-launch description and adds a screenshot of the folder preview step, which was previously undocumented. Adds a new \textbf{Search Hub} subsection to Section~4 describing the external job-board directory, target role/AI prompt, and custom cards, with a screenshot of the AI-assistant cards. Rewrites Section~7.1 (\textbf{Creating and importing trackers}) to match the switcher's current button labels (\app{Create New Tracker}, \app{Import a Copy}, and the desktop-only \app{Use an Existing Folder}) and documents the folder-preview step shared with first launch. Replaces the tracker-switcher and import-panel figures, both of which still showed a retired "New tracker"/"Import tracker" button design. Adds a Settings~\textgreater~Diagnostics screenshot to Section~10.1.
 
 \end{document}
