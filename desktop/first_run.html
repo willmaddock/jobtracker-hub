@@ -10,8 +10,9 @@
     color: #E5E9F0;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     display: flex; align-items: center; justify-content: center;
+    overflow-y: auto;
   }
-  .card { max-width: 460px; text-align: center; padding: 32px; }
+  .card { max-width: 460px; text-align: center; padding: 32px; box-sizing: border-box; }
   h1 { font-size: 20px; margin-bottom: 8px; }
   p { color: #9aa4b2; font-size: 14px; line-height: 1.5; }
   ul.tips { text-align: left; color: #9aa4b2; font-size: 13px; line-height: 1.6; margin: 16px 0 0; padding-left: 20px; }
@@ -25,11 +26,32 @@
   }
   button:hover { background: #3d8ce6; }
   button:disabled { background: #5b6472; cursor: default; }
+  button.secondary { background: transparent; border: 1px solid #3a4356; color: #c7cedb; margin-left: 8px; }
+  button.secondary:hover { background: #1a2333; }
   .status { margin-top: 12px; font-size: 13px; color: #ff5c5c; min-height: 18px; }
+
+  /* ---- folder preview panel (shown after picking, before committing) ---- */
+  .preview {
+    text-align: left; margin-top: 20px; padding: 14px 16px;
+    border-radius: 10px; border: 1px solid #3a4356; background: #131c2e;
+  }
+  .preview.warn { border-color: #7a5a1e; background: #251d10; }
+  .preview.block { border-color: #7a2e2e; background: #2a1414; }
+  .preview-path { font-size: 12px; color: #6f7a8c; word-break: break-all; margin-bottom: 8px; }
+  .preview-headline { font-size: 14px; color: #E5E9F0; margin-bottom: 4px; font-weight: 600; }
+  .preview-sub { font-size: 13px; color: #9aa4b2; line-height: 1.5; }
+  .preview-actions { margin-top: 16px; text-align: center; }
+  .preview-actions button { margin-top: 0; }
+  .name-row { margin-top: 14px; text-align: left; }
+  .name-row label { font-size: 12px; color: #9aa4b2; display: block; margin-bottom: 4px; }
+  .name-row input {
+    width: 100%; box-sizing: border-box; background: #0c1420; color: #E5E9F0;
+    border: 1px solid #3a4356; border-radius: 6px; padding: 8px 10px; font-size: 13px;
+  }
 </style>
 </head>
 <body>
-  <div class="card">
+  <div class="card" id="card">
     <h1>Welcome to JobTracker Hub</h1>
     <p>Pick (or create) a folder for this tracker. JobTracker Hub reads it
        in place — nothing is copied or moved — and everything you add or
@@ -41,39 +63,155 @@
           folder (iCloud Drive, Google Drive, Dropbox, OneDrive) if you
           want it backed up automatically.</li>
       <li><b>Already have a folder</b> of applications, resumes, or a
-          previous export? Point at that instead — nothing inside it will
-          be changed.</li>
+          previous export? Point at that instead — you'll see a preview
+          of what's in it before anything is linked.</li>
       <li>You can add more trackers for other folders later, or import a
           tracker .zip, from the sidebar once you're in.</li>
     </ul>
     <button id="choose-btn" onclick="chooseFolder()">Choose Folder…</button>
     <div class="status" id="status"></div>
+    <div id="preview-slot"></div>
   </div>
 
 <script>
   // pywebview injects window.pywebview.api once the window is ready.
-  // The bridge methods (choose_folder) live in desktop/launcher.py's
-  // Api class.
+  // The bridge methods (pick_folder, inspect_folder,
+  // confirm_first_run_link) live in desktop/launcher.py's Api class.
+  // Picking a folder is now deliberately separate from committing to
+  // it -- see that file's Api docstrings for why: this is the exact
+  // page where an empty/wrong folder used to get linked with zero
+  // warning, and figuring that out later meant manually shuttling
+  // files around in Terminal instead of the app just saying so upfront.
+  let pickedPath = null;
+
+  function stripOwnedPrefix(baseName) {
+    const prefix = "JobTracker — ";
+    return baseName.startsWith(prefix) ? (baseName.slice(prefix.length).trim() || baseName) : baseName;
+  }
+
+  function baseNameOf(path) {
+    const parts = path.replace(/[\\/]+$/, "").split(/[\\/]/);
+    return parts[parts.length - 1] || path;
+  }
+
   async function chooseFolder() {
     const btn = document.getElementById('choose-btn');
     const status = document.getElementById('status');
     btn.disabled = true;
+    status.style.color = '#ff5c5c';
     status.textContent = '';
+    document.getElementById('preview-slot').innerHTML = '';
     try {
-      const result = await window.pywebview.api.choose_folder();
-      if (result && result.error) {
-        status.textContent = result.error;
-        btn.disabled = false;
-      } else {
-        // Success: the backend opens a full-size window for the real
-        // app and this small window closes itself shortly after --
-        // nothing left to do here but wait.
-        status.style.color = '#9aa4b2';
-        status.textContent = 'Opening JobTracker Hub…';
-      }
+      const picked = await window.pywebview.api.pick_folder();
+      if (!picked || !picked.path) { btn.disabled = false; return; } // cancelled
+      pickedPath = picked.path;
+      status.style.color = '#9aa4b2';
+      status.textContent = 'Looking at that folder…';
+      const inspection = await window.pywebview.api.inspect_folder(pickedPath);
+      status.textContent = '';
+      btn.disabled = false;
+      renderPreview(pickedPath, inspection);
     } catch (err) {
+      status.style.color = '#ff5c5c';
       status.textContent = 'Something went wrong -- please try again.';
       btn.disabled = false;
+    }
+  }
+
+  function renderPreview(path, inspection) {
+    const slot = document.getElementById('preview-slot');
+    const status = document.getElementById('status');
+
+    if (!inspection || inspection.error) {
+      slot.innerHTML = '';
+      status.style.color = '#ff5c5c';
+      status.textContent = "Couldn't read that folder: " + ((inspection && inspection.error) || 'unknown error');
+      return;
+    }
+
+    let tone = '';
+    let headline = '';
+    let sub = '';
+    let canContinue = true;
+    const defaultName = stripOwnedPrefix(baseNameOf(path)) || 'My Job Search';
+
+    if (inspection.already_linked) {
+      tone = 'block';
+      headline = 'This folder is already linked as "' + (inspection.already_linked_name || 'another tracker') + '".';
+      sub = 'Pick a different folder — or, once you\'re in the app, switch to the existing tracker from the sidebar.';
+      canContinue = false;
+    } else if (inspection.is_empty) {
+      tone = '';
+      headline = 'This folder is empty.';
+      sub = 'JobTracker Hub will start a brand-new, empty tracker here — nothing to bring in yet.';
+    } else if (inspection.looks_like_tracker && inspection.has_portable_overrides) {
+      tone = '';
+      headline = 'This already looks like a JobTracker tracker.';
+      sub = 'Its statuses, notes, and follow-up dates will come with it.';
+    } else if (inspection.looks_like_tracker && !inspection.has_portable_overrides) {
+      tone = '';
+      headline = 'This looks like an existing tracker folder.';
+      sub = "It doesn't have JobTracker's notes file yet — continuing will set one up (empty) right inside this folder, so future notes and statuses stay with it.";
+    } else {
+      tone = 'warn';
+      headline = "This doesn't look like a JobTracker folder.";
+      sub = 'It has files, but none of the usual tracker folders (Applications, Certifications, References, ...). If this isn\'t the right folder, pick a different one below. Otherwise, continuing will start treating it as a tracker from here on.';
+    }
+
+    const fileCountLine = inspection.exists && !inspection.is_empty
+      ? `${inspection.file_count}${inspection.capped ? '+' : ''} file${inspection.file_count === 1 ? '' : 's'} found`
+      : '';
+
+    slot.innerHTML = `
+      <div class="preview${tone ? ' ' + tone : ''}">
+        <div class="preview-path">${path}</div>
+        <div class="preview-headline">${headline}</div>
+        <div class="preview-sub">${sub}${fileCountLine ? ' · ' + fileCountLine : ''}</div>
+        ${canContinue ? `
+          <div class="name-row">
+            <label for="tracker-name">Tracker name</label>
+            <input id="tracker-name" type="text" value="${defaultName.replace(/"/g, '&quot;')}" />
+          </div>
+        ` : ''}
+        <div class="preview-actions">
+          <button class="secondary" onclick="cancelPreview()">Choose a different folder</button>
+          ${canContinue ? `<button onclick="confirmLink()">Use this folder</button>` : ''}
+        </div>
+      </div>
+    `;
+  }
+
+  function cancelPreview() {
+    pickedPath = null;
+    document.getElementById('preview-slot').innerHTML = '';
+    document.getElementById('status').textContent = '';
+  }
+
+  async function confirmLink() {
+    const status = document.getElementById('status');
+    const nameInput = document.getElementById('tracker-name');
+    const name = (nameInput && nameInput.value.trim()) || 'My Job Search';
+    document.getElementById('preview-slot').innerHTML = '';
+    status.style.color = '#9aa4b2';
+    status.textContent = 'Setting up your tracker…';
+    document.getElementById('choose-btn').disabled = true;
+    try {
+      const result = await window.pywebview.api.confirm_first_run_link(pickedPath, name);
+      if (result && result.error) {
+        status.style.color = '#ff5c5c';
+        status.textContent = result.error;
+        document.getElementById('choose-btn').disabled = false;
+        return;
+      }
+      status.style.color = '#9aa4b2';
+      status.textContent = 'Opening JobTracker Hub…';
+      // Success: the backend opens a full-size window for the real app
+      // and this small window closes itself shortly after -- nothing
+      // left to do here but wait.
+    } catch (err) {
+      status.style.color = '#ff5c5c';
+      status.textContent = 'Something went wrong -- please try again.';
+      document.getElementById('choose-btn').disabled = false;
     }
   }
 </script>

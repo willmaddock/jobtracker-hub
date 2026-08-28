@@ -56,3 +56,4 @@ _app.bak-*/
 # relying on remembering to add it by name each time real data shows up.
 /JobTracker — */
 /my-tracker/
+.jobtracker/

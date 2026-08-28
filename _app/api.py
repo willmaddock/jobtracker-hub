@@ -280,6 +280,25 @@ class DeleteDocumentRequest(BaseModel):
     relpath: str
 
 
+class HubCustomLinkRequest(BaseModel):
+    link_name: str
+    title: Optional[str] = None
+    url: Optional[str] = None
+
+
+class HubCustomCardRequest(BaseModel):
+    category_id: str
+    id: str
+    title: str
+    url: Optional[str] = None
+    note: Optional[str] = None
+
+
+class HubDeleteCustomCardRequest(BaseModel):
+    category_id: str
+    id: str
+
+
 class RenameDocumentRequest(BaseModel):
     relpath: str
     new_filename: str
@@ -318,14 +337,23 @@ def status():
         "status_icons": db.STATUS_ICONS,
         "section_labels": labels.SECTION_LABELS,
         "doc_type_labels": labels.DOC_TYPE_LABELS,
-        "workspace": {"id": entry["id"], "name": entry["name"]},
+        # kind + has_portable_overrides back the workspace status card
+        # (linked-in-place folder vs. JobTracker-owned copy, plus whether
+        # notes/status travel with the folder) — both already sit in the
+        # registry/filesystem, nothing new is stored for this.
+        "workspace": {
+            "id": entry["id"],
+            "name": entry["name"],
+            "kind": entry.get("kind", "owned"),
+            "has_portable_overrides": _ov_path.is_file(),
+        },
         # Lets the frontend tell "running inside the packaged desktop
         # shell (pywebview)" apart from "plain browser" -- used to swap
         # the folder-import flow, since pywebview substitutes its own
         # file dialog for <input type="file"> and never does the
         # browser-only webkitdirectory walk. See
         # /api/workspaces/import-folder-local and desktop/launcher.py's
-        # Api.import_folder.
+        # Api.confirm_import_folder.
         "packaged": packaged,
     }
 
@@ -431,9 +459,26 @@ class LinkWorkspaceRequest(BaseModel):
     path: str
 
 
+class InspectFolderRequest(BaseModel):
+    path: str
+
+
 @app.get("/api/workspaces")
 def list_workspaces():
     return ws.list_workspaces()
+
+
+@app.post("/api/workspaces/inspect")
+def inspect_folder(req: InspectFolderRequest):
+    """Read-only preview of what linking/importing a folder would mean —
+    called by the picker (in-app "Link existing folder" and the desktop
+    first-run flow) BEFORE the user commits, so they see what's actually
+    in the folder instead of linking blind. See workspace.inspect_folder
+    for the full shape of the response. Never 400s on a bad path — a
+    missing/unreadable folder comes back as {"exists": false, "error":
+    "..."} so the caller can render it inline instead of catching an
+    exception."""
+    return ws.inspect_folder(req.path)
 
 
 @app.post("/api/workspaces")
@@ -539,7 +584,7 @@ def import_workspace_folder_local(req: ImportLocalFolderRequest):
     The browser version has to upload every file because a webpage can't
     read the filesystem directly -- but the packaged app's backend and
     its pywebview frontend are the same machine, so desktop/launcher.py's
-    Api.import_folder can hand over a plain local folder path from its
+    Api.confirm_import_folder can hand over a plain local folder path from its
     native FOLDER_DIALOG instead of re-uploading the whole folder over
     HTTP. Trusts the given path the same way /api/workspaces/link
     already does (both are only ever called by the local desktop shell,
@@ -619,9 +664,23 @@ def delete_workspace(workspace_id: str):
 
 @app.post("/api/rebuild")
 def rebuild():
-    """Always (re)indexes DEFAULT_ROOT — the folder _app/ is nested
-    inside. No path is ever accepted from the client."""
-    build(current_root(), current_db_path())
+    """(Re)indexes the active tracker's root folder. No path is ever
+    accepted from the client.
+
+    Only reachable with zero trackers in packaged mode (dev mode always
+    has "default" — see /api/status). Onboarding's "no tracker yet"
+    empty state is meant to keep this endpoint from ever being hit in
+    that situation, but if it somehow is (e.g. a stale page reloaded
+    after the last tracker was deleted elsewhere), resolve_active()'s
+    WorkspaceError should surface as a clear 400, not an unhandled 500."""
+    try:
+        root, db_path = current_root(), current_db_path()
+    except ws.WorkspaceError:
+        raise HTTPException(
+            status_code=400,
+            detail="No tracker is set up yet. Create, import, or link one first.",
+        )
+    build(root, db_path)
     return {"ok": True}
 
 
@@ -1610,6 +1669,34 @@ def unmerge(req: UnmergeRequest):
     ov.remove_alias(ov_conn, req.alias)
     ov_conn.close()
     return {"ok": True}
+
+
+# --- search hub settings (role, location, and your custom cards/links) ------
+# Moved here from browser localStorage so this customization travels with
+# the tracker (same overrides.db everything else in ov.* lives in) rather
+# than being pinned to one browser profile — see overrides_store.py's
+# get_hub_settings/set_hub_settings.
+@app.get("/api/hub/settings")
+def get_hub_settings():
+    _, ov_conn = get_conns()
+    settings = ov.get_hub_settings(ov_conn)
+    ov_conn.close()
+    return settings
+
+
+@app.post("/api/hub/settings")
+def update_hub_settings(req: dict):
+    """Partial update: any of role/location/custom_links/custom_cards
+    present in the body is merged in (see set_hub_settings), everything
+    else is left as-is. Accepts a plain dict rather than a strict model
+    since the frontend only ever sends the one or two fields that
+    actually changed."""
+    allowed = {"role", "location", "custom_links", "custom_cards"}
+    fields = {k: v for k, v in req.items() if k in allowed}
+    _, ov_conn = get_conns()
+    settings = ov.set_hub_settings(ov_conn, **fields)
+    ov_conn.close()
+    return settings
 
 
 # --- opening files locally ----------------------------------------------

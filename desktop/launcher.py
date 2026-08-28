@@ -9,9 +9,11 @@ Flow:
     2. Poll /api/health until the subprocess is actually serving.
     3. If no tracker has been linked/created yet (GET /api/workspaces
        returns active: None), show the local first_run.html page and
-       let the user pick a folder via a native dialog. Once picked, call
-       the real /api/workspaces/link endpoint over HTTP -- same code
-       path the web UI would use -- then navigate the window to the app.
+       let the user pick a folder via a native dialog, preview what's
+       in it, then confirm -- see Api.pick_folder / Api.inspect_folder /
+       Api.confirm_first_run_link. Confirming calls the real
+       /api/workspaces/link endpoint over HTTP -- same code path the web
+       UI would use -- then swaps in a full-size window for the app.
     4. Otherwise, skip straight to opening the window on the running app.
     5. On window close, terminate the backend subprocess.
 
@@ -165,20 +167,61 @@ class Api:
         self._port = port
         self._window_ref = window_ref  # 1-element list, filled in after webview.create_window
 
-    def choose_folder(self) -> dict:
+    def pick_folder(self) -> dict:
+        """Opens the native folder-picker dialog and returns the chosen
+        path -- nothing is linked or imported yet. First step of a
+        pick -> inspect -> confirm sequence used by both first_run.html
+        (the very first tracker) and the in-app "Use an Existing Folder"
+        flow (WorkspacePopover in the frontend), so the user sees a
+        preview of what's in the folder (see inspect_folder below)
+        before committing to it -- replaces the old one-click
+        choose_folder()/link_folder() that linked blind. Cancelling the
+        dialog returns {"path": None}, not an error."""
         import webview
 
         window = self._window_ref[0]
         result = window.create_file_dialog(webview.FOLDER_DIALOG)
         if not result:
-            return {"error": None}  # user cancelled -- not an error, just no-op
-        folder = result[0]
-        name = Path(folder).name or "My Job Search"
+            return {"path": None}
+        return {"path": result[0]}
+
+    def inspect_folder(self, path: str) -> dict:
+        """Read-only preview of a picked folder -- proxies straight to
+        POST /api/workspaces/inspect and hands the JSON back unchanged
+        (see workspace.inspect_folder for the full response shape).
+        Used between pick_folder() and confirm_first_run_link()/
+        confirm_link_folder() so the caller can show what's there
+        before the user commits."""
+        try:
+            return _http_json(
+                f"{_api_base(self._port)}/api/workspaces/inspect",
+                method="POST",
+                payload={"path": path},
+            )
+        except (urllib.error.HTTPError, urllib.error.URLError) as e:
+            detail = str(e)
+            if isinstance(e, urllib.error.HTTPError):
+                try:
+                    detail = json.loads(e.read().decode("utf-8")).get("detail", detail)
+                except Exception:
+                    pass
+            return {"exists": False, "error": detail}
+
+    def confirm_first_run_link(self, path: str, name: str) -> dict:
+        """Commits to linking `path` as the very first tracker -- called
+        by first_run.html once its preview step (pick_folder +
+        inspect_folder) has been accepted. Same /api/workspaces/link
+        call, and the same "swap in a full-size window" behavior the old
+        single-step choose_folder() used to do, just split so a preview
+        now sits in between picking and committing."""
+        import webview
+
+        clean_name = (name or "").strip() or Path(path).name or "My Job Search"
         try:
             _http_json(
                 f"{_api_base(self._port)}/api/workspaces/link",
                 method="POST",
-                payload={"name": name, "path": folder},
+                payload={"name": clean_name, "path": path},
             )
         except (urllib.error.HTTPError, urllib.error.URLError) as e:
             detail = str(e)
@@ -193,7 +236,7 @@ class Api:
         # non-resizable (it's just a "pick a folder" prompt). pywebview
         # doesn't support changing a window's size/resizable flag after
         # creation, so navigating this same window to the main app in
-        # place (the old approach) left it permanently stuck at 520x420
+        # place (the old approach) left it permanently stuck at 560x560
         # until the whole app was quit and relaunched. Instead, open a
         # proper full-size resizable window for the real app now, and
         # close this one a moment later -- the short delay just gives
@@ -201,6 +244,7 @@ class Api:
         # JS bridge before its window disappears.
         import threading
 
+        window = self._window_ref[0]
         main_window = webview.create_window(
             APP_NAME, _api_base(self._port), width=1200, height=800, js_api=self,
         )
@@ -209,31 +253,59 @@ class Api:
 
         return {"error": None}
 
-    def import_folder(self, name: str) -> dict:
+    def confirm_link_folder(self, path: str, name: str) -> dict:
+        """In-app counterpart to confirm_first_run_link() -- called from
+        the already-running main window's workspace switcher
+        (WorkspacePopover's "Use an Existing Folder" flow) once its own
+        preview step (also pick_folder + inspect_folder) has been
+        accepted. No window swap needed here, unlike
+        confirm_first_run_link() -- we're already in the main window;
+        the frontend just reloads onto the new workspace on success."""
+        clean_name = (name or "").strip() or Path(path).name or "My Job Search"
+        try:
+            _http_json(
+                f"{_api_base(self._port)}/api/workspaces/link",
+                method="POST",
+                payload={"name": clean_name, "path": path},
+            )
+        except (urllib.error.HTTPError, urllib.error.URLError) as e:
+            detail = str(e)
+            if isinstance(e, urllib.error.HTTPError):
+                try:
+                    detail = json.loads(e.read().decode("utf-8")).get("detail", detail)
+                except Exception:
+                    pass
+            return {"error": detail}
+
+        return {"error": None}
+
+    def confirm_import_folder(self, path: str, name: str) -> dict:
         """Native counterpart to the web UI's "Choose a folder instead"
-        button (Import tracker panel). That button is a plain
+        button (Import a Copy panel). That button is a plain
         <input type="file" webkitdirectory> and depends on the *browser*
         walking the picked folder and stamping every File with
         .webkitRelativePath -- a real-browser-only behavior that
         pywebview's file-input substitution never implements, so in the
         packaged app that button silently returns nothing usable. This
-        method sidesteps <input type="file"> entirely: it opens
-        pywebview's own FOLDER_DIALOG (same call choose_folder() above
-        uses) to get a real filesystem path, then hits
-        /api/workspaces/import-folder-local with that path directly --
-        the backend does its own os.walk-equivalent (see
+        method sidesteps <input type="file"> entirely and hits
+        /api/workspaces/import-folder-local with a real filesystem path
+        directly -- the backend does its own os.walk-equivalent (see
         workspace.import_workspace_from_local_folder), no upload
-        involved. Called from the main app window (not first_run.html),
-        so unlike choose_folder() there's no window to swap out --
-        success just means the frontend reloads onto the new workspace.
-        """
-        import webview
+        involved.
 
-        window = self._window_ref[0]
-        result = window.create_file_dialog(webview.FOLDER_DIALOG)
-        if not result:
-            return {"cancelled": True}
-        folder = result[0]
+        Split into pick_folder() + inspect_folder() (reused, same as
+        confirm_link_folder() above) followed by this confirm step, so
+        the frontend can show a preview of what's in the folder and let
+        the user edit the tracker name before committing -- previously
+        this method did pick -> import in one blind shot. See
+        describeFolderInspection() in the frontend for how the preview
+        differs from the link flow's (an already-linked folder is only
+        a soft warning here, since importing copies rather than
+        disturbs the original). Called from the main app window (not
+        first_run.html), so unlike confirm_first_run_link() there's no
+        window to swap out -- success just means the frontend reloads
+        onto the new workspace.
+        """
         # If the picked folder is itself an app-owned tracker (named
         # "JobTracker — <name>" — see workspace._new_sibling_root), its
         # bare basename would otherwise become the *new* tracker's name
@@ -243,15 +315,15 @@ class Api:
         # but stripping it here too keeps the name offered to
         # import-folder-local sane even if this default is ever surfaced
         # to the user before submission.
-        folder_name = Path(folder).name
+        folder_name = Path(path).name
         if folder_name.startswith("JobTracker — "):
             folder_name = folder_name[len("JobTracker — "):].strip() or folder_name
-        clean_name = name.strip() or folder_name or "Imported Tracker"
+        clean_name = (name or "").strip() or folder_name or "Imported Tracker"
         try:
             _http_json(
                 f"{_api_base(self._port)}/api/workspaces/import-folder-local",
                 method="POST",
-                payload={"name": clean_name, "path": folder},
+                payload={"name": clean_name, "path": path},
             )
         except (urllib.error.HTTPError, urllib.error.URLError) as e:
             detail = str(e)
@@ -278,7 +350,7 @@ class Api:
         click is a silent no-op -- no error, because nothing in the JS
         actually failed, the fetch/blob/click all "succeed", the save
         step attached to that click by the browser just never happens.
-        Same shape as import_folder() above: fetch the zip bytes
+        Same shape as confirm_import_folder() above: fetch the zip bytes
         ourselves over HTTP from Python (bypassing the browser's
         blob-download step entirely) and use pywebview's native
         SAVE_DIALOG so the user picks where it lands, rather than
@@ -354,15 +426,21 @@ def main() -> None:
 
         if first_run:
             first_run_page = str(Path(__file__).resolve().parent / "first_run.html")
+            # Resizable now (was fixed 560x560): first_run.html's preview
+            # panel (folder inspection results + name field) can push
+            # past a small fixed window depending on how much its
+            # headline/sub text wraps -- the page itself scrolls too
+            # (see its own overflow-y: auto), but letting the window
+            # grow is the better first line of defense.
             window = webview.create_window(
-                APP_NAME, first_run_page, width=560, height=560, resizable=False, js_api=api,
+                APP_NAME, first_run_page, width=560, height=640, resizable=True, js_api=api,
             )
         else:
             window = webview.create_window(APP_NAME, _api_base(port), width=1200, height=800, js_api=api)
 
         # js_api methods are only invoked from JS after the window has
         # loaded, i.e. strictly after create_window() returns here, so
-        # this is set in time for choose_folder()'s use of it.
+        # this is set in time for pick_folder()'s use of it.
         window_ref[0] = window
 
         webview.start()

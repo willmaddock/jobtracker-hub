@@ -4,13 +4,24 @@ isolated tracker ("profile") from a single running server.
 
 Each workspace has its own:
     - root folder (an Applications/ tree, same shape as the original)
-    - jobtracker.db  (disposable index, rebuilt from that root)
-    - overrides.db   (durable notes/status/dates, never touched by rebuild)
+    - jobtracker.db  (disposable index, rebuilt from that root — lives
+      in this app's own private storage, keyed by workspace id)
+    - overrides.db   (durable notes/status/dates, never touched by
+      rebuild — lives INSIDE the workspace's own root, under a hidden
+      "<root>/.jobtracker/" folder, so it travels automatically with
+      the folder itself: linking, importing, copying, or zipping a
+      tracker folder always carries your notes along. See
+      _portable_ov_db_path() and _migrate_ov_db_if_needed() below for
+      why this is the one exception to "root is only ever read, never
+      written" for linked workspaces, and how existing trackers move
+      over automatically the first time they're loaded after this
+      changed.)
 
 The registry itself lives in a small JSON file next to this one
 (_app/workspaces.json) and is the *only* new piece of persistent state
-this feature adds. It never rewrites or moves anything that already
-existed before this feature was added — see bootstrap() below.
+this feature adds outside a workspace's own root. It never rewrites or
+moves anything that already existed before this feature was added —
+see bootstrap() below.
 
 Nothing here talks to jobtracker.db/overrides.db directly; api.py still
 owns all of that. This module only answers "where do the active
@@ -29,7 +40,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
 
-from classify import should_ignore
+from classify import SECTION_RULES, should_ignore
 from send2trash import send2trash
 
 APP_DIR = Path(__file__).resolve().parent
@@ -64,6 +75,16 @@ WORKSPACES_DB_DIR = STATE_DIR / "workspaces"
 DEFAULT_ID = "default"
 DEFAULT_NAME = "Job Search"
 
+# --- Portable overrides.db -------------------------------------------------
+# Notes/status/dates now live inside the workspace's own root, under this
+# hidden subfolder, instead of in this app's private storage. Hidden (dot-
+# prefixed) so should_ignore() keeps it out of the index and out of a plain
+# folder browse — but _resolve_import_dest() and export_workspace_to_zip()
+# both special-case this exact folder so it still rides along on
+# import/export, unlike every other dotfile. See module docstring.
+OVERRIDES_DIRNAME = ".jobtracker"
+OVERRIDES_DB_FILENAME = "overrides.db"
+
 _lock = Lock()  # registry reads/writes are rare and cheap; simple is fine
 
 
@@ -79,13 +100,60 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _portable_ov_db_path(root: Path) -> Path:
+    """Where this workspace's overrides.db lives: inside its own root,
+    under a hidden .jobtracker/ folder — never in this app's private
+    storage. This is the single source of truth for the path; _load_raw()
+    recomputes it from `root` for every entry on every load rather than
+    trusting whatever's stored in workspaces.json, so a workspace's notes
+    always follow wherever its root currently points."""
+    return root / OVERRIDES_DIRNAME / OVERRIDES_DB_FILENAME
+
+
+def _migrate_ov_db_if_needed(entry: dict) -> None:
+    """One-time, best-effort move of a workspace's overrides.db from its
+    old (pre-portability) location — this app's own private storage,
+    wherever `entry["ov_db_path"]` used to point — into the workspace's
+    own root. Safe to call on every _load_raw(): once the old file is
+    gone, later calls are just an existence check and a no-op. Never
+    raises — a failed migration should never break the app or the
+    registry load that triggered it; worst case the old file just sits
+    there untouched and gets picked up on a later run.
+
+    Skips the move (rather than overwriting) if something's already at
+    the new location — e.g. a linked folder that was previously exported
+    from this same app and already has its own .jobtracker/overrides.db
+    — so this never clobbers real data with an empty/older file."""
+    old_path_str = entry.get("ov_db_path")
+    if not old_path_str:
+        return
+    root = Path(entry["root"])
+    old_path = Path(old_path_str)
+    new_path = _portable_ov_db_path(root)
+    if old_path == new_path or not old_path.exists() or new_path.exists():
+        return
+    try:
+        new_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(old_path), str(new_path))
+        # SQLite's WAL mode can leave -wal/-shm sidecars next to the db
+        # with uncommitted-but-checkpointed data if the app wasn't closed
+        # cleanly — bring those along too so nothing is silently dropped.
+        for suffix in ("-wal", "-shm"):
+            sidecar = Path(old_path_str + suffix)
+            if sidecar.exists():
+                shutil.move(str(sidecar), str(new_path) + suffix)
+    except OSError:
+        pass
+
+
 def _default_entry() -> dict:
+    root = ORIGINAL_ROOT
     return {
         "id": DEFAULT_ID,
         "name": DEFAULT_NAME,
-        "root": str(ORIGINAL_ROOT),
+        "root": str(root),
         "db_path": str(APP_DIR / "jobtracker.db"),
-        "ov_db_path": str(APP_DIR / "overrides.db"),
+        "ov_db_path": str(_portable_ov_db_path(root)),
         "created": _now_iso(),
         "kind": "owned",
     }
@@ -125,6 +193,19 @@ def _load_raw() -> dict:
         # an import), so "owned" is the correct backfill, including for
         # "default" itself.
         entry.setdefault("kind", "owned")
+        # Upgrade path for entries saved before overrides.db became
+        # portable: move the file into the workspace's own root the
+        # first time it's seen, then always resolve ov_db_path fresh
+        # from `root` rather than trusting whatever's stored — see
+        # _portable_ov_db_path()/_migrate_ov_db_if_needed() above. This
+        # intentionally doesn't persist the updated path back to
+        # workspaces.json here (that would mean writing from inside a
+        # read path, which every caller of _load_raw() relies on being
+        # side-effect-free) — it's simply recomputed on every load,
+        # which is equally correct and gets written out for free the
+        # next time any mutating call below happens to save this entry.
+        _migrate_ov_db_if_needed(entry)
+        entry["ov_db_path"] = str(_portable_ov_db_path(Path(entry["root"])))
     data.setdefault("active", DEFAULT_ID if not IS_PACKAGED else None)
     if data["active"] is not None and data["active"] not in data["workspaces"]:
         data["active"] = DEFAULT_ID if (not IS_PACKAGED and DEFAULT_ID in data["workspaces"]) else None
@@ -149,14 +230,27 @@ def bootstrap() -> None:
 
 
 def list_workspaces() -> dict:
-    """{'active': <id-or-None>, 'workspaces': [{id,name,root,created,kind}, ...]}
-    (db_path/ov_db_path deliberately omitted from the list view — those
-    are internal, the frontend never needs them). active is None only in
-    packaged mode before the first tracker is linked/created — the
-    frontend/launcher treat that as "show the picker", not an error."""
+    """{'active': <id-or-None>, 'workspaces': [{id,name,root,created,kind,
+    has_portable_overrides}, ...]} (db_path/ov_db_path deliberately
+    omitted from the list view — those are internal, the frontend never
+    needs them). active is None only in packaged mode before the first
+    tracker is linked/created — the frontend/launcher treat that as
+    "show the picker", not an error.
+
+    has_portable_overrides powers the workspace status card (a "linked
+    folder" vs. "JobTracker-owned copy" + "notes stored with tracker"
+    checkmark) purely from data that already exists here -- no new
+    storage, see kind and _portable_ov_db_path()."""
     data = _load_raw()
     entries = [
-        {"id": w["id"], "name": w["name"], "root": w["root"], "created": w["created"], "kind": w.get("kind", "owned")}
+        {
+            "id": w["id"],
+            "name": w["name"],
+            "root": w["root"],
+            "created": w["created"],
+            "kind": w.get("kind", "owned"),
+            "has_portable_overrides": _portable_ov_db_path(Path(w["root"])).is_file(),
+        }
         for w in data["workspaces"].values()
     ]
     entries.sort(key=lambda w: (w["id"] != DEFAULT_ID, w["created"]))
@@ -272,13 +366,136 @@ def create_workspace(name: str) -> dict:
             "name": clean_name,
             "root": str(root),
             "db_path": str(ws_dir / "jobtracker.db"),
-            "ov_db_path": str(ws_dir / "overrides.db"),
+            "ov_db_path": str(_portable_ov_db_path(root)),
             "created": _now_iso(),
             "kind": "owned",
         }
         data["workspaces"][workspace_id] = entry
         _save_raw(data)
         return entry
+
+
+# Cap file scanning in inspect_folder() so pointing it at an enormous
+# folder (a whole Documents tree, an old Time Machine mount, etc.) can't
+# hang the picker -- callers only need a rough sense of "is there
+# anything here", not an exact count.
+_INSPECT_FILE_SCAN_CAP = 2000
+
+
+def _matches_known_section(top_level_name: str) -> bool:
+    """True if `top_level_name` matches one of classify.py's own
+    SECTION_RULES (Applications, Certifications, References, ...) --
+    the exact same rules build_index.py uses, so a folder this function
+    calls tracker-shaped is one a real rebuild would actually recognize,
+    not a separate guess that could disagree with it."""
+    return any(pattern.search(top_level_name) for pattern, _ in SECTION_RULES)
+
+
+def inspect_folder(folder: str | Path) -> dict:
+    """Read-only preview of what linking/importing `folder` would mean,
+    called by the API *before* any workspace is created -- so the picker
+    (first-run.html, and the in-app "Link existing folder" flow) can show
+    the user what's actually there instead of linking blind. This is the
+    fix for the exact failure mode of manually shuttling files in
+    Terminal because the app gave no feedback about what it found: now
+    there's a preview step in between "pick a folder" and "commit to it".
+
+    Never writes anything and never raises WorkspaceError -- a bad path
+    is reported back via the "error" key instead, since this is meant to
+    render inline in a preview panel, not abort a request.
+
+    Returns a dict:
+        exists              -- False if the path doesn't exist or isn't
+                                a directory (see "error" for why)
+        error               -- human-readable reason, or None
+        is_empty            -- no non-ignored files found anywhere inside
+        file_count          -- non-ignored files found, capped at
+                                _INSPECT_FILE_SCAN_CAP
+        capped              -- True if file_count hit the cap (there may
+                                be more)
+        looks_like_tracker  -- at least one top-level folder matches a
+                                known section name (Applications,
+                                Certifications, References, ...)
+        has_portable_overrides -- a .jobtracker/overrides.db already
+                                sits in this folder, i.e. it's already
+                                been used as a JobTracker root (linked,
+                                exported, or unlinked-and-relinked)
+        already_linked      -- this exact folder (after resolving
+                                symlinks/relative bits) is already
+                                another workspace's root
+        already_linked_name -- that workspace's name, if already_linked
+    """
+    result = {
+        "exists": False,
+        "error": None,
+        "is_empty": True,
+        "file_count": 0,
+        "capped": False,
+        "looks_like_tracker": False,
+        "has_portable_overrides": False,
+        "already_linked": False,
+        "already_linked_name": None,
+    }
+
+    try:
+        root = Path(folder).expanduser().resolve()
+    except (OSError, RuntimeError) as exc:
+        result["error"] = f"That path isn't valid: {exc}"
+        return result
+
+    if not root.exists():
+        result["error"] = "That folder doesn't exist."
+        return result
+    if not root.is_dir():
+        result["error"] = "That's not a folder."
+        return result
+
+    result["exists"] = True
+
+    # Compare against every registered workspace's own *resolved* root
+    # (not the raw stored string), so a symlink or trailing-slash
+    # difference doesn't produce a false negative.
+    data = _load_raw()
+    for w in data["workspaces"].values():
+        try:
+            other_root = Path(w["root"]).expanduser().resolve()
+        except (OSError, RuntimeError):
+            continue
+        if other_root == root:
+            result["already_linked"] = True
+            result["already_linked_name"] = w.get("name")
+            break
+
+    result["has_portable_overrides"] = _portable_ov_db_path(root).is_file()
+
+    try:
+        top_entries = [e for e in os.listdir(root) if not should_ignore(e)]
+    except OSError as exc:
+        result["error"] = f"Couldn't read that folder: {exc}"
+        return result
+
+    result["looks_like_tracker"] = any(
+        (root / e).is_dir() and _matches_known_section(e) for e in top_entries
+    )
+
+    file_count = 0
+    capped = False
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if not should_ignore(d)]
+        for fname in filenames:
+            if should_ignore(fname):
+                continue
+            file_count += 1
+            if file_count >= _INSPECT_FILE_SCAN_CAP:
+                capped = True
+                break
+        if capped:
+            break
+
+    result["file_count"] = file_count
+    result["capped"] = capped
+    result["is_empty"] = file_count == 0
+    return result
 
 
 def link_workspace(name: str, folder: str | Path) -> dict:
@@ -323,7 +540,12 @@ def link_workspace(name: str, folder: str | Path) -> dict:
             "name": clean_name,
             "root": str(root),
             "db_path": str(ws_dir / "jobtracker.db"),
-            "ov_db_path": str(ws_dir / "overrides.db"),
+            # Portable path, not ws_dir -- if this folder already has a
+            # .jobtracker/overrides.db (e.g. it was previously exported,
+            # or unlinked and is now being relinked), that existing file
+            # is what gets used here: nothing is created or overwritten,
+            # this is just where get_conn() will find it.
+            "ov_db_path": str(_portable_ov_db_path(root)),
             "created": _now_iso(),
             "kind": "linked",
         }
@@ -378,7 +600,14 @@ def _resolve_import_dest(root: Path, resolved_root: Path, raw_relpath: str, stri
         relpath = relpath[len(strip_prefix):]
     if not relpath:
         return None
-    if any(should_ignore(part) for part in relpath.split("/")):
+    parts = relpath.split("/")
+    # Everything under .jobtracker/ (in practice, just overrides.db) is
+    # exempt from should_ignore(): it's a dotfile *and* ends in .db, both
+    # normally-ignored patterns, but this is the one dotfile that should
+    # survive an import intact -- it's how a re-imported export brings
+    # its notes/status/dates along instead of starting them over. See
+    # _portable_ov_db_path().
+    if parts[0] != OVERRIDES_DIRNAME and any(should_ignore(part) for part in parts):
         return None
     dest = (root / relpath).resolve()
     try:
@@ -409,7 +638,12 @@ def _finish_import(clean_name: str, root: Path, extracted_any: bool, empty_messa
         "name": clean_name,
         "root": str(root),
         "db_path": str(ws_dir / "jobtracker.db"),
-        "ov_db_path": str(ws_dir / "overrides.db"),
+        # Portable path. If the imported zip/folder itself contained a
+        # .jobtracker/overrides.db (see _resolve_import_dest's exemption
+        # for that path below), it's already sitting at this exact
+        # location by the time this returns -- imported notes/status
+        # survive the round trip, not just imported files.
+        "ov_db_path": str(_portable_ov_db_path(root)),
         "created": _now_iso(),
         "kind": "owned",
     }
@@ -598,6 +832,7 @@ def export_workspace_to_zip(workspace_id: str, dest_zip: Path) -> str:
     if not root.exists():
         raise WorkspaceError(f"This tracker's folder no longer exists: {root}")
 
+    overrides_dir = root / OVERRIDES_DIRNAME
     with zipfile.ZipFile(dest_zip, "w", zipfile.ZIP_DEFLATED) as zf:
         # os.walk (not Path.rglob) so ignored directories can be pruned
         # *before* descending into them, and so followlinks=False can be
@@ -610,11 +845,21 @@ def export_workspace_to_zip(workspace_id: str, dest_zip: Path) -> str:
         # that Path.rglob would follow forever, hanging the export with
         # no error and no way to tell it apart from "just slow."
         for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
-            dirnames[:] = [d for d in dirnames if not should_ignore(d)]
+            here = Path(dirpath)
+            inside_overrides = here == overrides_dir
+            # .jobtracker/ is a dotfile -- should_ignore() would normally
+            # prune it and everything in it (overrides.db also matches
+            # the .db suffix rule on top of that). It's exempted here so
+            # an export always carries your notes/status/dates along,
+            # not just your files -- see _portable_ov_db_path().
+            dirnames[:] = [
+                d for d in dirnames
+                if (here == root and d == OVERRIDES_DIRNAME) or not should_ignore(d)
+            ]
             for filename in filenames:
-                if should_ignore(filename):
+                if not inside_overrides and should_ignore(filename):
                     continue
-                file_path = Path(dirpath) / filename
+                file_path = here / filename
                 relparts = file_path.relative_to(root).parts
                 try:
                     zf.write(file_path, arcname="/".join(relparts))
@@ -653,11 +898,13 @@ def rename_workspace(workspace_id: str, new_name: str) -> dict:
 
 
 def delete_workspace(workspace_id: str) -> None:
-    """Removes the workspace from the registry, deletes its own DB pair
-    (_app/workspaces/<id>/jobtracker.db, overrides.db), and — for an
-    app-owned workspace only — sends its `root` folder to the OS
-    Trash/Recycle Bin, recoverable there, same as document/category
-    deletion elsewhere in this app.
+    """Removes the workspace from the registry, deletes its own cached
+    index (_app/workspaces/<id>/jobtracker.db — overrides.db lives
+    inside the workspace's own root now, not here, see module
+    docstring), and — for an app-owned workspace only — sends its
+    `root` folder (notes/status/dates included) to the OS Trash/Recycle
+    Bin, recoverable there, same as document/category deletion
+    elsewhere in this app.
 
     Trashing the root is safe for an "owned" workspace precisely
     because that folder is one *this app created* — a fresh sibling
@@ -715,9 +962,11 @@ def delete_workspace(workspace_id: str) -> None:
         except Exception:
             pass
 
-    # Best-effort cleanup of this workspace's own DB folder. Only ever
-    # removes _app/workspaces/<id>/, never anything under the
-    # workspace's root (already handled above).
+    # Best-effort cleanup of this workspace's own cached-index folder.
+    # Only ever removes _app/workspaces/<id>/ (just jobtracker.db these
+    # days), never anything under the workspace's root -- overrides.db
+    # lives there now and is handled above (trashed with an owned root,
+    # left untouched for a linked one).
     ws_dir = (WORKSPACES_DB_DIR / workspace_id).resolve()
     try:
         ws_dir.relative_to(WORKSPACES_DB_DIR.resolve())

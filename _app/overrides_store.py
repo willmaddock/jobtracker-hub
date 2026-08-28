@@ -11,6 +11,7 @@ Nothing in this file ever reads from or writes to your JobTracker folder.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -42,6 +43,15 @@ CREATE TABLE IF NOT EXISTS document_overrides (
     doc_type_override TEXT,      -- your correction when a filename gives classify.py no real signal
                                   -- (e.g. the AWS "2894707.pdf" resume-vs-cover-letter case) — never
                                   -- guessed automatically, and never changes the file on disk
+    updated_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS hub_settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),  -- single-row table, one per workspace
+    role TEXT,
+    location TEXT,
+    custom_links TEXT,    -- JSON: { [linkName]: {title?, url?} } — edits to built-in cards
+    custom_cards TEXT,    -- JSON: { [categoryId]: [{id, title, url, note}] } — cards you've added
     updated_at TEXT
 );
 
@@ -79,6 +89,13 @@ def _migrate(conn: sqlite3.Connection) -> None:
 
 
 def get_conn(db_path: Path) -> sqlite3.Connection:
+    # overrides.db now lives inside the workspace's own root (see
+    # workspace.py's _portable_ov_db_path), which — unlike this app's own
+    # private storage — isn't guaranteed to already have the containing
+    # folder created. A brand-new or freshly linked workspace won't have
+    # a .jobtracker/ folder yet, so make sure it exists before sqlite
+    # tries to create the file inside it.
+    db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
@@ -230,3 +247,61 @@ def delete_folder_override(conn: sqlite3.Connection, folder: str) -> None:
     ghost."""
     conn.execute("DELETE FROM folder_overrides WHERE folder = ?", (folder,))
     conn.commit()
+
+
+# --- search hub settings (role, location, and your custom cards/links) ------
+# Previously lived only in the browser's localStorage, which meant Search
+# Hub customization was tied to one device/browser profile and never
+# traveled with the tracker the way notes/statuses/aliases do. Moving it
+# in here (single-row table, same overrides.db every other override
+# lives in) makes it portable and multi-device, like everything else in
+# this file — see the module docstring at the top.
+def get_hub_settings(conn: sqlite3.Connection) -> dict:
+    row = conn.execute("SELECT * FROM hub_settings WHERE id = 1").fetchone()
+    if not row:
+        return {"role": "", "location": "", "custom_links": {}, "custom_cards": {}}
+    try:
+        custom_links = json.loads(row["custom_links"]) if row["custom_links"] else {}
+    except (TypeError, ValueError):
+        custom_links = {}
+    try:
+        custom_cards = json.loads(row["custom_cards"]) if row["custom_cards"] else {}
+    except (TypeError, ValueError):
+        custom_cards = {}
+    return {
+        "role": row["role"] or "",
+        "location": row["location"] or "",
+        "custom_links": custom_links,
+        "custom_cards": custom_cards,
+    }
+
+
+def set_hub_settings(conn: sqlite3.Connection, **fields) -> dict:
+    """Merges `fields` (any of role/location/custom_links/custom_cards)
+    into the single hub_settings row and returns the merged result —
+    same partial-update shape as upsert_override above, so the frontend
+    can save just the field that changed (e.g. typing in the role box)
+    without having to resend everything else."""
+    existing = get_hub_settings(conn)
+    merged = {**existing, **{k: v for k, v in fields.items() if v is not None}}
+    conn.execute(
+        """
+        INSERT INTO hub_settings (id, role, location, custom_links, custom_cards, updated_at)
+        VALUES (1, :role, :location, :custom_links, :custom_cards, :updated_at)
+        ON CONFLICT(id) DO UPDATE SET
+            role=excluded.role,
+            location=excluded.location,
+            custom_links=excluded.custom_links,
+            custom_cards=excluded.custom_cards,
+            updated_at=excluded.updated_at
+        """,
+        {
+            "role": merged["role"] or None,
+            "location": merged["location"] or None,
+            "custom_links": json.dumps(merged["custom_links"] or {}),
+            "custom_cards": json.dumps(merged["custom_cards"] or {}),
+            "updated_at": now_iso(),
+        },
+    )
+    conn.commit()
+    return merged
