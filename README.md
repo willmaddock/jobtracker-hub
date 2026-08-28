@@ -112,9 +112,11 @@ completely untouched by all of this — it's not a tracker, the app has no
 record of it, it's just the leftover template you copied *from*. Once
 you're comfortable with the app, it's safe to delete (plain
 `rm -rf sample-tracker` / move to Trash — nothing in the app references
-it). If you'd rather keep it around as a reference tracker instead, use
-**Import tracker → Choose a folder instead** and point it at
-`sample-tracker/` to add it to the switcher explicitly.
+it). If you'd rather keep it around as a reference tracker instead, click the
+tracker switcher (the **J** top-left) → **Use an Existing Folder**, point
+it at `sample-tracker/`, and confirm — you'll see a quick preview (doc
+count, whether it already looks like a tracker) before anything's added
+to the switcher.
 
 ## Zero-config layout: drop `_app/` inside your own tracker folder
 
@@ -200,10 +202,12 @@ escape it.
 
 The backend has a pytest suite (`tests/`) covering workspace
 linking/switching/deletion, `/api/file`'s path-traversal and symlink
-protections, and export-zip integrity. Run it from the **repository
-root** (not from inside `_app/`) — that's where `pytest.ini` and
-`requirements-dev.txt` live, and where the paths in the commands below
-resolve from:
+protections, export-zip integrity, folder-copy import (and its preview
+step), pre-link folder inspection, notes/status/hub-settings
+portability across relink and export/import, and Search Hub settings
+persistence. Run it from the **repository root** (not from inside
+`_app/`) — that's where `pytest.ini` and `requirements-dev.txt` live,
+and where the paths in the commands below resolve from:
 
 ```bash
 python3 -m venv .venv
@@ -228,14 +232,20 @@ env var set in `tests/conftest.py`) instead of your real
 real checkout without touching (or losing) any tracker you already have
 set up.
 
-A clean run reports `18 passed`:
+A clean run reports `48 passed`:
 
 ```bash
 $ pytest
 ========================= test session starts ==========================
-collected 18 items
-...
-==================== 18 passed, 1 warning in 0.34s =====================
+collected 48 items
+tests/test_export.py ...
+tests/test_file_serving.py ......
+tests/test_hub_settings.py .......
+tests/test_import_local_folder.py ........
+tests/test_overrides_portability.py ....
+tests/test_workspace_inspect.py ...........
+tests/test_workspaces.py .........
+==================== 48 passed, 1 warning in 0.90s =====================
 ```
 
 ## Two local databases, two very different lifetimes
@@ -273,6 +283,14 @@ meant to be committed.
   plus velocity and status-distribution charts.
 - **Manage** — merge companies that got split across multiple folders,
   undo a merge, and see/restore archived applications.
+- **Search Hub** — a curated directory of external job-search sites
+  (higher-ed, K-12, AI job-search assistants, government, mainstream
+  boards), grouped by category. Set your target role/location once and
+  it builds a ready-to-paste AI prompt plus per-site search links; add
+  your own custom cards or override any built-in link's title/URL.
+  Everything here is saved server-side (`overrides.db`, same as your
+  notes) via `/api/hub/settings`, so it travels with the tracker through
+  export/import instead of being pinned to one browser.
 
 ## Power-user features
 
@@ -302,15 +320,37 @@ meant to be committed.
 
 ## Multiple trackers / a second, independent installation
 
-- **A second tracker inside the same running app**: use the tracker
-  switcher in the UI to create a sibling tracker with its own root and
-  database pair — no copying, no second server.
-- **A genuinely separate installation**: copy `_app/` into any other
-  folder you want to track (a different computer, a different repo,
-  someone else's setup entirely) — leave `jobtracker.db`, `overrides.db`,
-  `workspaces.json`, `workspaces/`, and `__pycache__/` behind, since those
-  are this tracker's own local state, not code. It auto-detects its root
-  as whatever folder `_app/` is sitting inside, exactly like the original.
+The tracker switcher (click the **J** top-left, or the first-run screen
+if you have no tracker yet) offers three ways to add one:
+
+- **Create New Tracker** — a blank tracker with an empty `Applications/`
+  folder, owned by the app.
+- **Import a Copy** — copies an existing folder's contents (or a `.zip`
+  export) into a new, independent tracker; the original folder is never
+  modified.
+- **Use an Existing Folder** *(packaged `.dmg` build only — browsers
+  can't hand JavaScript a raw filesystem path)* — points a tracker
+  directly at a folder in place, nothing is copied or moved.
+
+In the packaged desktop app, both **Import a Copy**'s "Choose a folder
+instead" option and **Use an Existing Folder** show a preview — file
+count, whether the folder already looks JobTracker-shaped and would
+bring its notes/statuses/dates along, whether it's empty — before
+anything happens, so you can back out and pick a different folder
+instead of committing blind. The one difference: a folder that's
+*already linked as another tracker* is a hard block for **Use an
+Existing Folder** (two trackers can't safely share one live folder) but
+only a soft warning for **Import a Copy** (copying a tracked folder is
+harmless). In the browser, folder import still works via your OS's
+folder picker, just without that preview step first.
+
+**A genuinely separate installation**, outside this app's UI entirely:
+copy `_app/` into any other folder you want to track (a different
+computer, a different repo, someone else's setup entirely) — leave
+`jobtracker.db`, `overrides.db`, `workspaces.json`, `workspaces/`, and
+`__pycache__/` behind, since those are this tracker's own local state,
+not code. It auto-detects its root as whatever folder `_app/` is sitting
+inside, exactly like the original.
 
 **Fixing a tracker named "JobTracker — JobTracker — \<name\>":** versions
 before this fix could double-prefix an owned tracker's name/folder if you
@@ -340,21 +380,38 @@ Backend:
   "effective" status/company/staleness the app renders; computes Insights
   metrics; exposes `DEFAULT_ROOT` (`_app/`'s parent folder).
 - `overrides_store.py` — your durable local data (notes, manual status,
-  dates, merges) — `overrides.db`.
+  dates, merges, and Search Hub settings) — `overrides.db`. Lives inside
+  each tracker's own `.jobtracker/` folder so it travels with the folder
+  through relink and export/import.
 - `build_index.py` — the filesystem parser; also runnable standalone:
   `python build_index.py` (defaults to `DEFAULT_ROOT`) or
   `python build_index.py /explicit/path`. Produces `jobtracker.db`.
 - `classify.py` / `classify_config.json` — classification heuristics
   (section mapping, doc type, status inference, ignore rules) — see
   "Customizing classification" above.
-- `workspace.py` — multiple-tracker/workspace bookkeeping.
+- `workspace.py` — multiple-tracker/workspace bookkeeping: create, link,
+  import (zip/upload/local-folder copy), switch, rename, delete, export,
+  and `inspect_folder()` — the pick-a-folder preview used by both the
+  link and import flows (doc count, tracker-shaped detection, already-
+  linked-elsewhere detection).
 - `labels.py` — the section/doc-type display labels the frontend renders.
 - `api.py` — FastAPI server exposing the backend as JSON, and serving
-  the frontend itself.
+  the frontend itself. Includes `/api/workspaces/inspect`,
+  `/api/workspaces/import-folder-local` (packaged-desktop folder copy),
+  and `/api/hub/settings` (Search Hub persistence).
 
 Frontend:
 - `frontend/index.html` — the dark master-detail + Kanban UI described
   above. Single file, React from a CDN, no build tooling required.
+
+Desktop packaging:
+- `desktop/launcher.py` — the pywebview bridge (`Api` class) the packaged
+  `.dmg` build talks to for native folder pickers: `pick_folder`,
+  `inspect_folder`, `confirm_link_folder`, `confirm_import_folder`, and
+  `confirm_first_run_link` back the same pick → preview → confirm flow
+  described in "Multiple trackers" above.
+- `desktop/first_run.html` — the first-run window shown before any
+  tracker exists in a fresh packaged install.
 
 Documentation:
 - `docs/JobTracker_User_Guide.pdf` — the full user guide.
