@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-3fb950?style=for-the-badge)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-macOS-lightgrey?style=for-the-badge&logo=apple&logoColor=white)](#-download-for-macos)
 
-**v1.0.0**
+**v1.1.0**
 
 A local, private dashboard over a folder of job-application documents you
 already keep on disk — a real pipeline view (list + drag-and-drop Kanban),

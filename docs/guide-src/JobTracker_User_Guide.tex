@@ -1,8 +1,6 @@
 \documentclass[11pt]{article}
 
-% JobTracker Hub User Guide
-% Design direction adapted from Overleaf's "Technical Document Template"
-% (https://www.overleaf.com/latex/templates/technical-document-template/mdgftpdfbvbs)
+% JobTracker Hub User Guide -- v1.1.0
 
 \usepackage[T1]{fontenc}
 \usepackage[utf8]{inputenc}
@@ -36,9 +34,14 @@
   linkcolor=accentdark,
   urlcolor=accentdark,
   citecolor=accentdark,
+  bookmarks=true,
+  bookmarksopen=true,
+  bookmarksnumbered=true,
+  pdfpagemode=UseOutlines,
   pdftitle={JobTracker Hub — User Guide},
   pdfauthor={JobTracker Hub},
-  pdfsubject={Local-first job application tracking}
+  pdfsubject={Local-first job application tracking},
+  pdfkeywords={JobTracker Hub,user guide,job applications,local-first,workflow}
 }
 
 \pagestyle{fancy}
@@ -135,16 +138,40 @@ License & MIT (see repository \file{LICENSE}).
 \end{tabularx}
 \vfill
 \textbf{Repository:} JobTracker Hub — this guide lives in \file{docs/} alongside the code it documents.\par
-\textbf{Guide version:} 1.7 \quad | \quad \textbf{Updated:} August 28, 2026\par
+\textbf{Guide version:} 1.1.0 \quad | \quad \textbf{Updated:} August 28, 2026\par
 \vspace{0.6cm}
-{\small\color{muted} Layout direction informed by Overleaf's \emph{Technical Document Template}, adapted for JobTracker Hub.}
+{\small\color{muted} Designed as a JobTracker Hub reference manual, with a compact technical-document layout.}
 \end{titlepage}
 
 \setcounter{tocdepth}{1}
 \tableofcontents
+
+\pdfbookmark[1]{Quick Navigation}{quick-navigation}
+\begin{infobox}
+\textbf{Quick Navigation — jump to the task you need.} The PDF table of contents and bookmarks are clickable. If you are new to JobTracker Hub, start with installation or the quick start, then use the task links below as your day-to-day map.
+\vspace{3pt}
+\small\begin{tabularx}{\linewidth}{@{}>{\bfseries}p{0.36\linewidth}X@{}}
+Install the Mac app & \hyperref[subsec:macos]{Installing the macOS desktop app} \\
+Start with your existing folder & \hyperref[subsec:workspaces-create]{Creating and importing trackers} \\
+Understand the dashboard & \hyperref[sec:dashboard]{The Web Dashboard} \\
+Check an import before committing & \hyperref[subsec:import-preview]{Import preview and validation} \\
+Understand and back up your data & \hyperref[subsec:database]{Database management and local storage} \\
+Build a simple daily routine & \hyperref[sec:daily]{A Recommended Daily Workflow} \\
+Something went wrong & \hyperref[sec:troubleshooting]{Troubleshooting} \\
+Contributing or inspecting the repository & \hyperref[sec:contributors]{Appendix A --- Repository Map for Contributors}
+\end{tabularx}
+\end{infobox}
 \newpage
 
-\section{Start Here}
+\section{Start Here}\label{sec:start}
+
+\subsection{Release overview}
+
+\begin{infobox}
+\textbf{JobTracker Hub 1.1.0.} This release refines the desktop and web workflows around workspace health, import validation, and durable local data. It also documents the macOS DMG installation path and the safeguards used when importing folders or archives.
+\end{infobox}
+
+The 1.1.0 guide covers the current status cards, the multi-step import preview, persistent \file{overrides.db} tracking data, and the packaged macOS installation flow. The underlying design remains local-first: the application works with documents on your filesystem and keeps tracking state in local storage.
 
 \subsection{What JobTracker Hub actually does}
 
@@ -182,7 +209,7 @@ uvicorn api:app --reload --port 8000
 
 The frontend's requests are relative to that origin, so open the app at \url{http://127.0.0.1:8000} rather than opening \file{frontend/index.html} directly as a file — a bare file won't be able to reach the API.
 
-\subsection{Installing the macOS desktop app}
+\subsection{Installing the macOS desktop app}\label{subsec:macos}
 
 If you were given a \file{JobTracker Hub.dmg} instead of the repository, you don't need Python, a virtual environment, or a terminal at all — the desktop build packages the backend and frontend together into a single double-clickable app.
 
@@ -219,7 +246,7 @@ Below the main drag-and-drop row, the same window has two optional shortcuts tha
 You only need to do this once — macOS remembers your choice for future launches.
 \end{warningbox}
 
-Unlike the command-line install, the desktop app writes its data to a per-user Application Support folder rather than next to the code, since the installed \file{.app} bundle itself is read-only:
+Unlike the command-line install, the desktop app keeps its app-level writable state in a per-user Application Support folder rather than next to the code, since the installed \file{.app} bundle itself is read-only. Tracker-owned durable data remains with the tracker, as described in Section~8.2:
 
 \begin{codebox}
 \begin{lstlisting}
@@ -232,7 +259,7 @@ See Section~\ref{sec:troubleshooting} if the app doesn't open, or opens to a bla
 \subsection{Requirements}
 
 \begin{itemize}
-  \item Python 3.9 or newer.
+  \item Python 3.10 or newer is recommended; use the same Python 3 version for the application and test environments.
   \item A modern web browser for the web UI.
   \item A local filesystem containing the documents you want to track.
 \end{itemize}
@@ -241,7 +268,7 @@ See Section~\ref{sec:troubleshooting} if the app doesn't open, or opens to a bla
 
 JobTracker runs as a single FastAPI process, \cmd{uvicorn api:app --port 8000}, which both exposes the backend as JSON and serves the frontend (\file{frontend/index.html}) itself. Open \cmd{http://127.0.0.1:8000} in your browser — the frontend's requests are relative to that origin, so it needs to be loaded from the running server rather than opened as a bare file. This gets you the full feature set: the dark master-detail UI, Kanban, command palette, document operations, and workspaces.
 
-\section{How Your Folder Becomes a Tracker}
+\section{How Your Folder Becomes a Tracker}\label{sec:folder}
 
 \subsection{The recommended layout}
 
@@ -278,7 +305,7 @@ The filesystem walker deliberately skips the application's own \file{_app/} dire
 
 Under \file{Applications/}, the standard grouping is based on the folder hierarchy. In the common case, the company folder is the company and the next role folder becomes the role label. That means you can organize documents naturally instead of entering every document into a separate form.
 
-\section{First Build: What to Expect}
+\section{First Build: What to Expect}\label{sec:build}
 
 When you click \app{Build index}, JobTracker walks the tracker root and rebuilds the disposable index from the files currently on disk.
 
@@ -318,7 +345,7 @@ This is the file to customize first. The generic classifier in \file{classify.py
 
 After changing classification rules, rebuild the index. Your \file{overrides.db} is not rewritten by that rebuild.
 
-\section{The Web Dashboard}
+\section{The Web Dashboard}\label{sec:dashboard}
 
 The web UI is the recommended interface because it exposes the full workflow in one place.
 
@@ -342,6 +369,23 @@ Dropping a card into a different Kanban column updates the status immediately.
 \screenshot{images/pipeline-list.png}{The Pipeline in list view: status counts, filters, and the detail pane for the selected application.}
 
 \screenshot{images/pipeline-kanban.png}{The same Pipeline in Kanban view — drag a card between columns, or use each card's status dropdown.}
+
+\subsection{Workspace status cards}
+
+The dashboard status cards provide a real-time summary of the active workspace. They are intended to answer the quick health questions you would otherwise have to reconstruct from several views: how much data is indexed, what needs attention, and whether the workspace is ready for normal use.
+
+The cards update as the current workspace changes and should be read as operational indicators rather than permanent historical records. After adding, moving, or importing documents, rebuild the index when prompted or when the dashboard needs to reflect filesystem changes.
+
+\begin{itemize}
+  \item \textbf{Volume and index metrics} summarize the records currently known to the workspace.
+  \item \textbf{Pipeline metrics} show the current distribution of tracked applications and their statuses.
+  \item \textbf{Attention metrics} surface stale or due work that may require follow-up.
+  \item \textbf{Workspace health} helps distinguish a healthy, populated workspace from one that still needs an initial build, import confirmation, or other setup step.
+\end{itemize}
+
+\begin{infobox}
+\textbf{Use the cards as a first check.} If a count looks unexpectedly low after a filesystem change, do not assume data was deleted. Check the workspace and rebuild the disposable index before changing durable tracking state.
+\end{infobox}
 
 \subsection{Needs Attention}
 
@@ -381,7 +425,14 @@ Set your \textbf{target role} and \textbf{location} once at the top of the page 
   \item Add your own custom cards, or override any built-in card's title or URL, with \app{Reset all to defaults} available if you want to start over.
 \end{itemize}
 
-\screenshot[0.9\textwidth]{images/search-hub.png}{Part of the AI-powered job search \& career assistants row in Search Hub.}
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.9\textwidth]{images/search-hub.png}
+  \caption{Search Hub with the AI-powered job-search and career-assistant resources.}
+  \label{fig:search-hub}
+\end{figure}
+
+
 
 Everything here — your target role/location, custom cards, and overrides — is saved server-side with the rest of your tracker's data, so it travels with the tracker through export and import instead of being pinned to one browser.
 
@@ -414,7 +465,7 @@ Everything here — your target role/location, custom cards, and overrides — i
 
 Company merges affect the application's logical view; they do not require you to rename the underlying files.
 
-\section{Working With Documents}
+\section{Working With Documents}\label{sec:documents}
 
 \subsection{Upload}
 
@@ -440,7 +491,7 @@ Delete operations are designed around the operating system Trash rather than a p
 
 The web app can open supported PDFs in a side drawer and can preview DOCX content through the backend's document-preview path. Text-based sources are also surfaced where appropriate.
 
-\section{Command Palette and Keyboard Workflow}
+\section{Command Palette and Keyboard Workflow}\label{sec:keyboard}
 
 The web UI includes a command palette:
 
@@ -460,25 +511,41 @@ Shortcut & Action \\
 
 The command palette also exposes view jumps, application search, and the rebuild action.
 
-\section{Multiple Trackers and Workspaces}
+\section{Multiple Trackers and Workspaces}\label{sec:workspaces}
 
 A single running JobTracker instance can manage more than one tracker through its workspace switcher — click the \app{J} logo, top-left, to open it. Every tracker you have is listed there, with a checkmark on the active one; clicking a different row switches to it instantly. Switching does not start a second server or duplicate the running application — it repoints the one running instance at a different data folder and database pair.
 
 \screenshot[0.5\textwidth]{images/switcher-collapsed.png}{The tracker switcher. Each row has rename (pencil) and export (download) actions; every tracker but the first can also be deleted.}
 
-\subsection{Creating and importing trackers}
+\subsection{Creating and importing trackers}\label{subsec:workspaces-create}
 
 The switcher offers up to three ways to add a tracker, depending on how you're running JobTracker Hub:
 
 \begin{itemize}
   \item \app{Create New Tracker} starts a fresh, empty tracker as a sibling folder next to your original one.
-  \item \app{Import a Copy} brings in an existing folder of documents as a new, independent tracker. Drag a \file{.zip} export onto the dropzone (or click to browse to one), or click \app{Choose a folder instead} to pick a folder directly — picking a folder shows the same preview described in Section~3.2 before anything is copied, so there's no need to also use the \app{Import a Copy} button for folders; that one is for \file{.zip} files only.
+  \item \app{Import a Copy} brings an existing folder of documents or a \file{.zip} export into a new, independent tracker. Use the dropzone for a \file{.zip}, or choose \app{Choose a folder instead} for a folder. In the packaged desktop app, the folder path uses the same preview-before-commit safety step described in Section~3.2.
   \item \app{Use an Existing Folder} (desktop app only) points a new tracker straight at a folder in place — nothing is copied. It's the same pick-preview-confirm flow as first launch, just reachable again later from the switcher.
 \end{itemize}
 
 All three paths apply the same filtering — the application's own \file{_app/} directory is never carried into a new tracker, even if it happens to be present in what you're importing or linking.
 
 \screenshot[0.5\textwidth]{images/new-import-panel.png}{The switcher's \app{Import a Copy} panel, with both \file{.zip} and folder import options.}
+
+\subsection{Import preview and validation}\label{subsec:import-preview}
+
+Folder and archive imports use a preview-first workflow. The preview is deliberately separate from the final import so that you can inspect what JobTracker found before records are written into the destination workspace.
+
+\begin{enumerate}
+  \item \textbf{Choose the source.} Select a \file{.zip} export or choose a folder directly, depending on the import path available in your build.
+  \item \textbf{Review the preview.} JobTracker scans the source and presents the detected tracker contents before committing the import.
+  \item \textbf{Validate the records.} Check the proposed tracker name, source contents, application/document counts, and any warnings or exclusions shown by the preview.
+  \item \textbf{Confirm the import.} Click \app{Use this folder} for a folder-based import, or the corresponding import confirmation control for an archive. Nothing should be treated as accepted until you explicitly confirm.
+  \item \textbf{Open and verify.} After import, open the new workspace and confirm that the expected documents and application records are present. Rebuild the index if the source changed while you were reviewing it.
+\end{enumerate}
+
+\begin{warningbox}
+\textbf{Preview before commit.} The preview is the safety boundary for an import. If the source, counts, or proposed destination do not look right, choose a different source rather than confirming and trying to repair the workspace afterward.
+\end{warningbox}
 
 \subsection{Exporting and deleting a tracker}
 
@@ -490,15 +557,40 @@ All three paths apply the same filtering — the application's own \file{_app/} 
 \textbf{Keep the distinction clear:} a workspace is a logical tracker inside the running application; a separate installation is a separate copy of the application code and its local databases, made by copying \file{_app/} into another tracker root.
 \end{infobox}
 
-\section{Privacy and Local Data}
+\section{Privacy and Local Data}\label{sec:data}
 
 JobTracker Hub is designed around local execution.
 
 \subsection{Network surface}
 
-The API is configured to bind to \file{127.0.0.1}/localhost. The web frontend talks to that local server, and CORS is restricted to localhost origins plus the \file{file://} origin used when opening the static frontend directly.
+The API is configured to bind to \file{127.0.0.1}/localhost. The web frontend is served by that same local FastAPI process and should be opened through \cmd{http://127.0.0.1:8000}, not as a bare local HTML file.
 
 This architecture means the repository itself does not require a hosted backend, login, or cloud account.
+
+\subsection{Database management and local storage}\label{subsec:database}
+
+\file{overrides.db} is the durable tracking database. It stores user-owned state such as manual status changes, notes, applied dates, next actions, snoozes, archives, company merges, and Search Hub settings. In contrast, \file{jobtracker.db} is the disposable index that is rebuilt from the filesystem. Rebuilding the index does not rewrite \file{overrides.db}.
+
+The current repository documentation places each tracker's durable overrides database inside that tracker's own \file{.jobtracker/} directory. In other words, for a tracker rooted at \file{MyTracker/}, the standard tracker-local path is:
+
+\begin{codebox}
+\begin{lstlisting}
+MyTracker/.jobtracker/overrides.db
+\end{lstlisting}
+\end{codebox}
+
+This tracker-local arrangement is intentionally portable across operating systems: the database travels with the tracker rather than being tied to a particular user's home directory. The packaged macOS application also has per-user application state outside its read-only \file{.app} bundle; use \app{Settings > Diagnostics} to see the active state directory when troubleshooting or making a complete application-state backup.
+
+Do not assume that copying only \file{overrides.db} is a complete backup. It contains the tracking metadata, while the documents it describes remain in the tracker filesystem.
+
+\subsubsection{Backup recommendations}
+
+\begin{itemize}
+  \item Back up \file{overrides.db} together with the tracker documents it describes. The database alone is not a substitute for the underlying filesystem.
+  \item Prefer a copy made while JobTracker is not actively writing to the database, or otherwise use the application's supported export workflow.
+  \item Keep at least one backup outside the active tracker folder so accidental deletion or filesystem corruption does not remove both copies.
+  \item Before a major migration or reinstall, export the tracker and retain the resulting archive in addition to your normal document backup.
+\end{itemize}
 
 \subsection{What is stored locally}
 
@@ -516,7 +608,7 @@ This architecture means the repository itself does not require a hosted backend,
 
 These files are gitignored in the repository because they can contain personal job-search data.
 
-\section{A Recommended Daily Workflow}
+\section{A Recommended Daily Workflow}\label{sec:daily}
 
 The software becomes most useful when the filesystem and the tracking metadata have complementary jobs.
 
@@ -578,9 +670,15 @@ Then refresh the frontend.
 
 First check whether it is hidden because it is a source file such as \file{.tex}. Then rebuild the index. Also check whether the filename, folder, or extension matches one of the ignored patterns documented in \file{classify.py}.
 
-\section{Repository Map for Contributors}
+\section{License}\label{sec:license}
 
-The current repository keeps the implementation intentionally small and readable:
+JobTracker Hub is distributed under the MIT License. See the repository's \file{LICENSE} file for the authoritative license text.
+
+\appendix
+
+\section{Repository Map for Contributors}\label{sec:contributors}
+
+This appendix is intentionally outside the primary user journey. It is useful when maintaining, packaging, or extending JobTracker Hub, but most users never need it. The current repository keeps the implementation intentionally small and readable:
 
 \begin{center}
 \begin{tabularx}{\textwidth}{@{}lX@{}}
@@ -596,6 +694,9 @@ The current repository keeps the implementation intentionally small and readable
 \file{_app/frontend/index.html} & Single-file React-based web frontend, loaded from a CDN. \\
 \file{_app/workspace.py} & Multiple-tracker/workspace bookkeeping. \\
 \file{_app/labels.py} & Section and document-type display labels used by the frontend. \\
+\file{desktop/launcher.py} & pywebview bridge for native folder pickers and preview/confirm operations. \\
+\file{desktop/first_run.html} & First-run window for a fresh packaged desktop install. \\
+\file{scripts/fix_doubled_tracker_names.py} & One-off cleanup for older doubled tracker names; dry run by default. \\
 \file{sample-tracker/} & Safe fake data for first-run exploration. \\
 \bottomrule
 \end{tabularx}
@@ -612,28 +713,12 @@ JobTracker can manipulate real files, so a few conventions are intentionally str
   \item The sample tracker uses fake organizations and placeholder content so you can test without exposing real applications.
 \end{itemize}
 
-\section{License}
+\section{Release Notes for 1.1.0}
 
-JobTracker Hub is distributed under the MIT License. See the repository's \file{LICENSE} file for the authoritative license text.
+This guide is aligned to the repository README supplied with JobTracker Hub 1.1.0. The release documentation covers the current macOS DMG installation and Gatekeeper flow, the tracker switcher and preview-first import/link workflow, durable local tracking data in \file{overrides.db}, Search Hub persistence, and the current packaging/test commands.
 
-\section*{Source and Design Notes}
+The guide also documents the workspace status cards and import validation sequence in more detail so that the user-facing manual explains the same current workflows from the perspective of someone operating the application.
 
-This guide was written against the repository snapshot supplied with the project on August 25, 2026. Feature descriptions are based on the repository README and the implementation in \file{_app/}. The visual direction was adapted from Overleaf's \emph{Technical Document Template}, an example software-manual template published in the Overleaf template gallery.\footnote{Overleaf, \emph{Technical Document Template}, \url{https://www.overleaf.com/latex/templates/technical-document-template/mdgftpdfbvbs}.}
-
-The guide deliberately describes the behavior that the current code establishes rather than carrying forward features from an earlier draft. In particular, the application is a single FastAPI web app (Streamlit has been retired — see \textit{Revision 1.2} below) with multiple workspaces/trackers (with per-tracker export and Trash-based delete), Needs Attention triage, local document operations, configurable folder classification, and local SQLite state.
-
-\textit{Revision 1.1} adds screenshots of the Pipeline (list and Kanban), Needs Attention, and the tracker switcher, and rewrites Section~7 to match the switcher's current export and delete behavior.
-
-\textit{Revision 1.2} removes the Streamlit interface from this guide. The repository's \file{app.py}, \file{ui.py}, and \file{views_*.py} were deleted; the two label dicts the web app actually depended on moved to a new, dependency-free \file{labels.py}. The web app was already the more capable interface (see Section~4) and never needed Streamlit to run — \file{api.py} serves \file{frontend/index.html} itself, so \textit{running it} is now a single command and a single address rather than a choice between two interfaces.
-
-\textit{Revision 1.3} adds Section~3.2, \textbf{Installing the macOS desktop app}, covering the \file{.dmg} drag-to-Applications install flow and first-launch folder picker, and adds a Troubleshooting entry for the desktop app's startup log and the new Settings~\textgreater~Diagnostics panel.
-
-\textit{Revision 1.4} documents the \app{Learn More} and \app{User Guide} shortcuts added to the installer window below the main drag-and-drop row, and redraws the installer-window figure with higher-contrast labels.
-
-\textit{Revision 1.5} corrects the installer-window figure and \file{package-dmg.sh} icon positions: the \app{Optional extras} row was drawn 40px lower than where Finder actually places those icons, causing the row-2 icons to overlap the caption above them on a real build. Verified against a screenshot of an actual install.
-
-\textit{Revision 1.6} rewrites the Gatekeeper warning box in Section~3.2 to match the actual first-launch dialog (titled "Not Opened," offering only \textbf{Move to Trash} and \textbf{Done} — no \textbf{Open Anyway} button), replacing the previous "App is damaged" wording. Adds the explicit \textbf{Done}, then right-click \textbf{Open}, then \textbf{System Settings \textgreater{} Privacy \& Security \textgreater{} Open Anyway} fallback sequence, verified against screenshots of an actual blocked launch.
-
-\textit{Revision 1.7} updates Section~3.2's first-launch description and adds a screenshot of the folder preview step, which was previously undocumented. Adds a new \textbf{Search Hub} subsection to Section~4 describing the external job-board directory, target role/AI prompt, and custom cards, with a screenshot of the AI-assistant cards. Rewrites Section~7.1 (\textbf{Creating and importing trackers}) to match the switcher's current button labels (\app{Create New Tracker}, \app{Import a Copy}, and the desktop-only \app{Use an Existing Folder}) and documents the folder-preview step shared with first launch. Replaces the tracker-switcher and import-panel figures, both of which still showed a retired "New tracker"/"Import tracker" button design. Adds a Settings~\textgreater~Diagnostics screenshot to Section~10.1.
+For future releases, update this section and the guide version metadata together with the repository README and the shipped PDF.
 
 \end{document}

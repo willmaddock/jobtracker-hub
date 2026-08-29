@@ -374,6 +374,7 @@
     color:var(--text);padding:10px 16px;border-radius:8px;font-size:12.5px;box-shadow:0 8px 24px #0004;}
   .toast.undo-toast{display:flex;align-items:center;gap:12px;border-color:var(--accent-soft);}
   .toast.error-toast{display:flex;align-items:flex-start;gap:12px;border-color:#EF444488;background:#EF444414;max-width:420px;line-height:1.4;}
+  .toast.success-toast{display:flex;align-items:flex-start;gap:12px;border-color:#10B98155;background:#10B98118;color:var(--green-text);max-width:420px;line-height:1.4;}
   .toast-undo-btn{background:none;border:none;color:var(--accent-soft);font-weight:700;font-size:12.5px;padding:0;cursor:pointer;flex:none;white-space:nowrap;}
   .toast-undo-btn:hover{text-decoration:underline;}
 
@@ -434,9 +435,22 @@ const {useState, useEffect, useMemo, useCallback, useRef, useContext} = React;
 // Same-origin: the frontend is served by api.py's StaticFiles mount, so
 // every request is a plain relative fetch — no host to configure, no CORS.
 const API_BASE = "";
-const APP_VERSION = "1.0.0";
+const APP_VERSION = "1.1.0";
 const CACHE_KEY = "jth_cache_v1";
 const THEME_KEY = "jth_theme";
+// Written by any import flow right before window.location.reload() (a
+// reload wipes React state, so an in-memory toast fired pre-reload would
+// never actually be seen) -- read once by App on mount, then cleared, so
+// the right post-import toast survives the reload. Values: "zip-success"
+// (a .zip import -- notes/statuses/dates travel via .jobtracker/overrides.db,
+// which zipfile preserves like any other entry) or "folder-warning" (the
+// browser folder-picker path -- browsers never include dotfiles in a
+// webkitdirectory upload, so .jobtracker/overrides.db can't come across
+// that way no matter what the server does with what it's given). Native
+// desktop folder import (packaged app, real filesystem path) does NOT use
+// this -- it reads the folder directly and does carry dotfiles across, so
+// it gets no warning.
+const IMPORT_NOTICE_KEY = "jth_import_notice";
 
 const NAV_ICONS = {
   pipeline: "\u{1F4CA}",   // 📊
@@ -911,6 +925,9 @@ function WorkspacePopover({onClose, anchorRef, packaged, statusInfo}){
       }
       const res = await fetch(`${API_BASE}${path}`, {method: "POST", body: form});
       if (!res.ok) { const t = await res.text(); throw new Error(extractErrorMessage(t, res.statusText)); }
+      // Only set on success, right before the reload that would otherwise
+      // wipe it -- see IMPORT_NOTICE_KEY.
+      try { sessionStorage.setItem(IMPORT_NOTICE_KEY, hasFolder ? "folder-warning" : "zip-success"); } catch(e) { /* best-effort */ }
       clearCache();
       window.location.reload();
     } catch (e) { setErr(String(e.message || e)); setBusyId(null); }
@@ -3612,10 +3629,12 @@ function NoTrackerOnboarding({packaged}){
   const [linkPreview, setLinkPreview] = useState(null); // {path, name, inspection}
   const [linkPreviewBusy, setLinkPreviewBusy] = useState(false);
 
-  async function finish(promise){
+  async function finish(promise, noticeKind){
     setBusy(true); setError(null);
     try {
       await promise;
+      // Only set on success, right before the reload -- see IMPORT_NOTICE_KEY.
+      if (noticeKind) { try { sessionStorage.setItem(IMPORT_NOTICE_KEY, noticeKind); } catch(e) { /* best-effort */ } }
       clearCache();
       window.location.reload();
     } catch (e) { setError(String(e.message || e)); setBusy(false); }
@@ -3634,7 +3653,7 @@ function NoTrackerOnboarding({packaged}){
     form.append("name", n);
     form.append("file", importFile);
     finish(fetch(`${API_BASE}/api/workspaces/import`, {method: "POST", body: form})
-      .then(async res => { if (!res.ok) { const t = await res.text(); throw new Error(extractErrorMessage(t, res.statusText)); } }));
+      .then(async res => { if (!res.ok) { const t = await res.text(); throw new Error(extractErrorMessage(t, res.statusText)); } }), "zip-success");
   };
 
   // "Import a Copy of a Folder" preview state -- same pick -> inspect ->
@@ -3933,6 +3952,11 @@ function App(){
   // carry a long, specific explanation (e.g. a macOS permissions fix) that
   // needs actual read time and a manual dismiss, not a quick flash.
   const [errorToast, setErrorToast] = useState(null); // {message}
+  // Post-import toast (zip success / browser-folder-import warning) --
+  // read once from sessionStorage on mount, since it has to survive the
+  // window.location.reload() the import flow just did. See
+  // IMPORT_NOTICE_KEY above for what writes it and why.
+  const [importNotice, setImportNotice] = useState(null); // {type: "success"|"warning", message}
   const deleteTimers = useRef({});
   const [page, setPageState] = useState(initialUrl.view);
   const [selectedKey, setSelectedKeyState] = useState(initialUrl.selected);
@@ -3972,6 +3996,19 @@ function App(){
     refreshStatus().then(s => { if (s.index_built) refreshApps(); }).catch(() => {});
     const iv = setInterval(() => { refreshStatus().catch(()=>{}); }, 15000);
     return () => clearInterval(iv);
+  }, []);
+
+  // Consume the one-shot post-import notice, if the reload that brought
+  // us here was from an import flow. Cleared immediately so refreshing
+  // the page manually afterward doesn't re-show it.
+  useEffect(() => {
+    let kind = null;
+    try { kind = sessionStorage.getItem(IMPORT_NOTICE_KEY); sessionStorage.removeItem(IMPORT_NOTICE_KEY); } catch(e) { /* best-effort */ }
+    if (kind === "zip-success") {
+      setImportNotice({type: "success", message: "Zip successfully imported with all notes, statuses, and dates preserved."});
+    } else if (kind === "folder-warning") {
+      setImportNotice({type: "warning", message: "Files were imported, but any existing notes, statuses, or dates didn't come across — browsers can't include hidden files in a folder upload. Export a .zip from the original tracker for a complete copy."});
+    }
   }, []);
 
   // Keep the localStorage cache warm so the next launch paints instantly.
@@ -4274,6 +4311,12 @@ function App(){
           onSave={(newName) => renameDocument(renameDoc, newName)} />
       )}
       <div className="toast-stack">
+        {importNotice && (
+          <div className={"toast " + (importNotice.type === "success" ? "success-toast" : "error-toast")}>
+            <span>{importNotice.message}</span>
+            <button className="toast-undo-btn" onClick={() => setImportNotice(null)}>Dismiss</button>
+          </div>
+        )}
         {errorToast && (
           <div className="toast error-toast">
             <span>{errorToast.message}</span>

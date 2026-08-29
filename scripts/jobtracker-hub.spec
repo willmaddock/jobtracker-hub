@@ -84,7 +84,7 @@ app = BUNDLE(
     info_plist={
         "CFBundleName": APP_NAME,
         "CFBundleDisplayName": APP_NAME,
-        "CFBundleShortVersionString": "1.0.0",
+        "CFBundleShortVersionString": "1.1.0",
         "NSHighResolutionCapable": True,
         # This app never talks to the network except localhost -- the
         # backend binds 127.0.0.1 only (see _app/api.py's __main__
