@@ -5,7 +5,14 @@ this project. Update it before ending a session, especially near ~80–85%
 context usage. Do not reconstruct prior conversations from scratch — this file
 is the source of truth for state, findings, and next actions.
 
-Last updated: 2026-08-30 (session 9), by Claude.
+Last updated: 2026-08-30 (session 10), by Claude.
+
+**Session 10** received the `ITEM8_LIFECYCLE_OUTCOME_FDD_DRAFT.md`
+design doc directly from the user — resolving §2a's long-open "does
+this file exist" discrepancy (it didn't, until now). Design-only, no
+code; Item 8 remains explicitly paused per §2a's binding decision. See
+§23 for the full design summary and open-question status. The draft
+file itself is not yet added to the repo.
 
 **Session 9** picked up §21's open items (the stale-sibling-folders
 notice) and closed all of them: the user ran the real pytest suite
@@ -103,7 +110,18 @@ committed, or pushed anything, per §6.
 
 ## 2a. Item 8 — status
 
-> **DISCREPANCY (important):** The kickoff instructions describe
+> **UPDATE, session 10: the FDD draft now exists.** The user supplied
+> `ITEM8_LIFECYCLE_OUTCOME_FDD_DRAFT.md` directly to Claude this
+> session (design-only, no code). Everything below this note describes
+> the *earlier* state, where the draft was confirmed not to exist
+> anywhere — kept for the record, since it explains why the draft
+> wasn't just read out of the repo. **The draft itself is not yet
+> committed to the repo** (Claude only received it as an upload; per
+> §6, adding it to the actual working tree is the user's step, same as
+> every other file in this project). See §23 for the draft's full
+> content and the state of its open questions.
+>
+> **DISCREPANCY (important) — now historical:** The kickoff instructions describe
 > `ITEM8_LIFECYCLE_OUTCOME_FDD_DRAFT.md` as an existing "design-only proposal
 > for Lifecycle & Outcome Tracking" in the repository. **This file does not
 > exist anywhere in the supplied `jobtracker-hub.zip`** (confirmed via
@@ -2099,3 +2117,82 @@ the user whenever they're ready.
 **Files changed this session:** `desktop/launcher.py`,
 `_app/frontend/index.html`. Claude has not staged, committed, or
 pushed anything, per §6.
+
+---
+
+## 23. Session 10 — Item 8 FDD draft received (design only, still paused)
+
+The user supplied `ITEM8_LIFECYCLE_OUTCOME_FDD_DRAFT.md` (scoping
+document, no code) resolving §2a's earlier "does this file even exist"
+question. **Item 8 remains paused per §2a's binding decision — nothing
+in this section is an approval to implement.** This is a status record
+of the design, not a go-ahead.
+
+**Core model:** splits the existing single `archived` boolean into two
+orthogonal concepts — `archived` stays pure visibility/declutter,
+unchanged; a new `outcome` field captures *why* an item stopped being
+active (`no_response`, `rejected`, `role_frozen`, `withdrawn`,
+`offer_declined`, `offer_accepted`). Storage is deliberately neutral
+(`no_response`) while the UI shows the vernacular label ("Ghosted") —
+same boring-data/human-language split used elsewhere in this project.
+
+**Automation posture matches Item 6/7's precedent exactly:** suggests,
+never auto-moves. Only two of the six outcomes get any automatic
+suggestion — `no_response`/Ghosted (staleness-based, once
+`days_since_activity` crosses a threshold) and `rejected`/TBNT
+(status-based, immediate, since a rejection is already a real signal
+not a guess). The other four (`role_frozen`, `withdrawn`,
+`offer_declined`, `offer_accepted`) are manual-only in v1 — no
+document or timer can infer any of them.
+
+**Reuses existing infrastructure, adds no new tables:** outcome
+changes log through the same `status_history` table Item 7 already
+built. A new **Closed** view (filterable by outcome) becomes a second
+home for resolved items, separate from Manage's Archived list, with
+archiving still available as a later, optional step on top of a
+Closed item.
+
+**Insights implications sketched (not built):** splitting the current
+single "response rate" into Signal rate (Rejected + Interviewing +
+Offer ÷ Applied) vs. Ghost rate; an outcome-distribution chart for the
+Closed set; time-to-outcome split by type rather than one blended
+number; a real Applied→Interviewing→Offer→Accepted funnel instead of
+the current flat bar chart; and a v2-ish idea (not v1 scope) of a
+free-text withdrawal-reason tag cross-tabbed against company.
+
+**§2a's open question #1 (the Ghosted threshold) is still open, and
+the draft confirms why it can't be answered from what's on hand:**
+`working-db.zip` was checked specifically for this and can't supply
+real `days_since_activity` numbers — every item's `last_activity` in
+that snapshot collapsed to the same 4-day gap because re-zipping the
+folder reset every file's mtime (the exact failure mode already
+flagged in this project's README), and `date_applied` was empty on
+all 77 overridden items in that copy. A real threshold needs a
+`days_since_activity` pull against the **live** Mac tracker, not a
+re-zipped snapshot. This directly corroborates §2a's existing note
+that `_app/db.py`'s `load_applications()` already computes
+`days_since_activity` today for the unrelated stale/Needs-Attention
+logic — that machinery exists, but the *threshold value* itself still
+doesn't.
+
+**Two more open questions the draft raises, unresolved:**
+2. Whether `rejected`'s existing manual-status value should be reused
+   directly as `outcome`, or kept separate and merely defaulted from
+   it — affects whether the real 119-application dataset's existing
+   `rejected` items need a migration step.
+3. Whether Closed is a new top-level view or a filtered mode of
+   existing Pipeline/Manage screens — a UI decision, deferred until
+   frontend work starts.
+
+**Explicitly out of scope for v1** (per the draft, restated here so it
+isn't lost): auto-moving anything without a click; automatic detection
+of `role_frozen`/`withdrawn`/`offer_declined`/`offer_accepted`; a
+hard-coded staleness threshold before real data exists; free-text
+withdrawal-reason tagging and its Insights correlation.
+
+**Status: design-only, unimplemented, still paused.** Next step if/when
+the user lifts the pause is answering open question #1 with a real
+`days_since_activity` pull from the live tracker — everything else in
+the draft is settled enough to build against once that number exists.
+Claude has not staged, committed, or pushed anything, per §6; the FDD
+draft file itself is not yet added to the repo either.
