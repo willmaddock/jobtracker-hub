@@ -1,0 +1,170 @@
+# Item 7 — Application Timeline: IMPLEMENTED + TESTED + REAL PACKAGED-APP VERIFIED + SEALED
+
+## Why this item exists
+
+Checkpoint 6 of Item 6 (Auto-Fill Date Applied) left "Timeline view" as
+the recommended next feature: showing the shape of an application's
+life — applied, interviewed, resolved — from evidence the app already
+has, rather than anything the user has to type. Full scope definition:
+[`ITEM7_TIMELINE_FDD_DRAFT.md`](ITEM7_TIMELINE_FDD_DRAFT.md).
+
+## What this item contains
+
+**`_app/dossier.py`**
+- `assemble_dossier()` now also returns `timeline_events`: one entry
+  per `application_confirmation`/`interview_notice` document with a
+  detected date (`TIMELINE_EVENT_DOC_TYPES`), each event carrying its
+  `date`, `doc_type`, and source `relpath`. Every matching document
+  gets its own event — never merged — so a folder with a phone-screen
+  request *and* a later interview request shows both. Reuses the
+  per-document `detected_date_applied` `extract.py` already computes
+  for every document; no new extraction logic. Events sort
+  chronologically, with `application_confirmation` breaking same-date
+  ties before `interview_notice`, relpath as the final tiebreak.
+- Rejection is deliberately **not** a doc-derived event (the real
+  corpus has effectively no standalone rejection documents) — it
+  surfaces instead through the item-level "Current status" entry
+  described below.
+
+**`_app/overrides_store.py`**
+- New append-only `status_history` table: one row per real status
+  transition (`item_key`, resulting effective `status`, `changed_at`,
+  `source`). Saving the same status again is a no-op — no duplicate
+  row — verified by
+  `test_repeated_save_of_same_status_does_not_duplicate_history`.
+  `append_status_history`, `get_status_history`, and
+  `get_latest_status_change` (returns the *most recent* row matching a
+  given status, correctly distinguishing a re-opened application from
+  its first pass through that status) are the new public functions.
+  `delete_status_history` clears an item's rows when its overrides are
+  deleted, so removed applications don't leave orphaned history.
+- Only covers changes made after this table shipped — it has no way to
+  retroactively recover a transition date for a status that was
+  already set earlier. This is by design; see the FDD draft.
+
+**`_app/api.py`**
+- `save_override()` and `bulk_override()` both log a `status_history`
+  row whenever the effective status actually changes (including a
+  "reset to auto" action, which is itself a real logged transition,
+  not a silent gap).
+- `/api/applications/{item_id}/dossier` now also returns
+  `current_status`, `current_status_date` (the `YYYY-MM-DD` from the
+  latest matching `status_history` row, via `get_latest_status_change`),
+  and `current_status_date_known` (`False`, with `current_status_date`
+  `None`, when no history row exists for the current status — e.g. a
+  status set before this table existed). The UI must say the date is
+  unknown in that case rather than guess or backfill one.
+- Deleting an item's overrides also deletes its `status_history` rows
+  (`delete_status_history`), keeping the two tables consistent.
+
+**New tests**
+- `tests/test_timeline.py` (7 tests) — confirmation-only events,
+  interview-only events, multiple interview documents each producing
+  their own event, chronological sort across doc types, same-date
+  tiebreak ordering, an empty timeline when no dated evidence exists,
+  and `timeline_events` appearing alongside Checkpoint 6's
+  `date_applied` auto-fill in the same dossier response without
+  disturbing it.
+- `tests/test_status_history.py` (14 tests) — direct unit tests of the
+  new `overrides_store.py` functions (table creation, append/get,
+  no-duplicate-on-repeat-save, transition sequencing, latest-match
+  lookup including the re-opened-status case, no-history-recorded
+  case) plus end-to-end tests through the real API covering
+  `save_override`/`bulk_override` logging, the "reset to auto"
+  transition, and `current_status_date_known` honestly reporting
+  `False` for a pre-existing status with no recorded history.
+
+## Test results
+
+**Automated suite: 144/144 passing**, including the 21 new Item 7
+tests above (135 pre-existing plus the incremental checkpoints
+building to 144 — see `docs/ITEM7_TIMELINE_DEV_LOG.tex` for the full
+per-checkpoint count history). Run for real against the FastAPI
+`TestClient`, not simulated — this closeout session itself has no
+network access to install `pytest`/`fastapi`/`httpx` to reproduce that
+run directly, so the 144/144 figure is carried forward from the real
+run performed against the actual working environment, consistent with
+how Checkpoints 3 and 6 handled the same sandbox constraint.
+
+**Real packaged-app validation was completed against the real
+Working_DB tracker**, distinct from and in addition to the automated
+suite:
+
+- Confirmation-only timeline test: passed.
+- Confirmation + interview timeline test: passed.
+- Multiple-interview handling (a folder with more than one
+  interview-related document): validated, each producing its own
+  timeline entry.
+- A pre-existing rejection (set before `status_history` shipped)
+  correctly showed an unknown status date rather than a fabricated
+  one.
+- Status changes persisted across a complete application quit and
+  relaunch of the packaged app — the status-history row survived,
+  read back from `overrides.db` on disk rather than anything held in
+  memory. Confirmed twice, both times on the packaged app rather than
+  the dev server.
+- A real Applied → Interviewing → Applied round trip was performed and
+  persisted in the packaged app, with pipeline counts moving correctly
+  on both transitions and a "Saved." confirmation on each save.
+- `date_applied` remained independent from interview timeline dates
+  throughout — accepting or auto-filling a date-applied suggestion
+  never altered or duplicated a timeline event, and vice versa.
+- Checkpoint 6 behavior (date-applied auto-fill/conflict/provenance)
+  remained intact and unaffected by the Item 7 additions.
+
+**Important validation note.** During manual validation, two separate
+application windows were open at once: a Safari window against the
+local dev server (`127.0.0.1`), and the packaged JobTracker Hub app.
+These were tracking two different, out-of-sync copies of the data —
+the dev-server window's stale display behavior (e.g. a Timeline line
+that didn't refresh immediately after a save) reflects that separate,
+older workspace, **not** a Item 7 defect in the packaged app. Only the
+**packaged application's** results are recorded above as the official
+Item 7 real-app validation; the dev-server window's behavior is
+excluded from these results.
+
+## Known limitations
+
+- **Identical-status-saved-twice, isolated as its own manual UI step,
+  was not independently exercised** in the packaged-app click-through.
+  The real click-through covered two genuine transitions (Applied →
+  Interviewing → Applied), not a same-status-twice repeat save. The
+  no-duplicate-row behavior for an exact repeat save is fully covered
+  at the unit level by
+  `test_repeated_save_of_same_status_does_not_duplicate_history`
+  (part of the passing 144/144 run), so this is corroborating
+  real-app evidence layered on an already-verified case, not the only
+  evidence for it — see `ITEM7_TIMELINE_FDD_DRAFT.md`.
+- Cannot recover a transition date for any status set before
+  `status_history` existed — by design, not a bug; see the FDD draft
+  and `current_status_date_known`.
+- Rejection (and any other status) only ever appears as the single
+  "Current status" line, not as a full multi-transition history on
+  the Timeline itself, in v1.
+- Carries forward all Item 6 / Checkpoint 1–6 limitations unchanged
+  (US-format phone regex, empty-password-only PDF decryption, no
+  `.docx` support, trailing-boilerplate bleed into the last-matched
+  role section, arbitrary-but-deterministic alphabetical job-posting
+  tiebreak, no per-document source attribution on merged contacts, no
+  non-US date formats, no signal for which confirmation document's
+  date wins when a folder has more than one).
+
+## Continuation context
+
+- **Item 7 is sealed.** Checkpoint 6 (Item 6) remains sealed and
+  unaffected.
+- **No Item 8 work has started.** The archive/lifecycle engine
+  (deferred since Checkpoint 1) remains the next candidate scope, but
+  has not been designed or begun.
+- **Git has not been committed or pushed.** This closeout produced a
+  documentation-only update and a clean handoff zip; committing (CP6 +
+  Item 7), pushing, and building the DMG are still the user's own next
+  steps against their controlled local repository.
+
+## Full development log
+
+`docs/ITEM7_TIMELINE_DEV_LOG.tex` (compiled: `docs/ITEM7_TIMELINE_DEV_LOG.pdf`)
+is the cumulative, human-readable version of this same information,
+mirroring `docs/ITEM6_DEV_LOG.tex`'s structure and conventions. Its
+Next Steps box is the first thing to read at the start of any future
+chat continuing this project.

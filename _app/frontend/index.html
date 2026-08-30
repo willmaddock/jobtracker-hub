@@ -278,6 +278,46 @@
   .field.span2{grid-column:span 2;}
   .checkbox-row{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--text-soft);margin-top:6px;}
 
+  /* ---------- Application Dossier (Checkpoint 4) ---------- */
+  .dossier-card{padding:18px 20px;}
+  .dossier-loading{color:var(--text-mute);font-size:12px;padding:6px 0;}
+  .dossier-context-row{display:flex;flex-wrap:wrap;gap:18px;padding-bottom:14px;margin-bottom:14px;border-bottom:1px solid var(--border-soft);}
+  .dossier-field{min-width:110px;}
+  .dossier-field-label{font-size:10.5px;color:var(--text-soft);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px;}
+  .dossier-field-value{font-size:13px;color:var(--text-strong);font-weight:600;}
+  .dossier-note{font-size:11.5px;color:var(--text-soft);background:#3B82F612;border:1px solid #3B82F633;border-radius:8px;padding:8px 12px;margin-bottom:14px;line-height:1.5;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;}
+  .dossier-date-suggestion{font-size:11px;color:var(--text-soft);background:#F5970012;border:1px solid #F5970044;border-radius:6px;padding:6px 8px;margin-top:6px;display:flex;flex-direction:column;align-items:flex-start;gap:5px;max-width:220px;}
+  .dossier-date-suggestion .btn.small{margin-right:4px;}
+  .dossier-date-suggestion-weak{background:#5b647212;border-color:#5b647244;}
+  .dossier-date-provenance{font-size:11px;color:var(--text-soft);margin-top:6px;max-width:220px;}
+  .dossier-role-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;}
+  .dossier-role-block{min-width:0;}
+  .dossier-role-label{font-size:10.5px;color:var(--text-soft);text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px;font-weight:700;}
+  .dossier-role-text{font-size:12.5px;color:var(--text);line-height:1.5;white-space:pre-line;max-height:140px;overflow:auto;}
+  .dossier-role-text.not-detected{color:var(--text-mute);font-style:italic;}
+  .dossier-contacts-label{font-size:10.5px;color:var(--text-soft);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;font-weight:700;}
+  .dossier-contacts{display:flex;flex-wrap:wrap;gap:24px;}
+  .dossier-contact-group{min-width:160px;}
+  .contact-row{display:flex;align-items:center;gap:6px;margin-bottom:6px;}
+  .contact-value{font-size:12.5px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px;}
+  .contact-btn{background:transparent;border:1px solid var(--border);border-radius:5px;color:var(--text-soft);padding:2px 6px;font-size:11px;line-height:1.4;transition:all .15s ease;}
+  .contact-btn:hover{border-color:var(--accent-soft);color:var(--accent-soft);}
+  .dossier-empty{color:var(--text-mute);font-size:11.5px;font-style:italic;}
+  .dossier-errors{margin-top:14px;font-size:11.5px;color:var(--amber-text);background:#F59E0B14;border:1px solid #F59E0B44;border-radius:8px;padding:8px 12px;line-height:1.5;}
+
+  /* ---------- Timeline (Item 7) ---------- */
+  .dossier-timeline-label{font-size:10.5px;color:var(--text-soft);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;font-weight:700;}
+  .dossier-timeline{display:flex;flex-direction:column;gap:2px;margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid var(--border-soft);}
+  .dossier-timeline-event{display:flex;align-items:flex-start;gap:10px;padding:5px 0;}
+  .dossier-timeline-dot{flex:none;width:8px;height:8px;border-radius:50%;margin-top:4px;background:var(--accent-soft);}
+  .dossier-timeline-current .dossier-timeline-dot{background:currentColor;}
+  .dossier-timeline-body{flex:1;min-width:0;font-size:12px;color:var(--text);line-height:1.5;}
+  .dossier-timeline-label-text{font-weight:600;}
+  .dossier-timeline-meta{color:var(--text-soft);font-size:11px;}
+  .dossier-timeline-doc{color:var(--text-soft);font-size:11px;}
+  .dossier-timeline-event .btn.small{margin-left:6px;}
+  .dossier-timeline-empty{color:var(--text-mute);font-size:11.5px;font-style:italic;padding:2px 0 12px;margin-bottom:2px;border-bottom:1px solid var(--border-soft);}
+
   /* ---------- status pulse (active interviews) ---------- */
   .status-pulse{position:relative;display:inline-flex;width:7px;height:7px;border-radius:50%;background:currentColor;}
   .status-pulse::after{content:"";position:absolute;inset:0;border-radius:50%;background:currentColor;
@@ -497,6 +537,16 @@ const DEFAULT_DOC_TYPE_LABELS = {
   certificate:"Certificate", readme:"Readme", other:"Other",
 };
 
+// Display labels for dossier.py's four role-section keys (Checkpoint 4).
+// Order here is the display order in the Dossier's role-section grid.
+const ROLE_SECTION_DEFS = [
+  {key:"role_summary", label:"Role Summary"},
+  {key:"duties", label:"Duties"},
+  {key:"required_qualifications", label:"Required Qualifications"},
+  {key:"preferred_qualifications", label:"Preferred Qualifications"},
+];
+const NOT_DETECTED = "Not detected";
+
 function extBadge(ext){
   const e = (ext || "").replace(".", "").toUpperCase();
   if (e === "PDF") return {label:"PDF", bg:"#EF444426", fg:"#F87171"};
@@ -549,6 +599,33 @@ function extractErrorMessage(rawText, fallback){
     }
   } catch (e) { /* not JSON — fall through to raw text */ }
   return rawText;
+}
+// Multipart FormData upload via XMLHttpRequest instead of fetch(). Safari
+// has a real, reproducible bug where fetch()'s handling of a POST body
+// built from FormData containing a File can arrive at the server
+// completely empty -- not truncated, EVERY field missing, including plain
+// strings appended before the file -- while the identical payload sent via
+// curl/requests/TestClient, or from Chrome, works every time. Confirmed
+// against this app's own /api/workspaces/import(-folder) route: reliably
+// fails on Safari, reliably succeeds on Chrome, same machine, same file.
+// XHR's multipart upload path is older and doesn't share the bug, so every
+// file upload in this app goes through here instead of a raw fetch().
+function uploadFormData(url, form){
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        if (!xhr.responseText) { resolve(null); return; }
+        try { resolve(JSON.parse(xhr.responseText)); }
+        catch (e) { resolve(null); }
+      } else {
+        reject(new Error(extractErrorMessage(xhr.responseText, xhr.statusText || `HTTP ${xhr.status}`)));
+      }
+    };
+    xhr.onerror = () => reject(new Error("Network error during upload — check your connection and try again."));
+    xhr.send(form);
+  });
 }
 async function apiGet(path){
   const res = await fetch(API_BASE + path);
@@ -923,8 +1000,7 @@ function WorkspacePopover({onClose, anchorRef, packaged, statusInfo}){
         form.append("file", importFile);
         path = "/api/workspaces/import";
       }
-      const res = await fetch(`${API_BASE}${path}`, {method: "POST", body: form});
-      if (!res.ok) { const t = await res.text(); throw new Error(extractErrorMessage(t, res.statusText)); }
+      await uploadFormData(`${API_BASE}${path}`, form);
       // Only set on success, right before the reload that would otherwise
       // wipe it -- see IMPORT_NOTICE_KEY.
       try { sessionStorage.setItem(IMPORT_NOTICE_KEY, hasFolder ? "folder-warning" : "zip-success"); } catch(e) { /* best-effort */ }
@@ -1533,8 +1609,248 @@ function UploadDropzone({itemId, onUpload, compact}){
   );
 }
 
+/* =========================== APPLICATION DOSSIER (Checkpoint 4) =========================== */
+// One row per contact value (email/phone/url) in a dossier's `contacts`
+// object — a copy button plus an action button that opens the right
+// handler (mailto:/tel:/https:) via openExternalUrl, same OS-opener path
+// Search Hub already uses for external links.
+function ContactGroup({label, kind, values, fireToast}){
+  if (!values || !values.length) return null;
+
+  const copy = async (v) => {
+    try { await navigator.clipboard.writeText(v); fireToast && fireToast("Copied."); }
+    catch (e) { fireToast && fireToast("Couldn't copy — select and copy manually."); }
+  };
+  const act = (v) => {
+    if (kind === "email") return openExternalUrl(`mailto:${v}`);
+    if (kind === "phone") return openExternalUrl(`tel:${v.replace(/[^\d+]/g, "")}`);
+    const url = /^https?:\/\//i.test(v) ? v : `https://${v}`;
+    return openExternalUrl(url);
+  };
+  const actionLabel = kind === "email" ? "Email" : kind === "phone" ? "Call" : "Open";
+
+  return (
+    <div className="dossier-contact-group">
+      <div className="dossier-role-label">{label}</div>
+      {values.map(v => (
+        <div className="contact-row" key={v}>
+          <span className="contact-value" title={v}>{v}</span>
+          <button className="contact-btn" onClick={() => copy(v)} title="Copy">{"\u{1F4CB}"}</button>
+          <button className="contact-btn" onClick={() => act(v)} title={actionLabel}>{actionLabel}</button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Renders one item's Application Dossier: the four role sections extracted
+// from whichever attached document is classified as the job posting, plus
+// contacts merged across every attached document. `dossier` is
+// undefined while the fetch is in flight (see App()'s ensureDossier), null
+// if it hasn't been requested yet, or the dossier.assemble_dossier() dict
+// once loaded.
+// --- Timeline (Item 7) -------------------------------------------------
+// Two kinds of entries, always rendered together in one list, oldest
+// first: doc-derived events (application_confirmation/interview_notice,
+// from dossier.timeline_events -- see dossier.py) followed by a single
+// "Current status" line built from the item's effective_status and
+// api.py's current_status_date/current_status_date_known. The status
+// line always renders, even with zero doc-derived events, so a folder
+// with no dated evidence still shows something (matching today's
+// behavior) instead of an empty timeline widget -- see
+// ITEM7_TIMELINE_FDD_DRAFT.md's "Suggested minimal UI".
+const TIMELINE_EVENT_LABELS = {
+  application_confirmation: "Applied",
+  interview_notice: "Interview scheduled",
+};
+
+function capitalize(s){
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+}
+
+function TimelineSection({events, currentStatus, currentStatusDate, currentStatusDateKnown, docs, onView}){
+  const color = DEFAULT_STATUS_COLORS[currentStatus] || DEFAULT_STATUS_COLORS.unknown;
+  return (
+    <div className="dossier-timeline">
+      <div className="dossier-timeline-label">Timeline</div>
+      {(events || []).map((e, i) => {
+        const doc = (docs || []).find(d => d.relpath === e.relpath);
+        const label = TIMELINE_EVENT_LABELS[e.doc_type] || e.doc_type;
+        return (
+          <div className="dossier-timeline-event" key={`${e.relpath}-${i}`}>
+            <span className="dossier-timeline-dot"></span>
+            <div className="dossier-timeline-body">
+              <span className="dossier-timeline-label-text">{label}</span>
+              {" \u2014 "}
+              <span className="dossier-timeline-meta">detected from {e.doc_type === "interview_notice" ? "interview notice" : "application confirmation"}, {e.date}</span>
+              {doc && <span className="dossier-timeline-doc"> ({doc.filename})</span>}
+            </div>
+            {doc && onView && <button className="btn small" onClick={() => onView(doc)}>View</button>}
+          </div>
+        );
+      })}
+      <div className="dossier-timeline-event dossier-timeline-current">
+        <span className="dossier-timeline-dot" style={{background: color}}></span>
+        <div className="dossier-timeline-body">
+          <span className="dossier-timeline-label-text">Current status: {capitalize(currentStatus)}</span>
+          {" \u2014 "}
+          <span className="dossier-timeline-meta">
+            {currentStatusDateKnown ? `since ${currentStatusDate}` : "date unknown (set before Timeline tracking began)"}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DossierSection({app, dossier, docs, onView, onUseDetectedDate, fireToast}){
+  // Hooks must run on every render regardless of the early returns below
+  // (React's Rules of Hooks) -- declared here, before any conditional
+  // return, even though dateSuggestionDismissed is only meaningful once
+  // `dossier` is loaded.
+  const [dateSuggestionDismissed, setDateSuggestionDismissed] = useState(false);
+  useEffect(() => { setDateSuggestionDismissed(false); }, [app.id]);
+
+  if (dossier === undefined) {
+    return <div className="card dossier-card"><div className="dossier-loading">Loading dossier\u2026</div></div>;
+  }
+  if (!dossier) return null;
+
+  const jobPostingDoc = dossier.job_posting_relpath
+    ? (docs || []).find(d => d.relpath === dossier.job_posting_relpath)
+    : null;
+  const hasMultipleCandidates = (dossier.job_posting_candidates || []).length > 1;
+  const contacts = dossier.contacts || {emails:[], phones:[], urls:[]};
+  const hasAnyContact = contacts.emails.length || contacts.phones.length || contacts.urls.length;
+
+  // Checkpoint 5/6: date-applied evidence. The empty-field, confirmation-
+  // tier case auto-fills silently on the server (api.py's
+  // application_dossier) -- date_applied is already populated by the time
+  // this component sees it, so nothing here needs to auto-fill anything.
+  // What's left to render, split by state:
+  //   - date_applied set, and it came from an accepted/auto-filled
+  //     detection with nothing currently in conflict -> quiet caption,
+  //     no buttons.
+  //   - date_applied unset, only job-posting evidence found -> weak
+  //     suggestion, single "Use this date" button, worded as a
+  //     review prompt (posting text names when the role was *listed*,
+  //     not when you applied).
+  //   - date_applied set AND the newly detected date disagrees with it
+  //     -> real conflict, both buttons, exactly as before -- a value
+  //     already on record is never overwritten silently, regardless of
+  //     which evidence tier is now in play.
+  const currentDateApplied = app.date_applied ? app.date_applied.slice(0, 10) : null;
+  const detectedDate = dossier.detected_date_applied || null;
+  const evidenceTier = dossier.detected_date_evidence_tier || null;
+  const detectedDateDoc = dossier.detected_date_source_relpath
+    ? (docs || []).find(d => d.relpath === dossier.detected_date_source_relpath)
+    : null;
+  const detectedDateLabel = detectedDateDoc ? detectedDateDoc.filename : dossier.detected_date_source_relpath;
+
+  const hasConflict = currentDateApplied && detectedDate && detectedDate !== currentDateApplied;
+  const showConflict = hasConflict && !dateSuggestionDismissed;
+  const showWeakSuggestion = !currentDateApplied && detectedDate && evidenceTier === "posting" && !dateSuggestionDismissed;
+  const showProvenanceCaption = !showConflict && !showWeakSuggestion
+    && currentDateApplied && app.date_applied_source === "confirmation";
+
+  const useDetectedDate = async () => {
+    await onUseDetectedDate(detectedDate, evidenceTier);
+    setDateSuggestionDismissed(true);
+    fireToast && fireToast(`Date applied set to ${detectedDate}.`);
+  };
+
+  return (
+    <div className="card dossier-card">
+      <div className="dossier-context-row">
+        <div className="dossier-field">
+          <div className="dossier-field-label">Company</div>
+          <div className="dossier-field-value">{app.effective_company}</div>
+        </div>
+        <div className="dossier-field">
+          <div className="dossier-field-label">Job title</div>
+          <div className="dossier-field-value">{app.role_label && app.role_label !== "(root)" ? app.role_label : "\u2014"}</div>
+        </div>
+        <div className="dossier-field">
+          <div className="dossier-field-label">Status</div>
+          <div className="dossier-field-value">{app.effective_status}</div>
+        </div>
+        <div className="dossier-field">
+          <div className="dossier-field-label">Date applied</div>
+          <div className="dossier-field-value">{app.date_applied ? app.date_applied.slice(0,10) : "Not set"}</div>
+          {showConflict && (
+            <div className="dossier-date-suggestion">
+              <span>Detected <strong>{detectedDate}</strong>{detectedDateLabel ? ` from ${detectedDateLabel}` : ""}.</span>
+              <button className="btn small" onClick={useDetectedDate}>Use detected date</button>
+              <button className="btn small" onClick={() => setDateSuggestionDismissed(true)}>Keep existing</button>
+            </div>
+          )}
+          {showWeakSuggestion && (
+            <div className="dossier-date-suggestion dossier-date-suggestion-weak">
+              <span>Possibly <strong>{detectedDate}</strong>{detectedDateLabel ? ` from ${detectedDateLabel}` : ""} — this comes from the job posting text, not a confirmation, so review before using.</span>
+              <button className="btn small" onClick={useDetectedDate}>Use this date</button>
+            </div>
+          )}
+          {showProvenanceCaption && (
+            <div className="dossier-date-provenance">Detected from application confirmation{detectedDateDoc ? ` (${detectedDateDoc.filename})` : ""}.</div>
+          )}
+        </div>
+        <div className="dossier-field">
+          <div className="dossier-field-label">Days since activity</div>
+          <div className="dossier-field-value">{app.days_since_activity != null ? `${app.days_since_activity}d` : "\u2014"}</div>
+        </div>
+      </div>
+
+      <TimelineSection
+        events={dossier.timeline_events || []}
+        currentStatus={dossier.current_status}
+        currentStatusDate={dossier.current_status_date}
+        currentStatusDateKnown={dossier.current_status_date_known}
+        docs={docs}
+        onView={onView}
+      />
+
+      {dossier.job_posting_relpath ? (
+        <div className="dossier-note">
+          <span>Role details below are extracted from <strong>{jobPostingDoc ? jobPostingDoc.filename : dossier.job_posting_relpath}</strong>{hasMultipleCandidates ? " (multiple job-posting documents found — this one was picked alphabetically)" : ""}.</span>
+          {jobPostingDoc && onView && <button className="btn small" onClick={() => onView(jobPostingDoc)}>View</button>}
+        </div>
+      ) : (
+        <div className="dossier-note">No document in this application's folder is marked as a job posting, so role details can't be extracted. Use "Fix type" on the right document to mark it, if you have one attached.</div>
+      )}
+
+      <div className="dossier-role-grid">
+        {ROLE_SECTION_DEFS.map(({key, label}) => {
+          const text = dossier[key];
+          const detected = text && text !== NOT_DETECTED;
+          return (
+            <div className="dossier-role-block" key={key}>
+              <div className="dossier-role-label">{label}</div>
+              <div className={"dossier-role-text" + (detected ? "" : " not-detected")}>{detected ? text : NOT_DETECTED}</div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="dossier-contacts-label">Contacts</div>
+      {hasAnyContact ? (
+        <div className="dossier-contacts">
+          <ContactGroup label="Emails" kind="email" values={contacts.emails} fireToast={fireToast} />
+          <ContactGroup label="Phones" kind="phone" values={contacts.phones} fireToast={fireToast} />
+          <ContactGroup label="Links" kind="url" values={contacts.urls} fireToast={fireToast} />
+        </div>
+      ) : <div className="dossier-empty">No emails, phone numbers, or links found across this application's documents.</div>}
+
+      {dossier.extraction_errors && dossier.extraction_errors.length > 0 && (
+        <div className="dossier-errors">
+          Couldn't extract text from {dossier.extraction_errors.length === 1 ? "1 document" : `${dossier.extraction_errors.length} documents`}: {dossier.extraction_errors.map(e => e.relpath).join(", ")}. Those documents were skipped for contacts and role details above.
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* =========================== PIPELINE: DETAIL PANE =========================== */
-function DetailPane({app, meta, docs, onSaveOverride, onOpen, onView, onFixType, onUpload, onRename, onDelete, query}){
+function DetailPane({app, meta, docs, dossier, onSaveOverride, onOpen, onView, onFixType, onUpload, onRename, onDelete, query, fireToast}){
   const [notes, setNotes] = useState("");
   const [dateApplied, setDateApplied] = useState("");
   const [nextAction, setNextAction] = useState("");
@@ -1588,6 +1904,18 @@ function DetailPane({app, meta, docs, onSaveOverride, onOpen, onView, onFixType,
     await onSaveOverride(app.id, {activity_override: iso});
   };
 
+  // Checkpoint 5: "Use detected date" from the Dossier's date-applied
+  // evidence suggestion. Updates the same local dateApplied state the
+  // form input below reads, so the two stay in sync -- same pattern as
+  // quickFollowUp/quickResetActivity above, just for date_applied.
+  const useDetectedDate = async (iso, source) => {
+    setDateApplied(iso); setDirty(false);
+    // `source` tags provenance ("confirmation"/"posting") so the Dossier
+    // can show a quiet "Detected from ..." caption instead of re-asking --
+    // see overrides_store.py's date_applied_source column.
+    await onSaveOverride(app.id, {date_applied: iso, date_applied_source: source || null});
+  };
+
   return (
     <div className="detail-pane">
       <div className="detail-header">
@@ -1607,6 +1935,9 @@ function DetailPane({app, meta, docs, onSaveOverride, onOpen, onView, onFixType,
           {dirty && <button className="btn" onClick={save}>Save changes</button>}
         </div>
       </div>
+
+      <div className="section-label">Application Dossier</div>
+      <DossierSection app={app} dossier={dossier} docs={docs} onView={onView} onUseDetectedDate={useDetectedDate} fireToast={fireToast} />
 
       <div className="section-label">Attached Documents ({docs.length})</div>
       {onUpload && <UploadDropzone itemId={app.id} onUpload={onUpload} />}
@@ -1725,7 +2056,7 @@ function KanbanBoard({apps, meta, onMove, pendingIds}){
 }
 
 /* =========================== PIPELINE PAGE =========================== */
-function PipelinePage({apps, meta, docsByItemId, ensureDocs, onSaveOverride, onMoveStatus, pendingIds, onOpen, onView, onFixType, onUpload, onRename, onDelete, searchQuery, selectedKey, setSelectedKey, active}){
+function PipelinePage({apps, meta, docsByItemId, ensureDocs, dossierByItemId, ensureDossier, onSaveOverride, onMoveStatus, pendingIds, onOpen, onView, onFixType, onUpload, onRename, onDelete, searchQuery, selectedKey, setSelectedKey, active, fireToast}){
   const statusOrder = meta.status_order || DEFAULT_STATUS_ORDER;
   const [view, setView] = useState("list");
   const [statusFilter, setStatusFilter] = useState(new Set(statusOrder));
@@ -1769,9 +2100,16 @@ function PipelinePage({apps, meta, docsByItemId, ensureDocs, onSaveOverride, onM
 
   const selected = filtered.find(a => a.id === selectedKey) || filtered[0] || null;
 
+  // Also re-runs when the selected app's cached dossier flips to undefined
+  // (invalidateDossier evicts it on upload/rename/delete/fix-type) -- not
+  // just when selected.id itself changes. Without this, invalidating the
+  // dossier for the app that's ALREADY selected left it stuck on "Loading
+  // dossier..." forever, since nothing else would call ensureDossier again
+  // for the same id. ensureDocs/ensureDossier are both no-ops once cached,
+  // so the extra dependency doesn't cause repeat fetches once resolved.
   useEffect(() => {
-    if (selected) ensureDocs(selected.id);
-  }, [selected && selected.id]);
+    if (selected) { ensureDocs(selected.id); ensureDossier(selected.id); }
+  }, [selected && selected.id, selected && dossierByItemId[selected.id]]);
 
   const selectApp = useCallback((a) => setSelectedKey(a.id), [setSelectedKey]);
   const openFirstDoc = useCallback((a) => {
@@ -1838,7 +2176,9 @@ function PipelinePage({apps, meta, docsByItemId, ensureDocs, onSaveOverride, onM
               <div className="master-pane">
                 <MasterList apps={filtered} selectedKey={selected && selected.id} onSelect={selectApp} meta={meta} query={searchQuery} />
               </div>
-              <DetailPane app={selected} meta={meta} docs={selected ? (docsByItemId[selected.id] || []) : []} onSaveOverride={onSaveOverride} onOpen={onOpen} onView={onView} onFixType={onFixType} onUpload={onUpload} onRename={onRename} onDelete={onDelete} query={searchQuery} />
+              <DetailPane app={selected} meta={meta} docs={selected ? (docsByItemId[selected.id] || []) : []}
+                dossier={selected ? dossierByItemId[selected.id] : null}
+                onSaveOverride={onSaveOverride} onOpen={onOpen} onView={onView} onFixType={onFixType} onUpload={onUpload} onRename={onRename} onDelete={onDelete} query={searchQuery} fireToast={fireToast} />
             </div>
           )
         ) : (
@@ -3652,8 +3992,7 @@ function NoTrackerOnboarding({packaged}){
     const form = new FormData();
     form.append("name", n);
     form.append("file", importFile);
-    finish(fetch(`${API_BASE}/api/workspaces/import`, {method: "POST", body: form})
-      .then(async res => { if (!res.ok) { const t = await res.text(); throw new Error(extractErrorMessage(t, res.statusText)); } }), "zip-success");
+    finish(uploadFormData(`${API_BASE}/api/workspaces/import`, form), "zip-success");
   };
 
   // "Import a Copy of a Folder" preview state -- same pick -> inspect ->
@@ -3939,6 +4278,13 @@ function App(){
   const [statusInfo, setStatusInfo] = useState(cached && cached.statusInfo || null);
   const [apps, setApps] = useState(cached && cached.apps || []);
   const [docsByItemId, setDocsByItemId] = useState({});
+  // Application Dossier (Checkpoint 4), keyed by item id — mirrors
+  // docsByItemId's cache-then-invalidate pattern exactly: undefined means
+  // "never fetched" (ensureDossier below fetches once), and any document
+  // mutation just evicts the entry and lets ensureDossier re-fetch it next
+  // time the item is selected, rather than trying to patch the merged
+  // contacts/role-section result in place.
+  const [dossierByItemId, setDossierByItemId] = useState({});
   // Bumped on every document mutation (upload/rename/delete/fix-type).
   // Pipeline reads straight from docsByItemId, but Browse fetches its own
   // copy via /api/browse independently — this is what tells Browse its
@@ -4024,6 +4370,43 @@ function App(){
     });
   }, []);
 
+  const ensureDossier = useCallback((itemId) => {
+    setDossierByItemId(prev => {
+      if (prev[itemId] !== undefined) return prev;
+      apiGet(`/api/applications/${itemId}/dossier`).then(dossier => {
+        setDossierByItemId(p => ({...p, [itemId]: dossier}));
+        // Checkpoint 6: the dossier endpoint may have just auto-filled
+        // date_applied server-side (confirmation-tier evidence into a
+        // genuinely empty field -- see api.py's application_dossier).
+        // The apps list is what actually feeds date_applied/
+        // date_applied_source to the Pipeline row and the Dossier's
+        // context row, so pull it fresh whenever that happened;
+        // otherwise the auto-filled date wouldn't show up until some
+        // unrelated action happened to refresh the list.
+        if (dossier && dossier.date_applied_auto_filled) {
+          refreshApps();
+        }
+      }).catch(() => {
+        setDossierByItemId(p => ({...p, [itemId]: null}));
+      });
+      return prev;
+    });
+  }, [refreshApps]);
+
+  // Evicts (not patches) a cached dossier so the next ensureDossier call
+  // re-fetches it — the merged contacts/role-section result can't be
+  // patched in place from a document mutation's response shape, and a
+  // stale-but-present cache entry would otherwise silently show outdated
+  // extraction results after an upload/rename/delete/fix-type.
+  const invalidateDossier = useCallback((itemId) => {
+    setDossierByItemId(prev => {
+      if (!(itemId in prev)) return prev;
+      const next = {...prev};
+      delete next[itemId];
+      return next;
+    });
+  }, []);
+
   // Numeric-id override save (fixes the old double-URL-encoded item_key
   // route — see api.py's save_override for the full story).
   const saveOverride = useCallback(async (appId, fields) => {
@@ -4080,14 +4463,16 @@ function App(){
       return next;
     });
     setDocsVersion(v => v + 1);
-  }, []);
+    invalidateDossier(doc.item_id);
+  }, [invalidateDossier]);
 
   const renameDocument = useCallback(async (doc, newFilename) => {
     const data = await apiPost("/api/documents/rename", {relpath: doc.relpath, new_filename: newFilename});
     if (data.documents) setDocsByItemId(prev => ({...prev, [doc.item_id]: data.documents}));
     setDocsVersion(v => v + 1);
+    invalidateDossier(doc.item_id);
     fireToast(`Renamed to ${newFilename}.`);
-  }, [fireToast]);
+  }, [fireToast, invalidateDossier]);
 
   // Delete is already non-destructive (real file goes to OS Trash, never
   // unlinked) — so instead of a blocking "are you sure?", the card hides
@@ -4120,14 +4505,13 @@ function App(){
   const uploadDocuments = useCallback(async (itemId, fileList) => {
     const form = new FormData();
     for (const f of fileList) form.append("files", f);
-    const res = await fetch(`${API_BASE}/api/applications/${itemId}/documents`, {method: "POST", body: form});
-    if (!res.ok) { const t = await res.text(); throw new Error(t || res.statusText); }
-    const data = await res.json();
+    const data = await uploadFormData(`${API_BASE}/api/applications/${itemId}/documents`, form);
     setDocsByItemId(prev => ({...prev, [itemId]: data.documents}));
     setDocsVersion(v => v + 1);
+    invalidateDossier(itemId);
     fireToast(fileList.length > 1 ? `Added ${fileList.length} files.` : `Added ${fileList[0].name}.`);
     return data.documents;
-  }, [fireToast]);
+  }, [fireToast, invalidateDossier]);
 
   const openViewer = useCallback((doc) => setViewerDoc(doc), []);
 
@@ -4142,9 +4526,10 @@ function App(){
     // application look like it disappeared after a doc-type correction.
     if (data.item_id != null) {
       setDocsByItemId(prev => ({...prev, [data.item_id]: data.documents}));
+      invalidateDossier(data.item_id);
     }
     setDocsVersion(v => v + 1);
-  }, [fireToast]);
+  }, [fireToast, invalidateDossier]);
 
   const doRebuild = useCallback(async () => {
     await apiPost("/api/rebuild", {});
@@ -4164,9 +4549,7 @@ function App(){
     form.append("role_label", roleLabel || "");
     form.append("status", status || "");
     for (const f of (fileList || [])) form.append("files", f);
-    const res = await fetch(`${API_BASE}/api/applications/new`, {method: "POST", body: form});
-    if (!res.ok) { const t = await res.text(); throw new Error(extractErrorMessage(t, res.statusText)); }
-    const data = await res.json();
+    const data = await uploadFormData(`${API_BASE}/api/applications/new`, form);
     fireToast(`Created ${company}${roleLabel ? " — " + roleLabel : ""}${status ? ` (${status})` : ""}.`);
     await refreshStatus();
     await refreshApps();
@@ -4181,9 +4564,7 @@ function App(){
   const createCategory = useCallback(async (name) => {
     const form = new FormData();
     form.append("name", name);
-    const res = await fetch(`${API_BASE}/api/categories/new`, {method: "POST", body: form});
-    if (!res.ok) { const t = await res.text(); throw new Error(extractErrorMessage(t, res.statusText)); }
-    const data = await res.json();
+    const data = await uploadFormData(`${API_BASE}/api/categories/new`, form);
     fireToast(`Created category "${name}".`);
     await refreshStatus();
     setDocsVersion(v => v + 1);
@@ -4250,10 +4631,11 @@ function App(){
         <div className="content">
           {page === "pipeline" && (
             <PipelinePage apps={apps} meta={meta} docsByItemId={docsByItemId} ensureDocs={ensureDocs}
+              dossierByItemId={dossierByItemId} ensureDossier={ensureDossier}
               onSaveOverride={saveOverride} onMoveStatus={moveStatus} pendingIds={pendingIds}
               onOpen={openFile} onView={openViewer} onFixType={setFixTypeDoc} onUpload={uploadDocuments}
               onRename={setRenameDoc} onDelete={requestDelete} searchQuery={searchQuery}
-              selectedKey={selectedKey} setSelectedKey={setSelectedKey} active={page==="pipeline"} />
+              selectedKey={selectedKey} setSelectedKey={setSelectedKey} active={page==="pipeline"} fireToast={fireToast} />
           )}
           {page === "attention" && (
             <AttentionPage apps={apps} meta={meta} docsByItemId={docsByItemId} ensureDocs={ensureDocs}

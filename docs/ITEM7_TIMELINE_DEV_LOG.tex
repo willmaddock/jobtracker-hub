@@ -1,0 +1,253 @@
+\documentclass[11pt]{article}
+
+% JobTracker Hub Item 7 Development Log -- v1.2.0
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[expansion=false]{microtype}
+\usepackage[a4paper,top=2.2cm,bottom=2.2cm,left=2.3cm,right=2.3cm]{geometry}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage{fancyhdr}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage[most]{tcolorbox}
+\usepackage{amsmath}
+
+\definecolor{ink}{HTML}{17202A}
+\definecolor{muted}{HTML}{566573}
+\definecolor{accent}{HTML}{2563EB}
+\definecolor{accentdark}{HTML}{1D4ED8}
+\definecolor{panel}{HTML}{F4F7FB}
+\definecolor{panelblue}{HTML}{EEF4FF}
+\definecolor{rule}{HTML}{D8E0EA}
+\definecolor{codebg}{HTML}{F7F8FA}
+\definecolor{success}{HTML}{0F766E}
+\definecolor{warning}{HTML}{B45309}
+\hypersetup{
+  colorlinks=true,
+  linkcolor=accentdark,
+  urlcolor=accentdark,
+  citecolor=accentdark,
+  bookmarks=true,
+  bookmarksopen=true,
+  bookmarksnumbered=true,
+  pdfpagemode=UseOutlines,
+  pdftitle={JobTracker Hub -- Item 7 Development Log},
+  pdfauthor={JobTracker Hub},
+  pdfsubject={Item 7 (Application Timeline) development log and checkpoint history},
+  pdfkeywords={JobTracker Hub,Item 7,Application Timeline,status history,development log}
+}
+
+\pagestyle{fancy}
+\setlength{\headheight}{24pt}
+\fancyhf{}
+\lhead{\textbf{JobTracker Hub}}
+\rhead{Item 7 Development Log}
+\cfoot{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\headrule}{\hbox to\headwidth{\color{rule}\leaders\hrule height \headrulewidth\hfill}}
+
+\titleformat{\section}{\Large\bfseries\color{ink}}{\thesection}{0.65em}{}
+\titleformat{\subsection}{\large\bfseries\color{ink}}{\thesubsection}{0.55em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries\color{accentdark}}{\thesubsubsection}{0.5em}{}
+\titlespacing*{\section}{0pt}{2.0ex plus .5ex}{1.0ex}
+\titlespacing*{\subsection}{0pt}{1.6ex plus .4ex}{0.7ex}
+
+\setlist[itemize]{leftmargin=1.4em,itemsep=0.25em,topsep=0.4em}
+\setlist[enumerate]{leftmargin=1.6em,itemsep=0.35em,topsep=0.4em}
+
+\newtcolorbox{infobox}[1][]{
+  enhanced,
+  colback=panelblue,
+  colframe=panelblue,
+  boxrule=0pt,
+  arc=2mm,
+  left=6pt,right=6pt,top=6pt,bottom=6pt,
+  #1
+}
+
+\newtcolorbox{warningbox}[1][]{
+  enhanced,
+  colback=orange!7,
+  colframe=orange!25,
+  boxrule=0.6pt,
+  arc=2mm,
+  left=7pt,right=7pt,top=6pt,bottom=6pt,
+  #1
+}
+
+\newtcolorbox{codebox}[1][]{
+  enhanced,
+  colback=codebg,
+  colframe=rule,
+  boxrule=0.5pt,
+  arc=1.5mm,
+  left=7pt,right=7pt,top=6pt,bottom=6pt,
+  #1
+}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{codebg},
+  frame=none,
+  breaklines=true,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+  keywordstyle=\color{accentdark},
+  commentstyle=\color{muted},
+}
+
+\newcommand{\cmd}[1]{\texttt{\detokenize{#1}}}
+\newcommand{\file}[1]{\texttt{\detokenize{#1}}}
+\newcommand{\app}[1]{\textbf{#1}}
+\newcommand{\screenshot}[3][\textwidth]{%
+  \begin{center}
+  \fbox{\includegraphics[width=#1]{#2}}\\[3pt]
+  {\small\color{muted} #3}
+  \end{center}
+  \vspace{2pt}
+}
+
+
+\begin{document}
+
+% --- Cover ---
+\begin{titlepage}
+\thispagestyle{empty}
+\vspace*{1.4cm}
+{\color{accent}\rule{\textwidth}{2pt}}\\[1.2cm]
+{\fontsize{32}{36}\selectfont\bfseries\color{ink} JobTracker Hub}\par
+\vspace{0.25cm}
+{\Large\color{muted} Item 7 --- Development Log \& Checkpoint History}\par
+\vspace{1.0cm}
+\begin{infobox}
+\textbf{What this document is.} A running log of the Item 7 (Application Timeline) feature work, written so a new chat session -- with no memory of previous ones -- can pick up exactly where the last one stopped. This is a working document, not the end-user manual (see \file{JobTracker_User_Guide.pdf} for that) and not the Item 6 log (see \file{ITEM6_DEV_LOG.tex} for that item's own history).
+\end{infobox}
+\vspace{0.9cm}
+\begin{tabularx}{\textwidth}{@{}>{\bfseries}lX@{}}
+Feature & Item 7 --- Application Timeline (document-derived events + status-history-backed current status) \\
+Workflow & One chat = one tested, zipped checkpoint. Claude does not touch GitHub or build the DMG. \\
+Base project & JobTracker Hub, Item 6 / Checkpoint 6 sealed, 144/144 tests passing before this log's Checkpoint 1. \\
+Scope reference & \file{ITEM7_TIMELINE_FDD_DRAFT.md} at the repository root defines v1 scope in full; this log records what was actually built and verified against it. \\
+This log & Updated at the end of every checkpoint chat; latest checkpoint's ``Next Steps'' box is always the first thing to read.
+\end{tabularx}
+\vfill
+\textbf{Repository:} \url{https://github.com/willmaddock/jobtracker-hub} \par
+\textbf{Log version:} Checkpoint 1 (sealed) \quad | \quad \textbf{Updated:} August 29, 2026 \par
+\vspace{0.6cm}
+{\small\color{muted} Hand this PDF (or its \file{.tex} source) plus the latest checkpoint zip to the next chat as its starting context.}
+\end{titlepage}
+
+\setcounter{tocdepth}{1}
+\tableofcontents
+\newpage
+
+\section{How To Use This Document}\label{sec:howto}
+
+\begin{infobox}
+\textbf{For the human.} At the start of a new chat, upload the latest checkpoint zip and this \file{.tex} (or the compiled PDF), plus \file{ITEM6_DEV_LOG.tex} for the preceding item's history. Tell the new Claude session to read the \hyperref[sec:next-steps]{Next Steps} box for the most recent checkpoint before doing anything else.
+\end{infobox}
+
+\begin{infobox}
+\textbf{For the next Claude session.} This log is cumulative -- do not delete earlier checkpoint sections when you add a new one. Append a new \texttt{Checkpoint N} section below the most recent one, update the \hyperref[sec:next-steps]{Next Steps} box to reflect the new state, and bump the cover page's checkpoint number and date. Keep every checkpoint's original ``What was done'' section intact as history, even after its follow-up items are completed elsewhere.
+\end{infobox}
+
+\subsection{Ground rules that apply to every checkpoint}
+\begin{itemize}
+  \item Claude works only on the local project source. No git commit, no git push, no GitHub Releases, no building the \file{.dmg}.
+  \item The human integrates each checkpoint zip into their real working repository, handles GitHub, builds the DMG, and performs real Safari/packaged-app validation.
+  \item Every checkpoint must leave the existing test suite passing. Existing tests are never weakened or removed to make new tests pass.
+  \item A checkpoint is produced only when the working tree has reached a coherent, testable state -- never a zip of broken work just because the chat is ending.
+  \item Extraction and inference stay deterministic and local (regex/heuristics), never a required cloud/AI dependency, per the project's local-first privacy posture.
+  \item \textbf{Keep this log from growing without bound.} Once more than 3 checkpoints exist, condense every checkpoint older than the most recent 3 down to a short paragraph (scope + one-line outcome + deliverable filename) instead of its full ``What was done'' detail. Never condense the \emph{Next Steps} section, and never condense any of the 3 most recent checkpoints.
+\end{itemize}
+
+\section{Next Steps}\label{sec:next-steps}
+
+\begin{warningbox}
+\textbf{Read this first.} This box always reflects the state after the \emph{most recently completed} checkpoint. If you are starting a new chat, this is your starting instruction.
+\end{warningbox}
+
+\textbf{As of the Item 7 closeout, Item 7 is sealed.} The recommended next task is:
+
+\begin{enumerate}
+  \item \textbf{Scope Item 8 only -- do not implement it in the same chat that scopes it.} The archive/lifecycle engine, deferred since Item 6's Checkpoint 1, is the standing candidate. No design work on it has begun.
+  \item If Item 8 is deferred further, the FDD draft's out-of-scope list (\S\ref{sec:cp1-fdd-scope}) is the place to start for a v2 Timeline scope: multi-transition status history on the Timeline itself (not just the latest), and/or a UI affordance for the identical-status-saved-twice case's manual verification gap noted in \S\ref{sec:cp1-limitations}.
+  \item \textbf{Git has not been committed or pushed for either CP6 (Item 6) or Item 7.} Both are sealed and ready; committing (one or two commits, as previously decided), pushing, and building the next DMG are the user's own next steps against their controlled local repository.
+\end{enumerate}
+
+\textbf{Not yet started:} everything in the items above. No Item 8 code, design document, or FDD exists yet.
+
+\section{Checkpoint 1 --- Application Timeline (Document Events + Status History)}\label{sec:cp1}
+
+\subsection{Scope}
+Build the Timeline view recommended at the end of Item 6: the shape of an application's life -- applied, interviewed, resolved -- derived from evidence the app already extracts, per \file{ITEM7_TIMELINE_FDD_DRAFT.md}. Full FDD text lives at the repository root; the v1-scope summary that matters for this checkpoint:
+
+\begin{infobox}
+\textbf{v1 scope, in brief.}\label{sec:cp1-fdd-scope} Two kinds of Timeline entry: (1) \textbf{document-derived events}, one per \cmd{application_confirmation}/\cmd{interview_notice} document with a detected date, never merged even when a folder has more than one of either type; (2) a single item-level \textbf{``Current status''} entry, backed by a new append-only \cmd{status_history} log rather than a document, since the real corpus has almost no standalone rejection documents to derive a rejection event from. Explicitly out of v1 scope: recovering a transition date for any status set before \cmd{status_history} existed, and showing more than the single latest transition to the current status.
+\end{infobox}
+
+\subsection{What was done}
+\begin{itemize}
+  \item \textbf{\file{_app/dossier.py}:} \cmd{assemble_dossier()} now also returns \cmd{timeline_events} -- a list built from the new \cmd{TIMELINE_EVENT_DOC_TYPES = ("application_confirmation", "interview_notice")} tuple, reusing the exact same per-document \cmd{detected_date_applied} that \file{extract.py} already computes for every document regardless of type (no new extraction logic). Every matching document becomes its own event; a folder with a phone-screen request and a later interview request produces two entries, not one. Events sort by \cmd{(date, doc-type-order, relpath)}, with \cmd{application_confirmation} breaking a same-date tie before \cmd{interview_notice} via \cmd{_TIMELINE_TYPE_ORDER}.
+  \item \textbf{\file{_app/overrides_store.py}:} new append-only \cmd{status_history} table (\cmd{id}, \cmd{item_key}, \cmd{status} -- the resulting \emph{effective} status, so a reset-to-auto is still a real findable transition -- \cmd{changed_at}, \cmd{source}), plus an index on \cmd{item_key}. New functions \cmd{append_status_history} (no-op on an exact repeat of the current status -- no duplicate row), \cmd{get_status_history}, \cmd{get_latest_status_change} (the most recent row matching a given status, correctly returning the \emph{second} occurrence after a re-open), and \cmd{delete_status_history} (called wherever an item's overrides are deleted, so removed applications don't leave orphaned history).
+  \item \textbf{\file{_app/api.py}:} \cmd{save_override()} and \cmd{bulk_override()} both call \cmd{append_status_history()} whenever the effective status actually changes. \cmd{/api/applications/\{item\_id\}/dossier} adds \cmd{current_status}, \cmd{current_status_date} (\cmd{YYYY-MM-DD} from \cmd{get_latest_status_change}, or \cmd{None}), and \cmd{current_status_date_known} (\cmd{False} when no matching history row exists -- e.g.\ a status set before this table shipped -- so the UI reports the date as genuinely unknown rather than guessing). Override-deletion paths also call \cmd{delete_status_history}.
+  \item \textbf{Tests:} \file{tests/test_timeline.py} (new, 7 tests) -- confirmation-only events, interview-only events, multiple interview documents each producing their own event, chronological cross-doc-type sort, same-date tiebreak ordering, an empty timeline when no dated evidence exists, and \cmd{timeline_events} coexisting correctly alongside Checkpoint 6's \cmd{date_applied} auto-fill in the same response. \file{tests/test_status_history.py} (new, 14 tests) -- direct unit tests of \file{overrides_store.py}'s new functions (table creation, append/get, no-duplicate-on-repeat-save, multi-step transition sequencing, latest-match lookup including the re-opened-status case, no-history case) plus end-to-end API tests covering \cmd{save_override}/\cmd{bulk_override} logging and \cmd{current_status_date_known}'s honest-unknown behavior for a pre-existing status.
+\end{itemize}
+
+\begin{infobox}
+\textbf{Design note -- why status history, not a document-derived rejection event.} The FDD draft's originally discussed six-stage abstract event model included a document-derived rejection stage. Real-corpus review during implementation showed this doesn't match the data: rejection is very rarely communicated as its own distinct document in the working tracker, if at all, compared to confirmation and interview-request emails. Rather than build detection logic against evidence that mostly doesn't exist, rejection (and any other status) surfaces through the same item-level \cmd{status_history} log that already exists for \cmd{manual_status} tracking -- the ``Current status'' Timeline entry, not a fabricated document event.
+\end{infobox}
+
+\begin{infobox}
+\textbf{Design note -- append-only, no-op on repeat, by design.}\label{sec:cp1-noop} \cmd{status_history} exists to answer ``when did this become X'', not to log every save click. Two consecutive saves of the same effective status (e.g.\ re-saving a note without changing the status dropdown) must not insert a second row, or \cmd{get_latest_status_change} would report the second click's timestamp as the transition date even though nothing actually changed. \cmd{test_repeated_save_of_same_status_does_not_duplicate_history} exercises this directly.
+\end{infobox}
+
+\subsection{Test results}
+\begin{codebox}
+\begin{lstlisting}[language=bash]
+$ python3 -m pytest -q
+144 passed, 1 warning
+\end{lstlisting}
+\end{codebox}
+All 123 pre-existing tests pass unchanged, plus the 21 new Item 7 tests above (7 in \file{test_timeline.py}, 14 in \file{test_status_history.py}). Run for real against the FastAPI \cmd{TestClient} against the working environment -- this checkpoint's implementation session, like Checkpoints 3 and 6 of Item 6 before the real-app follow-up, is recorded here as reported from that run rather than re-executed by every later chat that reads this log, since this closeout session's own sandbox has no network access to install \cmd{pytest}/\cmd{fastapi}/\cmd{httpx}.
+
+\subsection{Post-checkpoint verification: manual click-through against the real packaged app}\label{sec:cp1-verification}
+A manual click-through was carried out in a later session directly against the real working tracker (\file{working-db.zip}), using both the local dev server (Safari, \cmd{127.0.0.1}) and the packaged \file{JobTracker Hub.app} DMG build. \textbf{Two separate, out-of-sync data copies were involved at different points} -- see the note below before reading the results.
+
+\begin{itemize}
+  \item \textbf{Confirmation-only and confirmation+interview timeline events rendered correctly}, each showing the expected date and source document.
+  \item \textbf{Multiple-interview handling validated}: a folder with more than one interview-related document produced a separate Timeline entry for each, not a single merged line.
+  \item \textbf{A pre-existing rejection (set before \cmd{status_history} shipped) correctly showed its status date as unknown} rather than a fabricated or backfilled date -- confirming \cmd{current_status_date_known: false} behaves as designed against real, not synthetic, pre-existing data.
+  \item \textbf{Restart durability, proven twice.} An application's status (Apple Retail) was set, saved, and the packaged app was then fully quit and relaunched from the DMG -- \cmd{Current status: Applied -- since 2026-08-29} was still shown afterward, read from \cmd{overrides.db} on disk rather than anything held in memory. This was confirmed a second time later in the same session after an additional import.
+  \item \textbf{A real multi-step transition round trip.} Apple Retail was moved Applied $\to$ Interviewing $\to$ Applied in the packaged app, with a ``Saved.'' toast and correct pipeline-count movement (41$\to$40 applied / 13$\to$14 interviewing, then back) on each of the two saves.
+  \item \textbf{\cmd{date_applied} stayed independent of Timeline events} throughout -- no cross-talk observed between the Checkpoint-6 date-applied auto-fill/conflict/provenance behavior and the new Timeline entries.
+\end{itemize}
+
+\begin{warningbox}
+\textbf{Important: two application instances were open during validation.} A Safari window against the local dev server (\cmd{127.0.0.1}) and the packaged app were tracking two different, out-of-sync copies of the underlying data at different points in the session -- at one point an imported \file{working-db.zip} snapshot predated an edit made in the other window, meaning that edit (a Brother status change) landed in a workspace copy that was no longer the active one afterward, not a data-loss bug. The dev-server window's own stale-display behavior (e.g.\ a Timeline line not refreshing immediately after a save made in a different window entirely) reflects that separate workspace and is \textbf{not} recorded as an Item 7 defect. Only the packaged application's results, listed above, count as the official Item 7 real-app validation.
+\end{warningbox}
+
+\subsection{Known limitations}\label{sec:cp1-limitations}
+\begin{itemize}
+  \item \textbf{The identical-status-saved-twice case was not independently isolated as its own step in the manual click-through.} The real click-through covered two genuine transitions (Applied $\to$ Interviewing $\to$ Applied), not a same-status-twice repeat save specifically. The no-duplicate-row behavior itself is fully covered at the unit level (\S\ref{sec:cp1-noop}, \cmd{test_repeated_save_of_same_status_does_not_duplicate_history}, part of the passing 144/144 run) -- this is a gap in independent real-app corroboration of an already-verified case, not an open correctness question.
+  \item Cannot recover a transition date for any status set before \cmd{status_history} existed, by design -- see the FDD draft and \cmd{current_status_date_known}.
+  \item The Timeline's ``Current status'' entry shows only the single latest transition to the current status, not a full multi-transition history, in v1.
+  \item Carries forward all Item 6 (Checkpoints 1--6) limitations unchanged (US-format phone regex, empty-password-only PDF decryption, no \file{.docx} support, trailing-boilerplate bleed into the last-matched role section, arbitrary-but-deterministic alphabetical job-posting tiebreak, no per-document source attribution on merged contacts, English-month/US-slash-date detection only, no signal for which confirmation document wins when a folder has more than one).
+\end{itemize}
+
+\subsection{Deliverable}
+\file{jobtracker-hub-item7-merged.zip} (implementation) and this closeout's handoff zip -- full repository source (minus \file{.venv}, \file{.git}, caches, and local workspace state), plus this development log, \file{ITEM7_TIMELINE_FDD_DRAFT.md}, and an updated \file{CHANGES.md} at the repository root.
+
+\section{Item 7 Closeout}\label{sec:closeout}
+
+\textbf{Item 7 is sealed.} Automated tests: 144/144 (21 of them new to Item 7). Real packaged-app validation: pass, per \S\ref{sec:cp1-verification}, with the Safari/dev-server discrepancy explicitly excluded from the result per the warning box above. Checkpoint 6 of Item 6 remains sealed and was confirmed unaffected. No Item 8 work -- design or implementation -- has begun. Git has not been committed or pushed; that, along with building the next DMG, remains the user's own next step against their controlled local repository, per the workflow described in \S\ref{sec:howto}.
+
+\end{document}

@@ -297,6 +297,18 @@ def build(root: Path, db_path: Path) -> None:
     if not root.is_dir():
         raise SystemExit(f"Not a directory: {root}")
 
+    # A linked/owned workspace's db directory (_app/workspaces/<id>/) is
+    # created once, at link/create time (see workspace.py's ws_dir.mkdir
+    # calls) -- but nothing re-creates it before a LATER rebuild if that
+    # folder goes missing in the meantime (a fresh checkout that never
+    # restored gitignored runtime state, an external cleanup tool, a
+    # workspaces.json copied/restored without its sibling data folder,
+    # etc.). Without this, sqlite3.connect() below fails with the opaque
+    # "unable to open database file" instead of just recreating the
+    # folder, since SQLite never creates missing parent directories on
+    # its own. overrides_store.get_conn() already guards the equivalent
+    # case for overrides.db -- this mirrors that same defense here.
+    db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     conn.executescript("DROP TABLE IF EXISTS documents_fts;")
     conn.executescript("DROP TABLE IF EXISTS documents;")

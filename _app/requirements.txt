@@ -4,3 +4,4 @@ pydantic>=2.7
 python-multipart>=0.0.9
 Send2Trash>=1.8
 mammoth>=1.8  # .docx -> HTML, for inline preview only (never writes back to the .docx)
+pypdf>=4.0    # PDF text extraction for the Application Dossier (extract.py); reads only, never writes PDFs

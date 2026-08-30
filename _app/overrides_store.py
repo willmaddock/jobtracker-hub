@@ -22,6 +22,14 @@ CREATE TABLE IF NOT EXISTS item_overrides (
     manual_status TEXT,          -- overrides the auto-inferred status when set
     notes TEXT,
     date_applied TEXT,           -- ISO date, set by you (mtime is unreliable — see README)
+    date_applied_source TEXT,    -- Checkpoint 6: how date_applied got its value --
+                                  -- "confirmation" or "posting" when it was accepted from a
+                                  -- detected-date suggestion (dossier.py's evidence tier),
+                                  -- NULL when you typed it yourself. Display-only provenance;
+                                  -- never affects which date wins. Cleared automatically
+                                  -- whenever date_applied is set WITHOUT this field also being
+                                  -- sent (see api.py's save_override) -- a manual retype makes
+                                  -- the old provenance label stale, so it goes away with it.
     next_action TEXT,
     next_action_date TEXT,       -- ISO date
     archived INTEGER NOT NULL DEFAULT 0,  -- hide from Needs Attention without deleting
@@ -75,6 +83,44 @@ CREATE TABLE IF NOT EXISTS folder_overrides (
     archived INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT
 );
+
+CREATE TABLE IF NOT EXISTS document_extractions (
+    content_hash TEXT PRIMARY KEY,   -- same SHA-256 as documents.content_hash (db.py's
+                                      -- duplicate-detection hash) -- keying the cache on
+                                      -- content rather than relpath means an identical
+                                      -- resume filed under two applications is only ever
+                                      -- run through extraction once.
+    extractor_version TEXT NOT NULL, -- extract.EXTRACTOR_VERSION at the time this row was
+                                      -- written; a stale version is treated as a cache miss
+                                      -- rather than reused, so logic changes take effect
+                                      -- without a manual cache-clear step.
+    extracted_json TEXT NOT NULL,    -- JSON: {extraction_ok, error, text_length, emails,
+                                      -- phones, urls, ...} -- see extract.py.
+    extracted_at TEXT NOT NULL
+);
+
+-- Item 7: append-only status-change log. item_overrides.manual_status only
+-- ever stores the CURRENT value (overwritten in place on every save), so
+-- there was previously no way to answer "when did this become rejected" --
+-- this table exists solely to answer that question, going forward. Rows
+-- are only ever inserted, never updated or overwritten (see
+-- append_status_history's no-op-on-repeat-save behavior below), so the
+-- most recent row matching a given status is that status's transition
+-- date. Only covers changes made after this table shipped -- it cannot
+-- retroactively recover a date for a status set earlier (see
+-- ITEM7_TIMELINE_FDD_DRAFT.md).
+CREATE TABLE IF NOT EXISTS status_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_key TEXT NOT NULL,
+    status TEXT NOT NULL,        -- the resulting EFFECTIVE status (manual_status if set,
+                                  -- else the item's auto-detected status) -- so a "reset
+                                  -- to auto" action is still a real, findable transition,
+                                  -- not a NULL gap.
+    changed_at TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'manual'
+);
+
+CREATE INDEX IF NOT EXISTS idx_status_history_item_key ON status_history(item_key);
 """
 
 
@@ -85,6 +131,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(item_overrides)")}
     if "activity_override" not in cols:
         conn.execute("ALTER TABLE item_overrides ADD COLUMN activity_override TEXT")
+        conn.commit()
+    if "date_applied_source" not in cols:
+        conn.execute("ALTER TABLE item_overrides ADD COLUMN date_applied_source TEXT")
         conn.commit()
 
 
@@ -124,6 +173,7 @@ def upsert_override(conn: sqlite3.Connection, item_key: str, **fields) -> None:
         "manual_status": existing.get("manual_status"),
         "notes": existing.get("notes"),
         "date_applied": existing.get("date_applied"),
+        "date_applied_source": existing.get("date_applied_source"),
         "next_action": existing.get("next_action"),
         "next_action_date": existing.get("next_action_date"),
         "archived": existing.get("archived", 0),
@@ -134,12 +184,13 @@ def upsert_override(conn: sqlite3.Connection, item_key: str, **fields) -> None:
     conn.execute(
         """
         INSERT INTO item_overrides
-            (item_key, manual_status, notes, date_applied, next_action, next_action_date, archived, snoozed_until, activity_override, updated_at)
-        VALUES (:item_key, :manual_status, :notes, :date_applied, :next_action, :next_action_date, :archived, :snoozed_until, :activity_override, :updated_at)
+            (item_key, manual_status, notes, date_applied, date_applied_source, next_action, next_action_date, archived, snoozed_until, activity_override, updated_at)
+        VALUES (:item_key, :manual_status, :notes, :date_applied, :date_applied_source, :next_action, :next_action_date, :archived, :snoozed_until, :activity_override, :updated_at)
         ON CONFLICT(item_key) DO UPDATE SET
             manual_status=excluded.manual_status,
             notes=excluded.notes,
             date_applied=excluded.date_applied,
+            date_applied_source=excluded.date_applied_source,
             next_action=excluded.next_action,
             next_action_date=excluded.next_action_date,
             archived=excluded.archived,
@@ -152,6 +203,7 @@ def upsert_override(conn: sqlite3.Connection, item_key: str, **fields) -> None:
             "manual_status": merged["manual_status"] or None,
             "notes": merged["notes"] or None,
             "date_applied": merged["date_applied"] or None,
+            "date_applied_source": merged["date_applied_source"] or None,
             "next_action": merged["next_action"] or None,
             "next_action_date": merged["next_action_date"] or None,
             "archived": int(merged["archived"] or 0),
@@ -215,6 +267,60 @@ def delete_override(conn: sqlite3.Connection, item_key: str) -> None:
     permanently deleted — item_key is gone for good, so a leftover row here
     would just be a ghost with nothing to ever attach itself back to."""
     conn.execute("DELETE FROM item_overrides WHERE item_key = ?", (item_key,))
+    conn.commit()
+
+
+# --- status history (Item 7: append-only log behind the Timeline's
+# "Current status" entry) -----------------------------------------------------
+def append_status_history(conn: sqlite3.Connection, item_key: str, status: str, source: str = "manual") -> None:
+    """Append one status-change row, but only when `status` actually differs
+    from the most recently recorded value for this item — saving the same
+    status again (e.g. re-saving an already-"applied" item) must not create
+    a duplicate transition. Called from api.py's save_override/bulk_override
+    whenever manual_status changes (including a reset back to the
+    auto-detected status)."""
+    last = conn.execute(
+        "SELECT status FROM status_history WHERE item_key = ? ORDER BY id DESC LIMIT 1",
+        (item_key,),
+    ).fetchone()
+    if last and last["status"] == status:
+        return
+    conn.execute(
+        "INSERT INTO status_history (item_key, status, changed_at, source) VALUES (?, ?, ?, ?)",
+        (item_key, status, now_iso(), source),
+    )
+    conn.commit()
+
+
+def get_status_history(conn: sqlite3.Connection, item_key: str) -> list[dict]:
+    """Every recorded transition for this item, oldest first."""
+    return [
+        dict(r)
+        for r in conn.execute(
+            "SELECT * FROM status_history WHERE item_key = ? ORDER BY id ASC",
+            (item_key,),
+        )
+    ]
+
+
+def get_latest_status_change(conn: sqlite3.Connection, item_key: str, status: str) -> dict | None:
+    """Most recent status_history row recording a transition TO `status` for
+    this item — powers the Item 7 Timeline's "Current status" date. Returns
+    None when no such transition has ever been logged, which happens both
+    for a status that hasn't changed since this table shipped and for one
+    set entirely before it existed; either way, the Timeline should show
+    that date as unknown rather than guess."""
+    row = conn.execute(
+        "SELECT * FROM status_history WHERE item_key = ? AND status = ? ORDER BY id DESC LIMIT 1",
+        (item_key, status),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def delete_status_history(conn: sqlite3.Connection, item_key: str) -> None:
+    """Drops all status_history rows for a permanently-deleted item — same
+    ghost-row reasoning as delete_override/delete_folder_override above."""
+    conn.execute("DELETE FROM status_history WHERE item_key = ?", (item_key,))
     conn.commit()
 
 
@@ -305,3 +411,33 @@ def set_hub_settings(conn: sqlite3.Connection, **fields) -> dict:
     )
     conn.commit()
     return merged
+
+
+# --- document extraction cache (Item 6 foundation) ---------------------------
+# Deliberately just get/set, no "merge partial fields" behavior like the
+# tables above: a cached extraction result is a single opaque JSON blob
+# produced entirely by extract.py, not something built up field-by-field
+# from separate API calls.
+
+def get_extraction(conn: sqlite3.Connection, content_hash: str) -> dict | None:
+    row = conn.execute(
+        "SELECT * FROM document_extractions WHERE content_hash = ?", (content_hash,)
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def set_extraction(
+    conn: sqlite3.Connection, content_hash: str, extractor_version: str, data: dict
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO document_extractions (content_hash, extractor_version, extracted_json, extracted_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(content_hash) DO UPDATE SET
+            extractor_version=excluded.extractor_version,
+            extracted_json=excluded.extracted_json,
+            extracted_at=excluded.extracted_at
+        """,
+        (content_hash, extractor_version, json.dumps(data), now_iso()),
+    )
+    conn.commit()

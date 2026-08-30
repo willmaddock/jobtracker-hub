@@ -46,6 +46,7 @@ from pydantic import BaseModel
 from send2trash import send2trash
 
 import db
+import dossier
 import overrides_store as ov
 import labels
 import workspace as ws
@@ -236,6 +237,9 @@ class OverrideRequest(BaseModel):
     reset_status: bool = False
     notes: Optional[str] = None
     date_applied: Optional[str] = None
+    date_applied_source: Optional[str] = None  # "confirmation"/"posting" when accepting a
+                                                # detected-date suggestion; omit for a manual
+                                                # retype so save_override clears stale provenance
     next_action: Optional[str] = None
     next_action_date: Optional[str] = None
     archived: Optional[bool] = None
@@ -703,6 +707,78 @@ def application_documents(item_id: int):
     return docs
 
 
+@app.get("/api/applications/{item_id}/dossier")
+def application_dossier(item_id: int):
+    """Checkpoint 3: assembles the Application Dossier for one item --
+    contacts merged across all its documents, plus the four role sections
+    (role_summary/duties/required_qualifications/preferred_qualifications)
+    from whichever document is classified as the job posting. Checkpoint 5
+    adds detected_date_applied/detected_date_source_relpath, a best-effort
+    date-applied suggestion pulled from an application_confirmation or
+    job_posting document.
+
+    Checkpoint 6 refines what happens with that suggestion, split by
+    evidence tier (dossier.assemble_dossier's detected_date_evidence_tier):
+      - date_applied already has a value (typed, or auto-filled earlier):
+        NEVER touched here, regardless of tier. A value already on record
+        only ever changes via an explicit accept through save_override.
+      - date_applied is unset AND the evidence is "confirmation" (a direct
+        record of submission, from an application_confirmation document):
+        auto-filled here, once, silently -- see date_applied_auto_filled
+        in the response, which the frontend uses to know it needs to
+        refresh the applications list.
+      - date_applied is unset AND the evidence is only "posting" (weaker --
+        names when the position was *listed*, not applied to): left unset
+        and still surfaced as a suggestion for the user to accept or
+        dismiss, same as before.
+    See dossier.assemble_dossier() for the extraction/tiebreak rules.
+
+    Item 7 adds two more things to the response, both read-only here (this
+    endpoint writes nothing new to overrides.db beyond the existing
+    date_applied auto-fill above):
+      - `timeline_events` is passed straight through from
+        dossier.assemble_dossier() -- doc-derived, nothing to compute here.
+      - `current_status` / `current_status_date` / `current_status_date_known`
+        cover the Timeline's last line. `current_status` is the same
+        manual-status-or-auto-status value db.load_applications() calls
+        `effective_status`; the date comes from overrides_store.py's
+        status_history log via get_latest_status_change(), which only has
+        entries for changes made after Item 7 shipped -- so
+        current_status_date_known is False (and current_status_date is
+        None) for any status that predates it, rather than guessing."""
+    jt_conn, ov_conn = get_conns()
+    item_key = item_key_for(jt_conn, item_id)  # raises 404 if the item doesn't exist
+    docs = db.load_documents(jt_conn, item_id, ov_conn)
+    result = dossier.assemble_dossier(ov_conn, current_root(), docs)
+
+    result["date_applied_auto_filled"] = False
+    existing = ov.get_override(ov_conn, item_key)
+    if (
+        not existing.get("date_applied")
+        and result.get("detected_date_evidence_tier") == "confirmation"
+        and result.get("detected_date_applied")
+    ):
+        ov.upsert_override(
+            ov_conn,
+            item_key,
+            date_applied=result["detected_date_applied"],
+            date_applied_source="confirmation",
+        )
+        result["date_applied_auto_filled"] = True
+
+    item_row = jt_conn.execute("SELECT status FROM items WHERE id = ?", (item_id,)).fetchone()
+    auto_status = item_row["status"] if item_row else "unknown"
+    current_status = existing.get("manual_status") or auto_status
+    status_change = ov.get_latest_status_change(ov_conn, item_key, current_status)
+    result["current_status"] = current_status
+    result["current_status_date"] = status_change["changed_at"][:10] if status_change else None
+    result["current_status_date_known"] = bool(status_change)
+
+    jt_conn.close()
+    ov_conn.close()
+    return result
+
+
 def resync_fts(jt_conn) -> None:
     """Fully rebuild documents_fts from the documents/items tables (the real
     source of truth), instead of patching individual rows.
@@ -1106,6 +1182,7 @@ def delete_category(folder: str):
         # the whole folder.
         for item_key in item_keys:
             ov.delete_override(ov_conn, item_key)
+            ov.delete_status_history(ov_conn, item_key)
         for relpath in doc_relpaths:
             ov.set_document_override(ov_conn, relpath, None)
         ov.delete_folder_override(ov_conn, folder)
@@ -1275,6 +1352,15 @@ def save_override(app_id: int, req: OverrideRequest):
         fields["notes"] = req.notes
     if "date_applied" in req.model_fields_set:
         fields["date_applied"] = req.date_applied
+        # A date_applied write that doesn't also carry a source is a manual
+        # retype (or a clear) -- any provenance label from an earlier
+        # detected-date accept is now stale, so drop it here rather than
+        # leaving a "Detected from ..." caption pointing at a date the user
+        # just overwrote by hand. When the caller DOES send a source (accepting
+        # a suggestion), the branch below applies it instead of this default.
+        fields["date_applied_source"] = None
+    if "date_applied_source" in req.model_fields_set:
+        fields["date_applied_source"] = req.date_applied_source
     if "next_action" in req.model_fields_set:
         fields["next_action"] = req.next_action
     if "next_action_date" in req.model_fields_set:
@@ -1286,6 +1372,17 @@ def save_override(app_id: int, req: OverrideRequest):
     if "activity_override" in req.model_fields_set:
         fields["activity_override"] = req.activity_override
     ov.upsert_override(ov_conn, item_key, **fields)
+
+    # Item 7: log a status_history row whenever manual_status actually
+    # changes (set OR cleared via reset_status) -- the resulting EFFECTIVE
+    # status is what gets logged, not the raw manual_status field, so a
+    # reset-to-auto is still a findable transition (see overrides_store.py).
+    if "manual_status" in fields:
+        item_row = jt_conn.execute("SELECT status FROM items WHERE id = ?", (app_id,)).fetchone()
+        auto_status = item_row["status"] if item_row else "unknown"
+        effective_status = fields["manual_status"] or auto_status
+        ov.append_status_history(ov_conn, item_key, effective_status)
+
     jt_conn.close()
     ov_conn.close()
     return {"ok": True, "id": app_id}
@@ -1317,10 +1414,15 @@ def bulk_override(req: BulkOverrideRequest):
 
     updated = 0
     for app_id in req.item_ids:
-        row = jt_conn.execute("SELECT item_key FROM items WHERE id = ?", (app_id,)).fetchone()
+        row = jt_conn.execute("SELECT item_key, status FROM items WHERE id = ?", (app_id,)).fetchone()
         if row is None:
             continue
         ov.upsert_override(ov_conn, row["item_key"], **fields)
+        # Item 7: same status_history logging as save_override, per item --
+        # see its comment above.
+        if "manual_status" in fields:
+            effective_status = fields["manual_status"] or row["status"]
+            ov.append_status_history(ov_conn, row["item_key"], effective_status)
         updated += 1
     jt_conn.close()
     ov_conn.close()
@@ -1428,6 +1530,7 @@ def _delete_application(jt_conn, ov_conn, app_id: int) -> None:
     resync_fts(jt_conn)
     jt_conn.commit()
     ov.delete_override(ov_conn, row["item_key"])
+    ov.delete_status_history(ov_conn, row["item_key"])
     # Also clear any per-document doc-type overrides for files that lived
     # under this application — the DELETE above only removed jobtracker.db's
     # `documents` rows; overrides.db's `document_overrides` table (keyed by
@@ -1732,11 +1835,22 @@ def open_file(req: OpenFileRequest):
 # often just silently dropped). Shelling out to the OS opener sidesteps
 # that entirely — same approach as /api/open above, just for URLs instead
 # of local files.
+_OPEN_URL_SCHEMES = ("http://", "https://", "mailto:", "tel:")
+
+
 @app.post("/api/open-url")
 def open_url(req: OpenUrlRequest):
+    """Hands a URL to the OS's default handler. Originally http(s)-only
+    (job boards, career pages); the Dossier's Contacts section also routes
+    email/phone actions through here (mailto:/tel:) instead of
+    window.location.href, since that's unreliable in the packaged webview
+    (see openExternalUrl's comment in the frontend for why)."""
     url = (req.url or "").strip()
-    if not (url.startswith("http://") or url.startswith("https://")):
-        raise HTTPException(status_code=400, detail="Only http:// and https:// URLs can be opened.")
+    if not url.startswith(_OPEN_URL_SCHEMES):
+        raise HTTPException(
+            status_code=400,
+            detail="Only http://, https://, mailto:, and tel: URLs can be opened.",
+        )
 
     import platform
     import subprocess

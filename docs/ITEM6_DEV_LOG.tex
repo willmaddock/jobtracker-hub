@@ -1,0 +1,382 @@
+\documentclass[11pt]{article}
+
+% JobTracker Hub User Guide -- v1.1.0
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[expansion=false]{microtype}
+\usepackage[a4paper,top=2.2cm,bottom=2.2cm,left=2.3cm,right=2.3cm]{geometry}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage{fancyhdr}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage[most]{tcolorbox}
+\usepackage{amsmath}
+
+\definecolor{ink}{HTML}{17202A}
+\definecolor{muted}{HTML}{566573}
+\definecolor{accent}{HTML}{2563EB}
+\definecolor{accentdark}{HTML}{1D4ED8}
+\definecolor{panel}{HTML}{F4F7FB}
+\definecolor{panelblue}{HTML}{EEF4FF}
+\definecolor{rule}{HTML}{D8E0EA}
+\definecolor{codebg}{HTML}{F7F8FA}
+\definecolor{success}{HTML}{0F766E}
+\definecolor{warning}{HTML}{B45309}
+\hypersetup{
+  colorlinks=true,
+  linkcolor=accentdark,
+  urlcolor=accentdark,
+  citecolor=accentdark,
+  bookmarks=true,
+  bookmarksopen=true,
+  bookmarksnumbered=true,
+  pdfpagemode=UseOutlines,
+  pdftitle={JobTracker Hub -- Item 6 Development Log},
+  pdfauthor={JobTracker Hub},
+  pdfsubject={Item 6 (Application Dossier) development log and checkpoint history},
+  pdfkeywords={JobTracker Hub,Item 6,Application Dossier,development log,checkpoints}
+}
+
+\pagestyle{fancy}
+\setlength{\headheight}{24pt}
+\fancyhf{}
+\lhead{\textbf{JobTracker Hub}}
+\rhead{Item 6 Development Log}
+\cfoot{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\headrule}{\hbox to\headwidth{\color{rule}\leaders\hrule height \headrulewidth\hfill}}
+
+\titleformat{\section}{\Large\bfseries\color{ink}}{\thesection}{0.65em}{}
+\titleformat{\subsection}{\large\bfseries\color{ink}}{\thesubsection}{0.55em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries\color{accentdark}}{\thesubsubsection}{0.5em}{}
+\titlespacing*{\section}{0pt}{2.0ex plus .5ex}{1.0ex}
+\titlespacing*{\subsection}{0pt}{1.6ex plus .4ex}{0.7ex}
+
+\setlist[itemize]{leftmargin=1.4em,itemsep=0.25em,topsep=0.4em}
+\setlist[enumerate]{leftmargin=1.6em,itemsep=0.35em,topsep=0.4em}
+
+\newtcolorbox{infobox}[1][]{
+  enhanced,
+  colback=panelblue,
+  colframe=panelblue,
+  boxrule=0pt,
+  arc=2mm,
+  left=6pt,right=6pt,top=6pt,bottom=6pt,
+  #1
+}
+
+\newtcolorbox{warningbox}[1][]{
+  enhanced,
+  colback=orange!7,
+  colframe=orange!25,
+  boxrule=0.6pt,
+  arc=2mm,
+  left=7pt,right=7pt,top=6pt,bottom=6pt,
+  #1
+}
+
+\newtcolorbox{codebox}[1][]{
+  enhanced,
+  colback=codebg,
+  colframe=rule,
+  boxrule=0.5pt,
+  arc=1.5mm,
+  left=7pt,right=7pt,top=6pt,bottom=6pt,
+  #1
+}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{codebg},
+  frame=none,
+  breaklines=true,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+  keywordstyle=\color{accentdark},
+  commentstyle=\color{muted},
+}
+
+\newcommand{\cmd}[1]{\texttt{\detokenize{#1}}}
+\newcommand{\file}[1]{\texttt{\detokenize{#1}}}
+\newcommand{\app}[1]{\textbf{#1}}
+\newcommand{\screenshot}[3][\textwidth]{%
+  \begin{center}
+  \fbox{\includegraphics[width=#1]{#2}}\\[3pt]
+  {\small\color{muted} #3}
+  \end{center}
+  \vspace{2pt}
+}
+
+
+\begin{document}
+
+% --- Cover ---
+\begin{titlepage}
+\thispagestyle{empty}
+\vspace*{1.4cm}
+{\color{accent}\rule{\textwidth}{2pt}}\\[1.2cm]
+{\fontsize{32}{36}\selectfont\bfseries\color{ink} JobTracker Hub}\par
+\vspace{0.25cm}
+{\Large\color{muted} Item 6 --- Development Log \& Checkpoint History}\par
+\vspace{1.0cm}
+\begin{infobox}
+\textbf{What this document is.} A running log of the Item 6 (Application Dossier) feature work, written so a new chat session -- with no memory of previous ones -- can pick up exactly where the last one stopped. Each checkpoint section below corresponds to one delivered, tested zip. This is a working document, not the end-user manual (see \file{JobTracker_User_Guide.pdf} for that).
+\end{infobox}
+\vspace{0.9cm}
+\begin{tabularx}{\textwidth}{@{}>{\bfseries}lX@{}}
+Feature & Item 6 --- Application Dossier / Application Intelligence \\
+Workflow & One chat = one tested, zipped checkpoint. Claude does not touch GitHub or build the DMG. \\
+Base project & JobTracker Hub v1.1.0, 48/48 tests passing before Item 6 began. \\
+This log & Updated at the end of every checkpoint chat; latest checkpoint's ``Next Steps'' box is always the first thing to read.
+\end{tabularx}
+\vfill
+\textbf{Repository:} \url{https://github.com/willmaddock/jobtracker-hub} \par
+\textbf{Log version:} Checkpoint 6 \quad | \quad \textbf{Updated:} August 29, 2026 \par
+\vspace{0.6cm}
+{\small\color{muted} Hand this PDF (or its \file{.tex} source) plus the latest checkpoint zip to the next chat as its starting context.}
+\end{titlepage}
+
+\setcounter{tocdepth}{1}
+\tableofcontents
+\newpage
+
+\section{How To Use This Document}\label{sec:howto}
+
+\begin{infobox}
+\textbf{For the human.} At the start of a new chat, upload the latest checkpoint zip and this \file{.tex} (or the compiled PDF). Tell the new Claude session to read the \hyperref[sec:next-steps]{Next Steps} box for the most recent checkpoint before doing anything else.
+\end{infobox}
+
+\begin{infobox}
+\textbf{For the next Claude session.} This log is cumulative -- do not delete earlier checkpoint sections when you add a new one. Append a new \texttt{Checkpoint N} section below the most recent one, update the \hyperref[sec:next-steps]{Next Steps} box to reflect the new state, and bump the cover page's checkpoint number and date. Keep every checkpoint's original ``What was done'' section intact as history, even after its follow-up items are completed elsewhere.
+\end{infobox}
+
+\subsection{Ground rules that apply to every checkpoint}
+\begin{itemize}
+  \item Claude works only on the local project source. No git commit, no git push, no GitHub Releases, no building the \file{.dmg}.
+  \item The human integrates each checkpoint zip into their real working repository, handles GitHub, builds the DMG, and performs real Safari/packaged-app validation.
+  \item Every checkpoint must leave the existing test suite passing. Existing tests are never weakened or removed to make new tests pass.
+  \item A checkpoint is produced only when the working tree has reached a coherent, testable state -- never a zip of broken work just because the chat is ending.
+  \item Extraction and inference stay deterministic and local (regex/heuristics), never a required cloud/AI dependency, per the project's local-first privacy posture.
+  \item \textbf{Keep this log from growing without bound.} Once more than 3 checkpoints exist, condense every checkpoint older than the most recent 3 down to a short paragraph (scope + one-line outcome + deliverable filename) instead of its full ``What was done'' detail. Never condense the \emph{Next Steps} section, and never condense any of the 3 most recent checkpoints.
+\end{itemize}
+
+\section{Next Steps}\label{sec:next-steps}
+
+\begin{warningbox}
+\textbf{Read this first.} This box always reflects the state after the \emph{most recently completed} checkpoint. If you are starting a new chat, this is your starting instruction.
+\end{warningbox}
+
+\textbf{As of Checkpoint 6 (Auto-Fill Date Applied From Confirmation Evidence), the recommended next task is:}
+
+\begin{enumerate}
+  \item \textbf{Run the real \texttt{pytest} suite and do a manual click-through} of Checkpoint 6 against the real working tracker -- this session had no network access to install \texttt{pytest}/\texttt{fastapi}/\texttt{httpx} or \texttt{@babel/core}, so the new backend tests were only verified by direct module-level simulation and the frontend edit only by diff/bracket-balance review, not an actual test run or a real render. See \S\ref{sec:cp6-verification} for exactly what still needs confirming.
+  \item \textbf{Timeline view}, built from document mtimes/doc\_types per application (drafted $\to$ applied $\to$ interviewing/rejected), using the same \cmd{effective\_doc\_type} data the dossier and status-inference logic already read.
+  \item The archive/lifecycle engine remains deliberately deferred (see Checkpoint 1's design discussion) until the above is validated against the real 119-application dataset.
+\end{enumerate}
+
+\textbf{Checkpoint 6 (this checkpoint) still needs its post-checkpoint verification pass.} Unlike Checkpoints 3 and 5, this checkpoint's own session had no network access to install test/build tooling, so its correctness rests on direct code-level simulation and structural review rather than a real \texttt{pytest} run or a real JSX render/click. See \S\ref{sec:cp6-verification} for the specifics -- closing that gap is item 1 above.
+
+\textbf{Not yet started (later checkpoints, per the agreed roadmap):} everything in the items above, plus any follow-up on the known Dossier limitations noted in \S\ref{sec:cp3}/\S\ref{sec:cp4}/\S\ref{sec:cp5}/\S\ref{sec:cp6} (trailing-boilerplate bleed into the last role section; arbitrary-but-deterministic alphabetical tiebreak when a folder has more than one \cmd{job\_posting}-classified document; no per-document source attribution on merged contacts; date-applied detection's US-slash-date and English-month-name-only patterns; no signal for which confirmation document wins when a folder has more than one).
+
+\section{Earlier Checkpoints (condensed)}\label{sec:earlier}
+
+Per this log's own ground rules (\S\ref{sec:howto}), checkpoints older than the most recent three are condensed to scope + outcome + deliverable. Full detail for Checkpoints 4--6 follows below.
+
+\subsection{Checkpoint 1 --- Extraction Foundation}\label{sec:cp1}
+Built \file{_app/extract.py}: deterministic text extraction from \file{.pdf}/\file{.txt} plus conservative regex-based email/phone/URL extraction, backed by a content-hash-keyed cache in \file{overrides_store.py} (\cmd{document_extractions} table). 67 passed, 1 warning (19 new tests). Deliverable: \file{jobtracker-hub-item6-checkpoint01.zip}.
+
+\subsection{Checkpoint 2 --- Job-Posting Section Extraction}\label{sec:cp2}
+Built \file{_app/role_extract.py}: header-pattern splitting of extracted text into role\_summary/duties/required\_qualifications/preferred\_qualifications, with header phrasing collected empirically from ~20 real employers' postings in the working tracker. Runs unconditionally on all text (never gated on doc\_type, to preserve the content-hash cache's path-independence). \cmd{EXTRACTOR_VERSION} bumped to \texttt{"2"}. 82 passed, 1 warning (15 new/modified tests), plus a real-corpus sanity pass against all 39 job-posting-classified PDFs in the working tracker. Deliverable: \file{jobtracker-hub-item6-checkpoint02.zip}.
+
+\subsection{Checkpoint 3 --- Application Dossier Backend/API Assembly}\label{sec:cp3}
+First API wiring for Item 6: new \cmd{GET /api/applications/\{item\_id\}/dossier}, assembling one per-application payload from \file{dossier.py}'s new \cmd{assemble_dossier()} -- merged contacts across every document in the folder, plus the four Checkpoint-2 role sections from whichever document is picked as the job posting (\cmd{effective_doc_type == "job_posting"}, alphabetical tiebreak when more than one candidate exists, listed in \cmd{job_posting_candidates} for visibility). A document that fails to extract is skipped and reported in \cmd{extraction_errors} rather than failing the whole Dossier. 82 passed unaffected, plus 4 new tests in \file{test_dossier.py} (verified via a direct-simulation harness against real extraction code, since that session had no network access to run \texttt{pytest} itself). Deliverable: \file{jobtracker-hub-item6-checkpoint03.zip}.
+
+\section{Checkpoint 4 --- Application Dossier Frontend UI}\label{sec:cp4}
+
+\subsection{Scope}
+Surface Checkpoint 3's \cmd{GET /api/applications/\{item\_id\}/dossier} endpoint in the frontend, per Checkpoint 3's Next Steps box: a Dossier panel on the application detail view showing the four role sections and merged contacts, with clear ``Not detected''/empty states (never blank or silently hidden). Also closed a small gap this surfaced: the Contacts section's email/phone action buttons needed a way to open \cmd{mailto:}/\cmd{tel:} links through the app's existing OS-opener path, so \file{api.py}'s \cmd{/api/open-url} scheme allowlist was extended to match.
+
+\subsection{What was done}
+\begin{itemize}
+  \item \textbf{\file{_app/frontend/index.html}:}
+  \begin{itemize}
+    \item New components \cmd{DossierSection} and \cmd{ContactGroup} (see \S\ref{sec:cp4-components} below), plus \cmd{ROLE_SECTION_DEFS}/\cmd{NOT_DETECTED} constants mirroring \file{role_extract.py}'s \cmd{SECTION_KEYS}/\cmd{NOT_DETECTED} on the Python side.
+    \item New \texttt{.dossier-*}/\texttt{.contact-*} CSS rules reusing the app's existing design tokens (\texttt{--panel}, \texttt{--border}, \texttt{--text-soft}, the \texttt{.card}/\texttt{.section-label} conventions) instead of introducing a new visual language.
+    \item \cmd{DetailPane} renders \cmd{<DossierSection>} above ``Attached Documents'', and gained two new props (\cmd{dossier}, \cmd{fireToast}).
+    \item \cmd{PipelinePage} gained \cmd{dossierByItemId}/\cmd{ensureDossier} props, fetching the selected application's Dossier in the same effect that already fetches its documents.
+    \item \cmd{App()} gained a \cmd{dossierByItemId} cache with \cmd{ensureDossier} (fetch-once, cache) and \cmd{invalidateDossier} (evict-on-mutation) -- deliberately mirroring \cmd{docsByItemId}'s existing shape rather than inventing a second caching pattern. See \S\ref{sec:cp4-cache} for why eviction, not in-place patching, was the right call here.
+  \end{itemize}
+  \item \textbf{\file{_app/api.py}:} \cmd{/api/open-url}'s scheme check refactored into an \cmd{_OPEN_URL_SCHEMES} tuple and extended from \texttt{http://}/\texttt{https://}-only to also accept \texttt{mailto:} and \texttt{tel:}, so \cmd{ContactGroup}'s action buttons can route through the same OS-opener endpoint Search Hub already uses for external links, instead of a raw \cmd{window.location.href} (unreliable inside the packaged webview -- see \cmd{openExternalUrl}'s own comment in the frontend for the original reasoning, which now applies equally to mailto/tel).
+  \item \textbf{\file{tests/test_open_url.py}} (new): 12 tests against the scheme allowlist -- every accepted scheme returns \texttt{200} (including a \texttt{mailto:} with query params), every rejected scheme (\texttt{javascript:}, \texttt{file:}, \texttt{ftp:}, empty/whitespace/non-URL strings) returns \texttt{400} naming all four allowed schemes, whitespace is trimmed before the check, and the OS-opener call (\cmd{subprocess.run}/\cmd{os.startfile}, monkeypatched) is never reached on a rejected request.
+\end{itemize}
+
+\subsection{Component design: DossierSection / ContactGroup}\label{sec:cp4-components}
+\cmd{DossierSection} takes the already-loaded \cmd{app} object (for the context row: company, job title, effective status, date applied, days since activity -- all already present on every application row, no second fetch needed) plus the \cmd{dossier} object from the new cache. Three states: \cmd{dossier === undefined} renders a loading placeholder (fetch in flight); \cmd{dossier} falsy after a failed fetch renders nothing (fails soft, doesn't break the rest of \cmd{DetailPane}); the loaded object renders the context row, a note naming which attached document supplied the role sections (with a ``View'' button into the existing inline document viewer, when that document is present in the currently-loaded doc list), the four role-section blocks, and the Contacts block. Each role-section block shows \cmd{NOT_DETECTED} in muted italic rather than an empty string when absent, matching the backend's own never-fabricate convention end-to-end. \cmd{ContactGroup} renders one column per contact kind (emails/phones/links); each value gets a copy button (\cmd{navigator.clipboard}, falling back to a toast telling the user to copy manually on failure -- the same fallback pattern \file{index.html} already uses for \cmd{SettingsModal}'s diagnostic-report copy button) and an action button that opens \texttt{mailto:}/\texttt{tel:}/\texttt{https:} via \cmd{openExternalUrl}.
+
+\subsection{Design decision: cache-evict, not cache-patch, on mutation}\label{sec:cp4-cache}
+\cmd{docsByItemId} is patched in place from each mutation's response, because that response already \emph{is} the new per-item document list. The Dossier's response is a derived aggregate -- which single document counts as ``the'' job posting (via the alphabetical tiebreak, \S\ref{sec:cp3}), and the deduped union of contacts across every document in the folder -- that a single mutation's response can't fully express client-side (e.g.\ deleting the current job-posting document should promote the next \cmd{job_posting_candidates} entry, if any, but \cmd{performDelete}'s response has no way to say what that is). \cmd{invalidateDossier} evicts the cache entry on all four document-mutation paths (\cmd{performDelete}, \cmd{renameDocument}, \cmd{uploadDocuments}, \cmd{saveDocTypeOverride}) and lets \cmd{ensureDossier} do one clean re-fetch next time the item is selected, rather than attempting to patch a shape that doesn't map onto any single mutation's response. The cost is one extra round-trip per mutation, judged acceptable since Dossier-affecting mutations (uploads/renames/deletes/fix-type) are deliberate, occasional actions, not a hot path.
+
+\subsection{Test results}
+\begin{codebox}
+\begin{lstlisting}[language=bash]
+$ python3 -m pytest -q
+100 passed, 1 warning
+\end{lstlisting}
+\end{codebox}
+Unlike Checkpoints 2--3, this session had network access to install \file{_app/requirements.txt} + \file{requirements-dev.txt} and actually execute the full suite, rather than falling back to manual verification. All 88 pre-existing tests pass unchanged (including Checkpoint 3's own 4 dossier tests, run for real this time -- they'd only been verified by a standalone manual harness before), plus the 12 new \file{test_open_url.py} tests. The frontend JSX was additionally checked with a real parser -- \cmd{@babel/core} + \cmd{@babel/preset-react}'s \cmd{transformSync} against the extracted \texttt{<script type="text/babel">} block, installed via \texttt{npm} in a scratch directory -- rather than only a bracket-balance count (which the two prior sessions had to rely on, for lack of network access); a real parser catches malformed JSX (mismatched tags, bad prop syntax) that balanced brackets alone can miss. Parses clean.
+
+\textbf{Not covered by any automated test:} this repository has no frontend component/JS test harness (backend-only \texttt{pytest}; confirmed by scanning for \texttt{.test.js}/Playwright/Selenium -- none exist), so \cmd{DossierSection}/\cmd{ContactGroup}'s actual rendering and the copy/mailto/tel button behavior have only been verified by the real JSX parse plus manual re-reading of every changed call site's props against its consumer's destructured signature -- not an actual render or click. \textbf{A manual click-through is recommended before treating this checkpoint as fully verified} -- see the Next Steps box.
+
+\subsection{Post-checkpoint fix: Dossier not refreshing after ``Fix type''}\label{sec:cp4-refresh-fix}
+The manual click-through this section recommended was carried out in a later chat and surfaced one real bug missed by both the JSX parse and the prop-signature review above (neither exercises actual React re-render behavior). Uploading a new document or renaming one correctly refreshed the Dossier with no page reload. Using ``Fix type'' to reclassify a document (e.g.\ unclassified $\to$ \cmd{job_posting}) while staying on the \emph{same} application did not -- the card stayed on ``Loading dossier\ldots'' until the page was manually reloaded.
+
+\textbf{Root cause:} \cmd{PipelinePage}'s data-fetch effect was
+\begin{codebox}
+\begin{lstlisting}
+useEffect(() => {
+  if (selected) { ensureDocs(selected.id); ensureDossier(selected.id); }
+}, [selected && selected.id]);
+\end{lstlisting}
+\end{codebox}
+-- dependent only on \emph{which} application is selected, not on whether that application's cached dossier is still present. \cmd{invalidateDossier} (\S\ref{sec:cp4-cache}) correctly evicts \cmd{dossierByItemId[itemId]} on \cmd{saveDocTypeOverride}, but with \cmd{selected.id} unchanged (the user never navigated away), nothing else was left to call \cmd{ensureDossier} again for that same id -- the cache entry just stayed evicted (\cmd{undefined}), which is exactly the state \cmd{DossierSection} renders as its loading placeholder. A full reload happened to fix it only because it resets all React state and re-runs every effect from scratch.
+
+\textbf{Fix:} widen the effect's dependency array to also track the selected item's current cache value, not just its id:
+\begin{codebox}
+\begin{lstlisting}
+useEffect(() => {
+  if (selected) { ensureDocs(selected.id); ensureDossier(selected.id); }
+}, [selected && selected.id, selected && dossierByItemId[selected.id]]);
+\end{lstlisting}
+\end{codebox}
+\cmd{PipelinePage} already received \cmd{dossierByItemId} as a prop, so no new plumbing was needed. \cmd{ensureDocs}/\cmd{ensureDossier} are both already no-ops once their target is cached (see their own \cmd{prev[itemId] !== undefined} / \cmd{prev[itemId]} checks), so the wider dependency does not cause repeated fetching once a value resolves -- it only re-fires the fetch on the specific transition that matters: cached value $\to$ evicted.
+
+\textbf{Verified (real click-through, not static analysis this time):} re-tested rename, new-file upload, and ``Fix type'' against the running app after the fix. All three now update the Dossier in place with no manual page refresh required. This closes the one open item from \S\ref{sec:cp4}'s original verification caveat -- Checkpoint 4 is now considered fully verified by direct use, not just by parse/read-through.
+
+\subsection{Deliverable}
+\file{jobtracker-hub-item6-checkpoint04.zip} -- full repository source (minus \file{.venv}, \file{.git}, caches, and local workspace state), plus an updated \file{CHANGES.md} at the repository root.
+
+\subsection{Known limitations}
+\begin{itemize}
+  \item No date-applied evidence suggestion yet -- confirmed there is still no backend signal for this anywhere (\file{dossier.py}, \file{extract.py}, \file{db.py}), so building it is real detection work deferred to the next checkpoint, not something that could be faked in this pass.
+  \item No ``confirmed'' evidence state for role sections or contacts -- only ``detected''/\cmd{NOT_DETECTED} exist in the real data; a ``confirmed'' state would need a manual-override mechanism that doesn't exist in the backend yet.
+  \item Carries forward all Checkpoint 1--3 limitations unchanged (US-format phone regex, empty-password-only PDF decryption, no \file{.docx} support, trailing-boilerplate bleed into the last-matched role section, arbitrary-but-deterministic alphabetical job-posting tiebreak, no per-document source attribution on merged contacts).
+\end{itemize}
+
+\section{Checkpoint 5 --- Date-Applied Evidence Suggestion}\label{sec:cp5}
+
+\subsection{Scope}
+The Next Steps item Checkpoint 4 flagged as real detection work, not UI wiring: detect an application date from a document's own text and surface it in the Dossier as an explicit accept/reject suggestion next to the existing Date Applied field -- never a silent overwrite of a manually-set \cmd{date_applied} override.
+
+\subsection{What was done}
+\begin{itemize}
+  \item \textbf{New module \file{_app/date_extract.py}:}
+  \begin{itemize}
+    \item \cmd{extract_application_date(text)} -- returns an ISO \cmd{YYYY-MM-DD} string or \cmd{None}. Never fabricates, same convention as \file{role_extract.py}.
+    \item Primary pattern: the mail client's own \cmd{Date: July 10, 2025 at 10:56 AM} header line that ``print to PDF'' confirmation emails carry -- the single most reliable signal available, since it's the mail system's timestamp, not a guess from body prose. Handles an abbreviated month (\cmd{Jul 30, 2025}) and a repeated \cmd{Date:} label (\cmd{Date: Date: Date: Jul 30, 2025}), both observed in the real working tracker.
+    \item Fallback pattern: a keyworded numeric date (\cmd{received}/\cmd{submitted}/\cmd{applied} within 120 characters, never crossing a sentence boundary, of a \cmd{MM/DD/YYYY}) for ATS confirmation bodies (schooljobs.com, governmentjobs.com) that restate the timestamp inline instead of via an email header.
+    \item Both patterns were collected empirically against real confirmation-email PDFs in \file{working-db.zip} (Extend, FRCC, Metro Water Recovery, Vantor, MAXAR, T-Mobile, ...) rather than guessed abstractly -- a spot-check across 461 PDFs under \file{Applications/} found the email-header pattern present in 104 of them.
+    \item An invalid calendar date from a false-positive-shaped match (e.g. a corrupted ``February 32, 2025'') is rejected via Python's own \cmd{date()} validation rather than coerced into something plausible-looking.
+  \end{itemize}
+  \item \textbf{\file{_app/extract.py}:} \cmd{EXTRACTOR_VERSION} bumped \texttt{"2"} $\to$ \texttt{"3"}. \cmd{extract_document()} now merges a \cmd{detected_date_applied} field into its result dict (via \cmd{date_extract.extract_application_date()}, or \cmd{None} on extraction failure), following the same ``runs on ALL text, not gated on doc\_type'' rule Checkpoint 2 established for role sections -- gating it would break the \cmd{overrides.db} extraction cache's content-hash path-independence guarantee.
+  \item \textbf{\file{_app/dossier.py}:} new \cmd{DATE_EVIDENCE_DOC_TYPES = ("application_confirmation", "job_posting")} priority tuple. \cmd{assemble_dossier()} now collects each document's \cmd{detected_date_applied} alongside the existing job-posting-pick loop, and picks the alphabetically-first relpath within the highest-priority doc type that had any hit -- see \S\ref{sec:cp5-priority} for why confirmation beats posting. Adds \cmd{detected_date_applied} / \cmd{detected_date_source_relpath} (both \cmd{None} when nothing was found) to the returned dict. Never writes to \cmd{date_applied} itself.
+  \item \textbf{\file{_app/api.py}:} \cmd{/api/applications/\{item\_id\}/dossier}'s docstring updated to describe the two new response fields; no behavioral or schema changes (the endpoint already returns \cmd{dossier.assemble_dossier()}'s dict as-is).
+  \item \textbf{\file{_app/frontend/index.html}:} \cmd{DossierSection} gained a date-suggestion block under the existing ``Date applied'' context field -- shown only when \cmd{detected_date_applied} is present and differs from the application's current \cmd{date_applied}, with ``Use detected date'' / ``Keep existing'' buttons and a new \cmd{.dossier-date-suggestion} CSS rule reusing existing design tokens. \cmd{DossierSection} took a new \cmd{onUseDetectedDate} prop instead of the raw \cmd{onSaveOverride}, so the actual save logic (and the local \cmd{dateApplied} state the editable form field further down reads) stays owned by \cmd{DetailPane} -- see \S\ref{sec:cp5-state} for why. \cmd{DetailPane} gained a \cmd{useDetectedDate(iso)} handler mirroring the existing \cmd{quickFollowUp}/\cmd{quickResetActivity} pattern, and passes it down.
+  \item \textbf{Tests:} \file{tests/test_date_extract.py} (new, 8 tests) covering both patterns, the abbreviated-month/repeated-label variants, the 120-char/sentence-boundary guard against false positives, no-pattern and empty-text cases, and invalid-calendar-date rejection. \file{tests/test_dossier.py} extended with 3 new tests: confirmation-email date detected end-to-end through the real API, confirmation prioritized over a job posting's own date when both are present, and the \cmd{None}/\cmd{None} case when no document yields a date.
+\end{itemize}
+
+\begin{infobox}
+\textbf{Design note -- why \texttt{application\_confirmation} beats \texttt{job\_posting} for date evidence.}\label{sec:cp5-priority} A confirmation email's own header timestamp is a direct record of when the application was submitted. A job posting's text at best names when the position was \emph{listed} -- a different, earlier date that would misrepresent \cmd{date_applied} if surfaced with equal priority. \cmd{DATE_EVIDENCE_DOC_TYPES} therefore checks \cmd{application_confirmation} documents first and only falls back to \cmd{job_posting} text when no confirmation email is present in the folder (or none of them yielded a recognizable date). This mirrors Checkpoint 3's job-posting-pick precedent: the choice is deterministic and made at the assembly layer, never inside \file{extract.py}.
+\end{infobox}
+
+\begin{infobox}
+\textbf{Design note -- keeping the suggestion state in \texttt{DetailPane}, not \texttt{DossierSection}.}\label{sec:cp5-state} \cmd{DetailPane} already owns a local \cmd{dateApplied} state that the editable Date Applied form field (further down the same pane) reads and writes, synced from \cmd{app.date_applied} only when \cmd{app.id} changes (an existing pattern predating this checkpoint). Had \cmd{DossierSection} called \cmd{onSaveOverride} directly on ``Use detected date'', the context row at the top of the Dossier card would update immediately (it reads \cmd{app.date_applied} directly) while the editable field lower in the same pane would silently keep showing the pre-suggestion value until the application was reselected -- two fields disagreeing about the same underlying value in the same screen. Routing the click through a \cmd{useDetectedDate} handler defined in \cmd{DetailPane} itself (mirroring \cmd{quickFollowUp}/\cmd{quickResetActivity}, which already face this exact same local-state-vs-override tension) keeps both fields in sync from a single write.
+\end{infobox}
+
+\subsection{Test results}
+\begin{codebox}
+\begin{lstlisting}[language=bash]
+$ python3 -m pytest -q
+111 passed, 1 warning
+\end{lstlisting}
+\end{codebox}
+All 100 pre-existing tests pass unchanged, plus 11 new (8 in \file{test_date_extract.py}, 3 in \file{test_dossier.py}). The frontend JSX was checked the same way Checkpoint 4 established -- \cmd{@babel/core} + \cmd{@babel/preset-react}'s \cmd{transformSync} against the extracted \texttt{<script type="text/babel">} block -- and parses clean. That parse check caught a real issue during this checkpoint's own development, not after the fact: an initial draft called \cmd{useState}/\cmd{useEffect} inside \cmd{DossierSection} \emph{after} its two existing early returns (\cmd{dossier === undefined} / \cmd{!dossier}), which violates React's Rules of Hooks -- the number of hooks called would differ between the loading/null renders and the loaded render, which React detects at runtime (not something a JSX parse alone would catch, since the code is syntactically valid either way; this was caught by reviewing the diff against React's hook-ordering rule before it reached a click-through). Fixed by moving both hooks to the top of the component, before either early return, so they run unconditionally on every render regardless of which branch a given render takes.
+
+\textbf{Not covered by any automated test at the time this checkpoint was cut:} same standing limitation as every checkpoint touching the frontend (no JS/component test harness in this repository) -- the actual click behavior of ``Use detected date''/``Keep existing'' and the interaction between \cmd{DossierSection}'s suggestion-dismissal state and \cmd{DetailPane}'s form field had only been verified by the JSX parse plus manual re-reading of props/hook-ordering, not an actual render or click. A manual click-through was recommended before treating this checkpoint as fully verified -- carried out in a later session, see \S\ref{sec:cp5-verification}.
+
+\subsection{Post-checkpoint verification: manual click-through against the real tracker}\label{sec:cp5-verification}
+The manual click-through this checkpoint originally recommended was carried out in a later chat, directly against the real 110-application working tracker (\cmd{python3 -m venv .venv}, install, \cmd{uvicorn api:app --reload}) rather than synthetic fixtures. \textbf{No bugs found} -- every case exercised behaved as designed:
+
+\begin{itemize}
+  \item \textbf{Suggestion renders and both fields stay in sync.} For an application with \cmd{date_applied} unset (Adams County), the Dossier showed \cmd{Detected 2026-02-17 from Application received by Adams County.pdf} with ``Use detected date''/``Keep existing''. Clicking ``Use detected date'' updated the context row's Date Applied \emph{and} the Days Since Activity figure (0d $\to$ 193d, since \file{db.py}'s existing staleness logic falls back to \cmd{date_applied} once it's set) in the same action -- exactly the two-fields-in-sync behavior \S\ref{sec:cp5-state}'s design note was written to guarantee.
+  \item \textbf{Suggestion box disappears once accepted.} After ``Use detected date'' set \cmd{date_applied} to match \cmd{detected_date_applied}, the suggestion box correctly stopped rendering on the next view of that application (AffiniPay, FRCC) -- confirming \cmd{showDateSuggestion}'s equality check against the now-current value, not a hard-coded ``already suggested once'' flag.
+  \item \textbf{Date detection is independent of role-section/job-posting availability.} An application folder with no document classified as \cmd{job_posting} (FRCC 2 -- IT Manager) correctly showed the existing ``No document in this application's folder is marked as a job posting...'' message for the four role sections \emph{alongside} a working date-applied suggestion (\cmd{Detected 2026-08-02 from Application Received.pdf}) -- confirming \cmd{DATE_EVIDENCE_DOC_TYPES} and the job-posting pick are genuinely independent code paths, as designed.
+  \item \textbf{Downstream staleness/Needs-Attention logic picks up the accepted date correctly.} After accepting FRCC 2's detected date, the item correctly flagged ``27d since date applied $\bullet$ needs attention'' and appeared on the Needs Attention page alongside AffiniPay (339 days quiet) -- confirming the Checkpoint-1-era \cmd{reference_date = activity_override or date_applied or last_activity} logic in \file{db.py} picks up a Dossier-suggested date exactly the same as a manually-typed one, with no special-casing needed.
+  \item \textbf{Contacts rendered correctly alongside the date suggestion} on the same card (multiple emails, a phone number, working Email/Call buttons) -- unaffected by this checkpoint's changes, confirming no regression to Checkpoint 3--4's Contacts block.
+\end{itemize}
+
+\textbf{Also confirmed in this session:} the full suite (\texttt{111 passed, 1 warning}) was independently re-run against a clean install on a second machine/environment (macOS, Python 3.14.7, pytest 9.1.1 -- vs.\ this checkpoint's own Python 3.12.3 run), giving the same 111/111 result and confirming \file{date_extract.py}'s patterns aren't accidentally dependent on a specific Python or \texttt{pypdf} version.
+
+This closes the one open item from \S\ref{sec:cp5}'s original verification caveat -- Checkpoint 5 is now considered fully verified by direct use, not just by parse/read-through, matching the bar Checkpoint 4 set in \S\ref{sec:cp4-refresh-fix}.
+
+\subsection{Deliverable}
+\file{jobtracker-hub-item6-checkpoint05.zip} -- full repository source (minus \file{.venv}, \file{.git}, caches, and local workspace state), plus an updated \file{CHANGES.md} at the repository root.
+
+\subsection{Known limitations}
+\begin{itemize}
+  \item English month names and US-style \cmd{MM/DD/YYYY} only -- no ISO (\cmd{YYYY-MM-DD}) body-text pattern, no other locales' date formats. Not seen in the real working tracker's corpus (all US-based applications), so not built speculatively; would need real examples before adding.
+  \item The keyworded fallback pattern is scoped to \cmd{received}/\cmd{submitted}/\cmd{applied} only -- a confirmation email phrased entirely differently (no header \cmd{Date:} line and none of those three verbs near its date) reports \cmd{None} rather than a guess, by design, but worth knowing going in.
+  \item No signal for \emph{which} \cmd{application_confirmation} document's date is most trustworthy when a folder has more than one (e.g. an initial confirmation plus a later status-update email that also matches the confirmation classifier) -- same alphabetical-tiebreak posture as the existing job-posting pick, not a new gap this checkpoint introduces, but worth revisiting together if it turns out to matter.
+  \item Carries forward all Checkpoint 1--4 limitations unchanged (US-format phone regex, empty-password-only PDF decryption, no \file{.docx} support, trailing-boilerplate bleed into the last-matched role section, arbitrary-but-deterministic alphabetical job-posting tiebreak, no per-document source attribution on merged contacts, no ``confirmed'' evidence state for role sections/contacts).
+\end{itemize}
+
+\section{Checkpoint 6 --- Auto-Fill Date Applied From Confirmation Evidence}\label{sec:cp6}
+
+\subsection{Scope}
+A review of Checkpoint 5 pointed out that ``detection could be wrong'' and ``detection could destroy something'' are two different risks that Checkpoint 5's design had conflated: when \cmd{date_applied} is already blank, a wrong auto-fill is a data-quality annoyance fixable later, not a silent loss of something the user deliberately typed -- so requiring a click in that specific case buys no real safety, only friction. This checkpoint splits the Checkpoint 5 suggestion by evidence tier (confirmation vs.\ posting, \cmd{DATE_EVIDENCE_DOC_TYPES}'s existing two-entry priority order) and by whether \cmd{date_applied} already has a value, and auto-fills the one case that's actually safe: field empty, confirmation-tier evidence found.
+
+\subsection{What was done}
+\begin{itemize}
+  \item \textbf{\file{_app/dossier.py}:} \cmd{assemble_dossier()} now also returns \cmd{detected_date_evidence_tier} (\texttt{"confirmation"}, \texttt{"posting"}, or \cmd{None}) -- a direct read of which entry in \cmd{DATE_EVIDENCE_DOC_TYPES} won, so callers don't have to re-derive it. Still never writes to \cmd{date_applied} itself.
+  \item \textbf{\file{_app/overrides_store.py}:} new \cmd{date_applied_source} column on \cmd{item_overrides}, with a migration for existing \file{overrides.db} files (same \cmd{PRAGMA table_info} pattern the \cmd{activity_override} migration already established) -- \texttt{"confirmation"}/\texttt{"posting"} when the current \cmd{date_applied} came from an accepted or auto-filled detection, \cmd{NULL} when the user typed it. Display-only provenance; never affects which date wins on a conflict. \cmd{upsert_override()} threads it through the existing merge-from-existing-row pattern.
+  \item \textbf{\file{_app/api.py}:} \cmd{OverrideRequest} gained \cmd{date_applied_source}; \cmd{save_override()} clears it automatically whenever \cmd{date_applied} is written without a source also being sent (a manual retype makes any earlier provenance label stale), and applies it when the caller does send one. \cmd{/api/applications/\{item\_id\}/dossier} now performs the auto-fill itself: when \cmd{date_applied} is unset \emph{and} the winning evidence is confirmation-tier, it writes \cmd{date_applied} + \cmd{date_applied_source} before returning, and reports \cmd{date_applied_auto_filled: true} in the response. Posting-tier evidence never auto-fills. A \cmd{date_applied} that already has any value -- typed, or auto-filled by an earlier call to this same endpoint -- is never touched again, regardless of what's detected afterward. See \S\ref{sec:cp6-once} for why that last rule matters concretely.
+  \item \textbf{\file{_app/frontend/index.html}:} \cmd{DossierSection}'s date-applied area now renders one of three mutually exclusive things: (1) a \textbf{conflict} prompt (value already on record, newly detected evidence disagrees) -- the same two-button ``Use detected date''/``Keep existing'' UI as Checkpoint 5, applying regardless of evidence tier; (2) a \textbf{weak suggestion} (field empty, only posting-tier evidence) -- new single ``Use this date'' button, worded as a review prompt, new \cmd{.dossier-date-suggestion-weak} CSS rule; (3) a \textbf{provenance caption} (value present, came from a confirmation-tier auto-fill/accept, nothing currently conflicting) -- new quiet \cmd{.dossier-date-provenance} line, no buttons. \cmd{DetailPane}'s \cmd{useDetectedDate(iso, source)} handler now forwards the evidence tier as \cmd{date_applied_source}. \cmd{ensureDossier} now calls \cmd{refreshApps()} whenever a dossier response reports \cmd{date_applied_auto_filled: true}, since the Pipeline list (not the dossier response) is what feeds \cmd{date_applied}/\cmd{date_applied_source} to the context row and the Needs-Attention staleness clock.
+  \item \textbf{Tests:} \file{tests/test_dossier.py} extended with a 7-test Checkpoint 6 section (empty+confirmation auto-fills; empty+posting-only stays unset and suggests; existing value + differing confirmation preserved; existing value matching detection produces no conflict signal; an auto-filled value + a later differing detection still preserved; confirmation still wins priority and still auto-fills; no detectable date never produces a false auto-fill flag). New \file{tests/test_overrides_store.py} (5 tests) -- direct unit tests of the migration and of \cmd{upsert_override}'s round-trip/clear/preserve behavior for \cmd{date_applied_source}.
+\end{itemize}
+
+\begin{infobox}
+\textbf{Design note -- why evidence tiers, not a confidence score.} The originating review considered a three-tier confidence model, but \file{date_extract.py} doesn't score confidence within a match -- it's binary (the pattern matched, or it didn't). The real distinguishing signal already in the code is \emph{which document type} the date came from, which \cmd{DATE_EVIDENCE_DOC_TYPES}'s existing two-entry priority order already captures, so this checkpoint reframes the suggestion around that existing split rather than inventing a scoring mechanism the extractor doesn't have. A posting-derived date is still surfaced (never discarded outright) when no confirmation email exists -- it's just never auto-applied.
+\end{infobox}
+
+\begin{infobox}
+\textbf{Design note -- auto-fill can only ever fire once, into a genuinely empty field.}\label{sec:cp6-once} Once a value lands in \cmd{date_applied} -- however it got there -- later detection results go through the same conflict-suggestion path as a manually-typed value, never a silent second overwrite. This matters concretely for a duplicate confirmation email with a different timestamp (e.g.\ a resend): without this rule, the \emph{second} dossier fetch after that email appears would silently correct a date the user never had a chance to weigh in on, on a field the app itself had just set moments earlier. \cmd{test_auto_filled_date_is_preserved_when_a_later_detected_date_differs} exercises exactly this sequence.
+\end{infobox}
+
+\subsection{Test results / verification method}\label{sec:cp6-verification}
+This session's sandbox had no network access to install \texttt{fastapi}/\texttt{pytest}/\texttt{httpx} (none were already present), so unlike Checkpoints 3 and 5 -- which eventually got a real \texttt{pytest} run, either in-session or in a later post-checkpoint pass -- \textbf{the new backend tests in this checkpoint have not been executed via a real \texttt{pytest}/\texttt{TestClient} run at all.} In its place:
+\begin{itemize}
+  \item All touched \file{.py} files were confirmed to pass \cmd{python3 -m py_compile} cleanly.
+  \item \file{overrides_store.py}'s migration and \cmd{upsert_override} round-trip/clear/preserve behavior were verified by direct standalone execution against a real \cmd{sqlite3} connection (not mocks) -- including a hand-built table simulating a pre-Checkpoint-6 \file{overrides.db} to confirm the migration path.
+  \item The full auto-fill decision (\file{dossier.py}'s \cmd{assemble_dossier()} plus \file{api.py}'s auto-fill branch) was run end-to-end as a standalone script against a real confirmation-email text fixture on disk, through the real extraction pipeline (\cmd{extract.get_or_extract}, \cmd{date_extract.extract_application_date}) -- confirming the detected date, tier, and resulting override row all come out as designed.
+\end{itemize}
+The frontend edit was similarly not checked with a real Babel/JSX parse (Checkpoint 4/5's method, via a locally-installed \cmd{@babel/core}, which isn't present in this sandbox). In its place: a full diff against the pre-checkpoint file confirmed every changed line matches the intended edits with nothing unintended touched, and a hand-rolled bracket-balance walk (skipping string/template/comment contents) confirmed the edited \cmd{DossierSection} function's braces close cleanly at the expected point, with the residual imbalance from the same walk over the whole script block shown to be identical before and after the edit (a known false-positive from JSX text containing apostrophes, e.g.\ ``don't'' -- present equally in both versions, not something this edit introduced).
+
+\textbf{This checkpoint has not had a manual click-through against the real working tracker}, unlike Checkpoint 5's post-checkpoint verification (\S\ref{sec:cp5-verification}). \textbf{A real \cmd{pytest} run and a manual click-through of the three date-applied render states (conflict / weak suggestion / provenance caption) are the first item in the Next Steps box} and should be treated as required before this checkpoint is considered fully verified, not optional follow-up.
+
+\subsection{Deliverable}
+\file{jobtracker-hub-item6-checkpoint06.zip} -- full repository source (minus \file{.venv}, \file{.git}, caches, and local workspace state), plus an updated \file{CHANGES.md} at the repository root and this updated dev log.
+
+\subsection{Known limitations}
+\begin{itemize}
+  \item \textbf{Not yet verified by a real test run or manual click-through} -- see the verification-method subsection above and the Next Steps box; this is the checkpoint's single most important open item, more so than any of the items below.
+  \item Carries forward all Checkpoint 1--5 limitations unchanged (US-format phone regex, empty-password-only PDF decryption, no \file{.docx} support, trailing-boilerplate bleed into the last-matched role section, arbitrary-but-deterministic alphabetical job-posting tiebreak, no per-document source attribution on merged contacts, no non-US date formats, no signal for which confirmation document wins when a folder has more than one).
+\end{itemize}
+
+\end{document}
