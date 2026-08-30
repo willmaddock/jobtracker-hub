@@ -104,6 +104,46 @@ def test_inspect_caps_file_count_on_a_huge_folder(client, tmp_path, ws_module, m
     assert body["capped"] is True
 
 
+def test_inspect_flags_the_jobtracker_folder_itself_as_internal_conflict(client, sample_root):
+    # Selecting a tracker's own internal storage folder in the picker
+    # (e.g. hidden files shown in Finder, one click too deep) must be
+    # flagged, not silently treated as a normal empty folder. See
+    # HANDOFF.md §3i / §3j.5.
+    dot_dir = sample_root / ".jobtracker"
+    dot_dir.mkdir()
+    body = client.post("/api/workspaces/inspect", json={"path": str(dot_dir)}).json()
+    assert body["exists"] is True
+    assert body["internal_conflict"]
+    assert "internal data folder" in body["internal_conflict"]
+
+
+def test_inspect_flags_any_folder_nested_inside_an_existing_tracker(client, sample_root, tmp_path):
+    client.post("/api/workspaces/link", json={"name": "Parent Tracker", "path": str(sample_root)})
+
+    nested = sample_root / "Applications"
+    body = client.post("/api/workspaces/inspect", json={"path": str(nested)}).json()
+    assert body["internal_conflict"]
+    assert "Parent Tracker" in body["internal_conflict"]
+
+
+def test_inspect_does_not_flag_the_tracker_root_itself(client, sample_root):
+    # Being an already-linked root is a separate concern (already_linked)
+    # -- linking the exact same folder again isn't a "nested inside
+    # itself" conflict.
+    client.post("/api/workspaces/link", json={"name": "Self", "path": str(sample_root)})
+    body = client.post("/api/workspaces/inspect", json={"path": str(sample_root)}).json()
+    assert body["internal_conflict"] is None
+    assert body["already_linked"] is True
+
+
+def test_inspect_does_not_flag_an_unrelated_folder(client, sample_root, tmp_path):
+    client.post("/api/workspaces/link", json={"name": "Some Tracker", "path": str(sample_root)})
+    other = tmp_path / "unrelated"
+    other.mkdir()
+    body = client.post("/api/workspaces/inspect", json={"path": str(other)}).json()
+    assert body["internal_conflict"] is None
+
+
 def test_workspace_list_includes_kind_and_overrides_flag(client, sample_root):
     entry = client.post(
         "/api/workspaces/link", json={"name": "My Job Search", "path": str(sample_root)}

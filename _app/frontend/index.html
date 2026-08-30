@@ -166,6 +166,20 @@
   .workspace-preview-headline{color:var(--text);margin-bottom:2px;font-weight:600;}
   .workspace-preview-sub{color:var(--text-soft);line-height:1.4;}
 
+  /* ---------- shared tracker-creation actions (TrackerCreationActions) ---------- */
+  /* Grouped by user intent (Start Fresh / Bring In a Copy / Use This Folder
+     As-Is) rather than by mechanism -- see HANDOFF.md §3j.2. Used by both
+     WorkspacePopover (layout="popover", compact) and NoTrackerOnboarding
+     (layout="onboarding", roomier) so the three actions are defined once. */
+  .workspace-group-label{font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;
+    color:var(--text-mute);padding:8px 8px 2px;}
+  .tca-onboarding .workspace-group-label{padding:14px 2px 4px;}
+  .tca-onboarding .workspace-group-label:first-child{padding-top:2px;}
+  .tca-onboarding .workspace-row-main{padding:10px 8px;font-size:13.5px;}
+  .tca-onboarding .workspace-action-desc{padding:2px 8px 4px;}
+  .workspace-portability-note{font-size:11px;line-height:1.4;color:var(--text-soft);
+    padding:4px 8px 0;border-left:2px solid var(--border-soft);margin:2px 0 0 2px;padding-left:8px;}
+
   /* ---------- generic layout ---------- */
   .main{flex:1;min-width:0;display:flex;flex-direction:column;overflow:hidden;}
   .topbar{display:flex;gap:12px;align-items:center;padding:16px 24px;border-bottom:1px solid var(--border-soft);flex-wrap:wrap;}
@@ -483,14 +497,54 @@ const THEME_KEY = "jth_theme";
 // never actually be seen) -- read once by App on mount, then cleared, so
 // the right post-import toast survives the reload. Values: "zip-success"
 // (a .zip import -- notes/statuses/dates travel via .jobtracker/overrides.db,
-// which zipfile preserves like any other entry) or "folder-warning" (the
-// browser folder-picker path -- browsers never include dotfiles in a
-// webkitdirectory upload, so .jobtracker/overrides.db can't come across
-// that way no matter what the server does with what it's given). Native
-// desktop folder import (packaged app, real filesystem path) does NOT use
-// this -- it reads the folder directly and does carry dotfiles across, so
-// it gets no warning.
+// which zipfile preserves like any other entry), "folder-warning" (the
+// browser folder-picker path, and the FileList it returned did NOT contain
+// a .jobtracker entry -- some browsers/versions strip dotfiles from a
+// webkitdirectory upload, so .jobtracker/overrides.db couldn't come across
+// that way), "folder-success" (browser folder-picker path, but the FileList
+// DID contain a .jobtracker entry -- this varies by browser and browser
+// version, so it's detected from what was actually picked rather than
+// assumed from the browser name), or "folder-native-success" (packaged
+// desktop's native folder import -- reads the real filesystem directly, so
+// dotfiles DO come across losslessly, same as a zip; see HANDOFF.md §3j.3
+// for why this now gets a matching confirmation toast instead of being the
+// one silent path).
 const IMPORT_NOTICE_KEY = "jth_import_notice";
+// Companion to IMPORT_NOTICE_KEY: how many pre-existing, already-orphaned
+// "JobTracker — <name>" folders _new_sibling_root() (workspace.py) had to
+// step past on disk to land on the one it just created. Written
+// alongside IMPORT_NOTICE_KEY by the create/import flows below whenever
+// the backend reports stale_siblings_found > 0, and folded into the same
+// post-reload toast rather than getting a second toast slot of its own.
+const STALE_SIBLINGS_KEY = "jth_stale_siblings";
+
+// Advisory only -- never gates behavior. The folder-warning toast uses this
+// to suggest a browser known (from real testing against this app -- see
+// HANDOFF.md) to bring dotfiles across via a plain folder upload, but only
+// when the person isn't already using it. UA sniffing is normally fragile,
+// which is exactly why nothing functional depends on it: the actual
+// success/warning choice above comes from checking the picked FileList for
+// a real .jobtracker entry, not from this guess.
+function suspectedNoDotfileFolderUpload(){
+  const ua = navigator.userAgent || "";
+  const isChrome = /Chrome|Chromium|Edg\//.test(ua);
+  return !isChrome;
+}
+
+// Shared by the pre-import Chrome-handoff check and the post-import toast
+// decision -- both need the same real answer to "did this FileList actually
+// include .jobtracker", so there's one place that scans for it.
+// webkitRelativePath is "<pickedFolderName>/rest/of/path" -- a .jobtracker
+// entry shows up as one of the path segments after the root, not
+// necessarily as a string prefix.
+function folderFilesIncludeDotfile(fileList){
+  if (!fileList) return false;
+  for (const f of fileList) {
+    const rel = f.webkitRelativePath || f.name;
+    if (rel.split("/").indexOf(".jobtracker") !== -1) return true;
+  }
+  return false;
+}
 
 const NAV_ICONS = {
   pipeline: "\u{1F4CA}",   // 📊
@@ -874,6 +928,12 @@ function describeFolderInspection(inspection, mode){
   if (!inspection || inspection.error) {
     return {tone:"block", headline:"Couldn't read that folder.", sub:(inspection && inspection.error) || "Something went wrong -- please try again.", canContinue:false};
   }
+  if (inspection.internal_conflict) {
+    // JobTracker's own internal storage, or something nested inside an
+    // existing tracker's root -- never a valid target, for either link
+    // or import (backend rejects both; see workspace._internal_tracker_conflict).
+    return {tone:"block", headline:"That's not a tracker folder.", sub:inspection.internal_conflict, canContinue:false};
+  }
   if (inspection.already_linked) {
     if (mode === "import") {
       return {
@@ -907,27 +967,505 @@ function describeFolderInspection(inspection, mode){
   };
 }
 
+// The three ways to get a tracker onto your list -- Create, Import a Copy
+// (zip or folder), Use an Existing Folder (link, desktop only) -- grouped
+// by what the user is trying to do rather than by mechanism (see
+// HANDOFF.md §3j.2), and defined exactly once (§3j.4) so WorkspacePopover
+// and NoTrackerOnboarding can't drift out of sync with each other the way
+// they had before. `layout` only changes container/spacing choices
+// ("popover" = compact rows inside the J-switcher popover, "onboarding" =
+// roomier rows inside the first-run card); the actions, copy, and API
+// calls underneath are identical either way. Errors are reported to the
+// caller via `onError` rather than kept locally, so each layout can show
+// them wherever its existing error banner already lives.
+// Shown when "Import a Copy" is clicked with a picked folder that's
+// missing .jobtracker, in a browser we don't already know is Chrome (see
+// suspectedNoDotfileFolderUpload) -- offers to hand off to Chrome instead
+// of silently doing the lossy import. Deliberately honest about what's
+// actually guaranteed here: no web page can detect which browsers are
+// installed. An earlier version of this modal tried a "googlechrome://"
+// link as a one-click shortcut -- confirmed in testing (session 9b) that
+// on current macOS/Safari this doesn't silently no-op the way undocumented
+// custom URL schemes are expected to; it throws a visible, alarming
+// "Safari cannot open the page because the address is invalid" system
+// dialog instead. That's worse than doing nothing, so the scheme link has
+// been removed entirely -- copy-and-paste is now the one and only path,
+// which is slower but never fails confusingly.
+function ChromeHandoffModal({onContinueAnyway, onCancel}){
+  const [copied, setCopied] = useState(false);
+  const plainUrl = `${window.location.origin}${window.location.pathname}?view=pipeline`;
+
+  async function copyUrl(){
+    try { await navigator.clipboard.writeText(plainUrl); setCopied(true); setTimeout(() => setCopied(false), 1500); }
+    catch(e) { /* best-effort */ }
+  }
+
+  // The import itself happened in a different browser entirely, so this
+  // tab's in-memory tracker list has no way to know about it -- every
+  // other import path in this app (doImport, link/native imports, the
+  // tracker switcher, see the window.location.reload() calls near it)
+  // reloads the page afterward for exactly this reason. Closing this
+  // modal without reloading would leave the person staring at the same
+  // stale "Nothing here" pipeline they started with. So this button does
+  // both: close, then reload, matching what every other successful import
+  // in this app already does.
+  function finishedInChrome(){
+    onCancel();
+    window.location.reload();
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={onCancel}>
+      <div className="modal" onClick={e => e.stopPropagation()} style={{position:"relative", maxWidth:460}}>
+        <button className="close-x" onClick={onCancel}>{"\u2715"}</button>
+        <h2>Bring in a complete copy instead?</h2>
+        <p style={{color:"var(--text-mute)", fontSize:12, marginTop:6}}>
+          This browser won't include your existing notes, statuses, or
+          dates in a folder copy. Chrome has carried these across
+          successfully in testing. Here's how to switch over:
+        </p>
+
+        <ol style={{margin:"14px 0 0", paddingLeft:20, fontSize:13, lineHeight:1.6, color:"var(--text-strong)"}}>
+          <li>
+            Copy this address:
+            <div style={{display:"flex", gap:6, marginTop:6}}>
+              <input className="workspace-rename-input" readOnly value={plainUrl}
+                style={{fontSize:11.5}} onClick={e => e.target.select()} />
+              <button className="btn" style={{flex:"none"}} onClick={copyUrl}>{copied ? "Copied\u2713" : "Copy"}</button>
+            </div>
+          </li>
+          <li style={{marginTop:10}}>
+            Open Chrome and paste it into the address bar.
+          </li>
+          <li style={{marginTop:10}}>
+            In Chrome, use <b>Bring In a Copy</b> the same way you did
+            here — it'll include everything this time.
+          </li>
+          <li style={{marginTop:10}}>
+            Once the import finishes in Chrome, come back here and click
+            <b> I'm Done — Close This</b> below. This tab will refresh to
+            pick up what you just imported.
+          </li>
+        </ol>
+
+        <div className="modal-foot" style={{justifyContent:"space-between"}}>
+          <button className="btn" onClick={onContinueAnyway}>Continue Importing Here Instead</button>
+          <button className="btn primary" onClick={finishedInChrome}>I'm Done — Close This</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TrackerCreationActions({layout, packaged, onError}){
+  const onboarding = layout === "onboarding";
+
+  const [creating, setCreating] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [createBusy, setCreateBusy] = useState(false);
+
+  const [importing, setImporting] = useState(false);
+  const [importName, setImportName] = useState("");
+  const [importFile, setImportFile] = useState(null);         // single .zip File
+  const [importFolderFiles, setImportFolderFiles] = useState(null); // FileList (browser webkitdirectory)
+  const [importDragOver, setImportDragOver] = useState(false);
+  const [importBusy, setImportBusy] = useState(false);
+  const importFileInputRef = useRef(null);
+  const importFolderInputRef = useRef(null);
+
+  // Packaged-only "Choose a folder instead" preview state -- pick -> inspect
+  // -> confirm, so picking a folder to import no longer commits blind. See
+  // describeFolderInspection() above for how an inspection becomes what's
+  // shown. null = no preview showing yet.
+  const [importPreview, setImportPreview] = useState(null); // {path, name, inspection}
+  const [importPreviewBusy, setImportPreviewBusy] = useState(false);
+
+  // Packaged-only "Use This Folder As-Is" (link) preview state -- same
+  // pick -> inspect -> confirm split as above.
+  const [linkPreview, setLinkPreview] = useState(null); // {path, name, inspection}
+  const [linkPreviewBusy, setLinkPreviewBusy] = useState(false);
+  const [linkBusy, setLinkBusy] = useState(false);
+
+  // Gate before the lossy path: shown instead of importing immediately
+  // when the picked folder is missing .jobtracker and we're not already
+  // in a browser known to carry it. See ChromeHandoffModal above.
+  const [chromeHandoffOpen, setChromeHandoffOpen] = useState(false);
+
+  async function doCreate(){
+    const n = newName.trim();
+    if (!n) return;
+    setCreateBusy(true); onError(null);
+    try {
+      const result = await apiPost("/api/workspaces", {name: n});
+      const staleCount = (result && result.workspace && result.workspace.stale_siblings_found) || 0;
+      if (staleCount > 0) {
+        try { sessionStorage.setItem(STALE_SIBLINGS_KEY, String(staleCount)); } catch(e) { /* best-effort */ }
+      }
+      clearCache();
+      window.location.reload();
+    } catch (e) { onError(String(e.message || e)); setCreateBusy(false); }
+  }
+
+  // Multipart, like the document/application upload flows elsewhere --
+  // posts the tracker name plus either a single .zip (import) or every
+  // file from a picked folder (import-folder, each carrying its
+  // webkitRelativePath as its filename so the server can rebuild the
+  // folder structure). See workspace.import_workspace_from_zip /
+  // import_workspace_from_files for how the source's contents get placed
+  // on disk -- the source itself is only ever read, never modified.
+  async function doImport(){
+    const n = importName.trim();
+    const hasFolder = importFolderFiles && importFolderFiles.length > 0;
+    if (!n || (!importFile && !hasFolder)) return;
+    setImportBusy(true); onError(null);
+    try {
+      const form = new FormData();
+      form.append("name", n);
+      let path;
+      if (hasFolder) {
+        for (const f of importFolderFiles) form.append("files", f, f.webkitRelativePath || f.name);
+        path = "/api/workspaces/import-folder";
+      } else {
+        form.append("file", importFile);
+        path = "/api/workspaces/import";
+      }
+      const result = await uploadFormData(`${API_BASE}${path}`, form);
+      const staleCount = (result && result.workspace && result.workspace.stale_siblings_found) || 0;
+      if (staleCount > 0) {
+        try { sessionStorage.setItem(STALE_SIBLINGS_KEY, String(staleCount)); } catch(e) { /* best-effort */ }
+      }
+      // Only set on success, right before the reload that would otherwise
+      // wipe it -- see IMPORT_NOTICE_KEY. For the folder path, don't assume
+      // dotfiles were stripped -- check what the browser actually handed us.
+      // webkitRelativePath is "<pickedFolderName>/rest/of/path", so a
+      // .jobtracker entry shows up as a path segment, not necessarily a
+      // prefix -- match it anywhere in the path.
+      let folderNotice = "folder-warning";
+      if (hasFolder && folderFilesIncludeDotfile(importFolderFiles)) {
+        folderNotice = "folder-success";
+      }
+      try { sessionStorage.setItem(IMPORT_NOTICE_KEY, hasFolder ? folderNotice : "zip-success"); } catch(e) { /* best-effort */ }
+      clearCache();
+      window.location.reload();
+    } catch (e) { onError(String(e.message || e)); setImportBusy(false); }
+  }
+
+  // Packaged-desktop-only path for "Choose a folder instead": pick_folder()
+  // opens the native dialog, inspect_folder() proxies to
+  // /api/workspaces/inspect so the user sees what's in the folder (and a
+  // default tracker name) before committing. Bridge methods live in
+  // desktop/launcher.py's Api; the actual copy happens in
+  // confirmImportFolderNative() via Api.confirm_import_folder. Browsers
+  // have no equivalent (no real filesystem path from an <input type="file">),
+  // so this whole flow only ever renders when packaged.
+  async function startImportFolderNative(){
+    if (!window.pywebview || !window.pywebview.api || !window.pywebview.api.pick_folder) {
+      onError("Native folder import isn't available in this build.");
+      return;
+    }
+    onError(null);
+    setImportPreviewBusy(true);
+    try {
+      const picked = await window.pywebview.api.pick_folder();
+      if (!picked || !picked.path) { setImportPreviewBusy(false); return; } // cancelled
+      const inspection = await window.pywebview.api.inspect_folder(picked.path);
+      const base = (picked.path.replace(/[\\/]+$/, "").split(/[\\/]/).pop()) || picked.path;
+      const defaultName = base.startsWith("JobTracker — ") ? (base.slice("JobTracker — ".length).trim() || base) : base;
+      setImportPreview({path: picked.path, name: defaultName, inspection});
+    } catch (e) {
+      onError(String(e.message || e));
+    } finally {
+      setImportPreviewBusy(false);
+    }
+  }
+
+  function cancelImportPreview(){ setImportPreview(null); }
+
+  async function confirmImportFolderNative(){
+    if (!importPreview) return;
+    const n = importPreview.name.trim();
+    if (!n) return;
+    setImportBusy(true);
+    onError(null);
+    try {
+      const result = await window.pywebview.api.confirm_import_folder(importPreview.path, n);
+      if (result && result.error) { onError(result.error); setImportBusy(false); return; }
+      // Native folder import reads the real filesystem, so it carries
+      // .jobtracker/overrides.db across just like a zip does -- give it
+      // the same kind of confirmation toast a zip import gets, rather
+      // than staying the one silent success path (§3j.3 toast-parity fix).
+      try { sessionStorage.setItem(IMPORT_NOTICE_KEY, "folder-native-success"); } catch(e) { /* best-effort */ }
+      const staleCount = (result && result.workspace && result.workspace.stale_siblings_found) || 0;
+      if (staleCount > 0) {
+        try { sessionStorage.setItem(STALE_SIBLINGS_KEY, String(staleCount)); } catch(e) { /* best-effort */ }
+      }
+      clearCache();
+      window.location.reload();
+    } catch (e) { onError(String(e.message || e)); setImportBusy(false); }
+  }
+
+  // Packaged-desktop-only: registers an EXISTING folder as a tracker IN
+  // PLACE (nothing copied). Same pick -> inspect -> confirm split as
+  // above, for the same reason: show what's actually in the folder --
+  // file count, whether it already looks like a tracker, whether it's
+  // already linked elsewhere, or whether it's JobTracker's own internal
+  // storage (§3j.5) -- before committing.
+  async function startLinkFolderNative(){
+    if (!window.pywebview || !window.pywebview.api || !window.pywebview.api.pick_folder) {
+      onError("Using an existing folder isn't available in this build.");
+      return;
+    }
+    onError(null);
+    setLinkPreviewBusy(true);
+    try {
+      const picked = await window.pywebview.api.pick_folder();
+      if (!picked || !picked.path) { setLinkPreviewBusy(false); return; } // cancelled
+      const inspection = await window.pywebview.api.inspect_folder(picked.path);
+      const base = (picked.path.replace(/[\\/]+$/, "").split(/[\\/]/).pop()) || picked.path;
+      const defaultName = base.startsWith("JobTracker — ") ? (base.slice("JobTracker — ".length).trim() || base) : base;
+      setLinkPreview({path: picked.path, name: defaultName, inspection});
+    } catch (e) {
+      onError(String(e.message || e));
+    } finally {
+      setLinkPreviewBusy(false);
+    }
+  }
+
+  function cancelLinkPreview(){ setLinkPreview(null); }
+
+  async function confirmLinkFolderNative(){
+    if (!linkPreview) return;
+    const n = linkPreview.name.trim();
+    if (!n) return;
+    setLinkBusy(true);
+    onError(null);
+    try {
+      const result = await window.pywebview.api.confirm_link_folder(linkPreview.path, n);
+      if (result && result.error) { onError(result.error); setLinkBusy(false); return; }
+      clearCache();
+      window.location.reload();
+    } catch (e) { onError(String(e.message || e)); setLinkBusy(false); }
+  }
+
+  const rowClass = "workspace-row-main workspace-new-btn";
+
+  return (
+    <div className={onboarding ? "tca-onboarding" : undefined}>
+      {/* ---- Start Fresh ---- */}
+      <div className="workspace-group-label">Start Fresh</div>
+      {creating ? (
+        <div className="workspace-import-row">
+          <input
+            className="workspace-rename-input" autoFocus placeholder="Tracker name"
+            value={newName} onChange={e => setNewName(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter") doCreate(); if (e.key === "Escape") setCreating(false); }}
+          />
+          <div className="workspace-import-actions">
+            <button className="btn" onClick={() => setCreating(false)}>Cancel</button>
+            <button className="btn primary" disabled={createBusy || !newName.trim()}
+              onClick={doCreate}>{createBusy ? "Creating\u2026" : "Create tracker"}</button>
+          </div>
+        </div>
+      ) : (
+        <>
+          <button className={rowClass} onClick={() => setCreating(true)}>
+            {"\u2795"} Start Fresh
+          </button>
+          <div className="workspace-action-desc">Starts a blank tracker with an empty Applications folder — for a brand-new job search.</div>
+        </>
+      )}
+
+      {/* ---- Bring In a Copy (zip or folder) ---- */}
+      <div className="workspace-group-label">Bring In a Copy</div>
+      {importing ? (
+        <div className="workspace-import-row">
+          <input
+            className="workspace-rename-input" autoFocus placeholder="Tracker name"
+            value={importName} onChange={e => setImportName(e.target.value)}
+            onKeyDown={e => { if (e.key === "Escape") { setImporting(false); setImportFile(null); setImportFolderFiles(null); } }}
+          />
+          <div
+            className={"dropzone compact" + (importDragOver ? " drag-over" : "")}
+            onDragOver={e => { e.preventDefault(); setImportDragOver(true); }}
+            onDragLeave={() => setImportDragOver(false)}
+            onDrop={e => {
+              e.preventDefault(); setImportDragOver(false);
+              const f = e.dataTransfer.files && e.dataTransfer.files[0];
+              if (!f) return;
+              if (!f.name.toLowerCase().endsWith(".zip")) { onError("Drag-and-drop only accepts a .zip file here — use \u201cChoose a folder instead\u201d below to import an unzipped folder."); return; }
+              setImportFile(f); setImportFolderFiles(null);
+              if (!importName.trim()) setImportName(f.name.replace(/\.zip$/i, ""));
+            }}
+            onClick={() => importFileInputRef.current && importFileInputRef.current.click()}
+          >
+            <input
+              ref={importFileInputRef} type="file" accept=".zip" style={{display:"none"}}
+              onChange={e => {
+                const f = e.target.files && e.target.files[0] ? e.target.files[0] : null;
+                if (f) { setImportFile(f); setImportFolderFiles(null); if (!importName.trim()) setImportName(f.name.replace(/\.zip$/i, "")); }
+              }}
+            />
+            <span className="dropzone-icon">{"\u{1F4E6}"}</span>
+            <span>
+              {importFile ? importFile.name
+                : importFolderFiles ? `${importFolderFiles.length} files selected`
+                : (importDragOver ? "Drop the .zip here" : "Drag a tracker .zip here, or click to browse")}
+            </span>
+          </div>
+          <div className="workspace-import-or">
+            <span>or</span>
+            <button className={"link-btn" + (importPreviewBusy ? " spinning" : "")} type="button" disabled={importBusy || importPreviewBusy}
+              onClick={() => {
+                // Packaged desktop: pick the folder, then show a preview
+                // (same pick -> inspect -> confirm shape as "Use This
+                // Folder As-Is" below) before committing -- lossless, so
+                // no portability warning needed (§3j.2). Browser: fall
+                // back to the hidden webkitdirectory input's pick-then-
+                // submit flow below -- lossy, so the note right below
+                // this link says so up front, before the picker opens,
+                // rather than only after import (§3j.2/§3j.3).
+                if (packaged) { startImportFolderNative(); }
+                else { importFolderInputRef.current && importFolderInputRef.current.click(); }
+              }}>
+              {"\u{1F4C1}"} {importPreviewBusy ? "Looking\u2026" : "Choose a folder instead"}
+            </button>
+            {!packaged && (
+              <input
+                ref={importFolderInputRef} type="file" webkitdirectory="" directory="" multiple style={{display:"none"}}
+                onChange={e => {
+                  const list = e.target.files;
+                  if (!list || !list.length) return;
+                  setImportFolderFiles(list); setImportFile(null);
+                  if (!importName.trim()) {
+                    const top = (list[0].webkitRelativePath || list[0].name).split("/")[0];
+                    setImportName(top);
+                  }
+                }}
+              />
+            )}
+          </div>
+          {packaged ? (
+            <div className="workspace-pop-hint">
+              Picking a folder above shows a preview before importing — no
+              need to use "Import a Copy" below for folders (that button
+              is for .zip files only in this app).
+            </div>
+          ) : (
+            <div className="workspace-portability-note">
+              On the web, folder copies can't include existing notes or
+              statuses (browsers can't see hidden files). For a complete
+              copy including your notes, use a .zip export instead.
+            </div>
+          )}
+          {packaged && importPreview && (() => {
+            const desc = describeFolderInspection(importPreview.inspection, "import");
+            const insp = importPreview.inspection;
+            const fileCountLine = insp && insp.exists && !insp.is_empty
+              ? `${insp.file_count}${insp.capped ? "+" : ""} file${insp.file_count === 1 ? "" : "s"} found`
+              : "";
+            return (
+              <div className={"workspace-preview" + (desc.tone ? " " + desc.tone : "")}>
+                <div className="workspace-preview-path">{importPreview.path}</div>
+                <div className="workspace-preview-headline">{desc.headline}</div>
+                <div className="workspace-preview-sub">{desc.sub}{fileCountLine ? " \u00b7 " + fileCountLine : ""}</div>
+                {desc.canContinue && (
+                  <input
+                    className="workspace-rename-input" style={{margin:"8px 0 0", width:"100%", boxSizing:"border-box"}}
+                    value={importPreview.name} placeholder="Tracker name"
+                    onChange={e => setImportPreview(p => ({...p, name: e.target.value}))}
+                  />
+                )}
+                <div className="workspace-import-actions" style={{marginTop:8}}>
+                  <button className="btn" onClick={cancelImportPreview}>Choose a different folder</button>
+                  {desc.canContinue && (
+                    <button className="btn primary" disabled={importBusy || !importPreview.name.trim()}
+                      onClick={confirmImportFolderNative}>{importBusy ? "Importing\u2026" : "Import this folder"}</button>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
+          <div className="workspace-import-actions">
+            <button className="btn" onClick={() => { setImporting(false); setImportFile(null); setImportFolderFiles(null); }}>Cancel</button>
+            <button className="btn primary" disabled={importBusy || !importName.trim() || (!importFile && !(importFolderFiles && importFolderFiles.length))}
+              onClick={() => {
+                const hasFolder = importFolderFiles && importFolderFiles.length > 0;
+                const risky = !packaged && hasFolder && !folderFilesIncludeDotfile(importFolderFiles) && suspectedNoDotfileFolderUpload();
+                if (risky) { setChromeHandoffOpen(true); } else { doImport(); }
+              }}>{importBusy ? "Importing\u2026" : "Import a Copy"}</button>
+          </div>
+        </div>
+      ) : (
+        <>
+          <button className={rowClass} onClick={() => setImporting(true)}>
+            {"\u{1F4E5}"} Bring In a Copy
+          </button>
+          <div className="workspace-action-desc">Copies files into a new tracker owned by this app — the original folder or .zip stays untouched.</div>
+        </>
+      )}
+
+      {/* ---- Use This Folder As-Is (link, desktop only) ---- */}
+      {packaged && (
+        <>
+          <div className="workspace-group-label">Use This Folder As-Is</div>
+          {linkPreview ? (() => {
+            const desc = describeFolderInspection(linkPreview.inspection, "link");
+            const insp = linkPreview.inspection;
+            const fileCountLine = insp && insp.exists && !insp.is_empty
+              ? `${insp.file_count}${insp.capped ? "+" : ""} file${insp.file_count === 1 ? "" : "s"} found`
+              : "";
+            return (
+              <div className={"workspace-preview" + (desc.tone ? " " + desc.tone : "")}>
+                <div className="workspace-preview-path">{linkPreview.path}</div>
+                <div className="workspace-preview-headline">{desc.headline}</div>
+                <div className="workspace-preview-sub">{desc.sub}{fileCountLine ? " \u00b7 " + fileCountLine : ""}</div>
+                {desc.canContinue && (
+                  <input
+                    className="workspace-rename-input" style={{margin:"8px 0 0", width:"100%", boxSizing:"border-box"}}
+                    value={linkPreview.name} placeholder="Tracker name"
+                    onChange={e => setLinkPreview(p => ({...p, name: e.target.value}))}
+                  />
+                )}
+                <div className="workspace-import-actions" style={{marginTop:8}}>
+                  <button className="btn" onClick={cancelLinkPreview}>Choose a different folder</button>
+                  {desc.canContinue && (
+                    <button className="btn primary" disabled={linkBusy || !linkPreview.name.trim()}
+                      onClick={confirmLinkFolderNative}>{linkBusy ? "Linking\u2026" : "Use this folder"}</button>
+                  )}
+                </div>
+              </div>
+            );
+          })() : (
+            <>
+              <button className={rowClass + (linkPreviewBusy ? " spinning" : "")}
+                disabled={linkPreviewBusy} onClick={startLinkFolderNative}>
+                {"\u{1F517}"} {linkPreviewBusy ? "Looking\u2026" : "Use This Folder As-Is"}
+              </button>
+              <div className="workspace-action-desc">Points at a folder in place — nothing is copied. Its notes and statuses (if any) come with it.</div>
+            </>
+          )}
+        </>
+      )}
+      {chromeHandoffOpen && (
+        <ChromeHandoffModal
+          onCancel={() => setChromeHandoffOpen(false)}
+          onContinueAnyway={() => { setChromeHandoffOpen(false); doImport(); }}
+        />
+      )}
+    </div>
+  );
+}
+
 function WorkspacePopover({onClose, anchorRef, packaged, statusInfo}){
   const [data, setData] = useState(null);   // {active, workspaces:[...]}
   const [err, setErr] = useState(null);
   const [busyId, setBusyId] = useState(null);
   const [renamingId, setRenamingId] = useState(null);
   const [renameVal, setRenameVal] = useState("");
-  const [creating, setCreating] = useState(false);
-  const [newName, setNewName] = useState("");
-  const [importing, setImporting] = useState(false);
-  const [importName, setImportName] = useState("");
-  const [importFile, setImportFile] = useState(null);       // single .zip File
-  const [importFolderFiles, setImportFolderFiles] = useState(null); // FileList from a folder picker
-  const [importDragOver, setImportDragOver] = useState(false);
-  const importFileInputRef = useRef(null);
-  const importFolderInputRef = useRef(null);
   const popRef = useRef(null);
-  // "Use an Existing Folder" preview state -- pick a folder, inspect it,
-  // show what's there, THEN commit. See startLinkFolderNative /
-  // confirmLinkFolderNative below. null = no preview showing yet.
-  const [linkPreview, setLinkPreview] = useState(null); // {path, name, inspection}
-  const [linkPreviewBusy, setLinkPreviewBusy] = useState(false);
+  // Create/Import/Link are handled by the shared TrackerCreationActions
+  // component below (§3j.4) -- this component only owns the tracker LIST
+  // (switch/rename/export/delete) plus the top status card.
 
   const load = useCallback(() => {
     apiGet("/api/workspaces").then(setData).catch(e => setErr(String(e.message || e)));
@@ -957,157 +1495,6 @@ function WorkspacePopover({onClose, anchorRef, packaged, statusInfo}){
     setBusyId(id);
     try {
       await apiPost("/api/workspaces/switch", {id});
-      clearCache();
-      window.location.reload();
-    } catch (e) { setErr(String(e.message || e)); setBusyId(null); }
-  }
-
-  async function doCreate(){
-    const name = newName.trim();
-    if (!name) return;
-    setBusyId("__create__");
-    try {
-      await apiPost("/api/workspaces", {name});
-      clearCache();
-      window.location.reload();
-    } catch (e) { setErr(String(e.message || e)); setBusyId(null); }
-  }
-
-  // Multipart, like the document/application upload flows elsewhere —
-  // posts the tracker name plus either a single .zip (import) or every
-  // file from a picked folder (import-folder, each carrying its
-  // webkitRelativePath as its filename so the server can rebuild the
-  // folder structure), then switches to the resulting workspace the
-  // same way doCreate() does. See workspace.import_workspace_from_zip /
-  // import_workspace_from_files for how the source's contents get
-  // placed on disk (top-level wrapping folder detected/stripped, _app/
-  // and other non-tracker cruft filtered out; the source itself — zip
-  // or folder — is only ever read, never modified).
-  async function doImport(){
-    const name = importName.trim();
-    const hasFolder = importFolderFiles && importFolderFiles.length > 0;
-    if (!name || (!importFile && !hasFolder)) return;
-    setBusyId("__import__");
-    setErr(null);
-    try {
-      const form = new FormData();
-      form.append("name", name);
-      let path;
-      if (hasFolder) {
-        for (const f of importFolderFiles) form.append("files", f, f.webkitRelativePath || f.name);
-        path = "/api/workspaces/import-folder";
-      } else {
-        form.append("file", importFile);
-        path = "/api/workspaces/import";
-      }
-      await uploadFormData(`${API_BASE}${path}`, form);
-      // Only set on success, right before the reload that would otherwise
-      // wipe it -- see IMPORT_NOTICE_KEY.
-      try { sessionStorage.setItem(IMPORT_NOTICE_KEY, hasFolder ? "folder-warning" : "zip-success"); } catch(e) { /* best-effort */ }
-      clearCache();
-      window.location.reload();
-    } catch (e) { setErr(String(e.message || e)); setBusyId(null); }
-  }
-
-  // Packaged "Choose a folder instead" (copy-import) preview state --
-  // same pick -> inspect -> confirm split as the link flow just below,
-  // so picking a folder to import no longer commits blind. null = no
-  // preview showing yet.
-  const [importPreview, setImportPreview] = useState(null); // {path, name, inspection}
-  const [importPreviewBusy, setImportPreviewBusy] = useState(false);
-
-  // Packaged-desktop-only path for "Choose a folder instead": mirrors
-  // startLinkFolderNative below -- pick_folder() opens the native
-  // dialog, inspect_folder() proxies to /api/workspaces/inspect so the
-  // user sees what's in the folder (and a default tracker name) before
-  // committing, instead of the old single click straight to importing.
-  // Bridge methods live in desktop/launcher.py's Api; the actual copy
-  // happens in confirmImportFolderNative() below via
-  // Api.confirm_import_folder.
-  async function startImportFolderNative(){
-    if (!window.pywebview || !window.pywebview.api || !window.pywebview.api.pick_folder) {
-      setErr("Native folder import isn't available in this build.");
-      return;
-    }
-    setErr(null);
-    setImportPreviewBusy(true);
-    try {
-      const picked = await window.pywebview.api.pick_folder();
-      if (!picked || !picked.path) { setImportPreviewBusy(false); return; } // cancelled
-      const inspection = await window.pywebview.api.inspect_folder(picked.path);
-      const base = (picked.path.replace(/[\\/]+$/, "").split(/[\\/]/).pop()) || picked.path;
-      const defaultName = base.startsWith("JobTracker — ") ? (base.slice("JobTracker — ".length).trim() || base) : base;
-      setImportPreview({path: picked.path, name: defaultName, inspection});
-    } catch (e) {
-      setErr(String(e.message || e));
-    } finally {
-      setImportPreviewBusy(false);
-    }
-  }
-
-  function cancelImportPreview(){ setImportPreview(null); }
-
-  async function confirmImportFolderNative(){
-    if (!importPreview) return;
-    const name = importPreview.name.trim();
-    if (!name) return;
-    setBusyId("__import__");
-    setErr(null);
-    try {
-      const result = await window.pywebview.api.confirm_import_folder(importPreview.path, name);
-      if (result && result.error) { setErr(result.error); setBusyId(null); return; }
-      clearCache();
-      window.location.reload();
-    } catch (e) { setErr(String(e.message || e)); setBusyId(null); }
-  }
-
-  // Packaged-desktop-only: registers an EXISTING folder as a tracker IN
-  // PLACE (nothing copied) -- the real fix for "point a new tracker at
-  // any folder I want", as opposed to Import a Copy's folder option,
-  // which copies the folder's contents into this app's own storage.
-  // Split into pick -> inspect -> confirm (rather than the old single
-  // click straight to linking) so the user sees what's actually in the
-  // folder -- file count, whether it already looks like a tracker,
-  // whether it's already linked elsewhere -- before committing, instead
-  // of finding out only after the fact. Bridge methods live in
-  // desktop/launcher.py's Api: pick_folder() just opens the native
-  // dialog, inspect_folder() proxies to /api/workspaces/inspect,
-  // confirm_link_folder() does the actual linking once accepted.
-  // Browsers have no equivalent to any of this -- an <input type="file">
-  // can never hand back a real filesystem path -- so this whole flow
-  // only ever renders when packaged.
-  async function startLinkFolderNative(){
-    if (!window.pywebview || !window.pywebview.api || !window.pywebview.api.pick_folder) {
-      setErr("Using an existing folder isn't available in this build.");
-      return;
-    }
-    setErr(null);
-    setLinkPreviewBusy(true);
-    try {
-      const picked = await window.pywebview.api.pick_folder();
-      if (!picked || !picked.path) { setLinkPreviewBusy(false); return; } // cancelled
-      const inspection = await window.pywebview.api.inspect_folder(picked.path);
-      const base = (picked.path.replace(/[\\/]+$/, "").split(/[\\/]/).pop()) || picked.path;
-      const defaultName = base.startsWith("JobTracker — ") ? (base.slice("JobTracker — ".length).trim() || base) : base;
-      setLinkPreview({path: picked.path, name: defaultName, inspection});
-    } catch (e) {
-      setErr(String(e.message || e));
-    } finally {
-      setLinkPreviewBusy(false);
-    }
-  }
-
-  function cancelLinkPreview(){ setLinkPreview(null); }
-
-  async function confirmLinkFolderNative(){
-    if (!linkPreview) return;
-    const name = linkPreview.name.trim();
-    if (!name) return;
-    setBusyId("__link__");
-    setErr(null);
-    try {
-      const result = await window.pywebview.api.confirm_link_folder(linkPreview.path, name);
-      if (result && result.error) { setErr(result.error); setBusyId(null); return; }
       clearCache();
       window.location.reload();
     } catch (e) { setErr(String(e.message || e)); setBusyId(null); }
@@ -1271,179 +1658,7 @@ function WorkspacePopover({onClose, anchorRef, packaged, statusInfo}){
         </div>
       ))}
       <div className="workspace-pop-divider" />
-      {creating ? (
-        <div className="workspace-import-row">
-          <input
-            className="workspace-rename-input" autoFocus placeholder="Tracker name"
-            value={newName} onChange={e => setNewName(e.target.value)}
-            onKeyDown={e => { if (e.key === "Enter") doCreate(); if (e.key === "Escape") setCreating(false); }}
-          />
-          <div className="workspace-import-actions">
-            <button className="btn" onClick={() => setCreating(false)}>Cancel</button>
-            <button className="btn primary" disabled={busyId === "__create__" || !newName.trim()}
-              onClick={doCreate}>{busyId === "__create__" ? "Creating\u2026" : "Create tracker"}</button>
-          </div>
-        </div>
-      ) : (
-        <>
-          <button className="workspace-row-main workspace-new-btn" onClick={() => setCreating(true)}>
-            {"\u2795"} Create New Tracker
-          </button>
-          <div className="workspace-action-desc">Starts a blank tracker with an empty Applications folder.</div>
-        </>
-      )}
-      {importing ? (
-        <div className="workspace-import-row">
-          <input
-            className="workspace-rename-input" autoFocus placeholder="Tracker name"
-            value={importName} onChange={e => setImportName(e.target.value)}
-            onKeyDown={e => { if (e.key === "Escape") { setImporting(false); setImportFile(null); setImportFolderFiles(null); } }}
-          />
-          <div
-            className={"dropzone compact" + (importDragOver ? " drag-over" : "")}
-            onDragOver={e => { e.preventDefault(); setImportDragOver(true); }}
-            onDragLeave={() => setImportDragOver(false)}
-            onDrop={e => {
-              e.preventDefault(); setImportDragOver(false);
-              const f = e.dataTransfer.files && e.dataTransfer.files[0];
-              if (!f) return;
-              if (!f.name.toLowerCase().endsWith(".zip")) { setErr("Drag-and-drop only accepts a .zip file here — use \u201cChoose folder\u201d below to import an unzipped folder."); return; }
-              setImportFile(f); setImportFolderFiles(null);
-              if (!importName.trim()) setImportName(f.name.replace(/\.zip$/i, ""));
-            }}
-            onClick={() => importFileInputRef.current && importFileInputRef.current.click()}
-          >
-            <input
-              ref={importFileInputRef} type="file" accept=".zip" style={{display:"none"}}
-              onChange={e => {
-                const f = e.target.files && e.target.files[0] ? e.target.files[0] : null;
-                if (f) { setImportFile(f); setImportFolderFiles(null); if (!importName.trim()) setImportName(f.name.replace(/\.zip$/i, "")); }
-              }}
-            />
-            <span className="dropzone-icon">{"\u{1F4E6}"}</span>
-            <span>
-              {importFile ? importFile.name
-                : importFolderFiles ? `${importFolderFiles.length} files selected`
-                : (importDragOver ? "Drop the .zip here" : "Drag a tracker .zip here, or click to browse")}
-            </span>
-          </div>
-          <div className="workspace-import-or">
-            <span>or</span>
-            <button className={"link-btn" + (importPreviewBusy ? " spinning" : "")} type="button" disabled={busyId === "__import__" || importPreviewBusy}
-              onClick={() => {
-                // Packaged desktop: pick the folder, then show a preview
-                // (same pick -> inspect -> confirm shape as "Use an
-                // Existing Folder" below) before committing. Browser:
-                // fall back to the hidden webkitdirectory input's usual
-                // pick-then-preview flow, submitted later via "Import a
-                // Copy" below.
-                if (packaged) { startImportFolderNative(); }
-                else { importFolderInputRef.current && importFolderInputRef.current.click(); }
-              }}>
-              {"\u{1F4C1}"} {importPreviewBusy ? "Looking\u2026" : "Choose a folder instead"}
-            </button>
-            {!packaged && (
-              <input
-                ref={importFolderInputRef} type="file" webkitdirectory="" directory="" multiple style={{display:"none"}}
-                onChange={e => {
-                  const list = e.target.files;
-                  if (!list || !list.length) return;
-                  setImportFolderFiles(list); setImportFile(null);
-                  if (!importName.trim()) {
-                    const top = (list[0].webkitRelativePath || list[0].name).split("/")[0];
-                    setImportName(top);
-                  }
-                }}
-              />
-            )}
-          </div>
-          {packaged && (
-            <div className="workspace-pop-hint">
-              Picking a folder above shows a preview before importing — no
-              need to use "Import a Copy" below for folders (that button
-              is for .zip files only in this app).
-            </div>
-          )}
-          {packaged && importPreview && (() => {
-            const desc = describeFolderInspection(importPreview.inspection, "import");
-            const insp = importPreview.inspection;
-            const fileCountLine = insp && insp.exists && !insp.is_empty
-              ? `${insp.file_count}${insp.capped ? "+" : ""} file${insp.file_count === 1 ? "" : "s"} found`
-              : "";
-            return (
-              <div className={"workspace-preview" + (desc.tone ? " " + desc.tone : "")}>
-                <div className="workspace-preview-path">{importPreview.path}</div>
-                <div className="workspace-preview-headline">{desc.headline}</div>
-                <div className="workspace-preview-sub">{desc.sub}{fileCountLine ? " \u00b7 " + fileCountLine : ""}</div>
-                {desc.canContinue && (
-                  <input
-                    className="workspace-rename-input" style={{margin:"8px 0 0", width:"100%", boxSizing:"border-box"}}
-                    value={importPreview.name} placeholder="Tracker name"
-                    onChange={e => setImportPreview(p => ({...p, name: e.target.value}))}
-                  />
-                )}
-                <div className="workspace-import-actions" style={{marginTop:8}}>
-                  <button className="btn" onClick={cancelImportPreview}>Choose a different folder</button>
-                  {desc.canContinue && (
-                    <button className="btn primary" disabled={busyId === "__import__" || !importPreview.name.trim()}
-                      onClick={confirmImportFolderNative}>{busyId === "__import__" ? "Importing\u2026" : "Import this folder"}</button>
-                  )}
-                </div>
-              </div>
-            );
-          })()}
-          <div className="workspace-import-actions">
-            <button className="btn" onClick={() => { setImporting(false); setImportFile(null); setImportFolderFiles(null); }}>Cancel</button>
-            <button className="btn primary" disabled={busyId === "__import__" || !importName.trim() || (!importFile && !(importFolderFiles && importFolderFiles.length))}
-              onClick={doImport}>{busyId === "__import__" ? "Importing\u2026" : "Import a Copy"}</button>
-          </div>
-        </div>
-      ) : (
-        <>
-          <button className="workspace-row-main workspace-new-btn" onClick={() => setImporting(true)}>
-            {"\u{1F4E5}"} Import a Copy
-          </button>
-          <div className="workspace-action-desc">Copies files into a new tracker owned by this app — the original folder or .zip stays untouched.</div>
-        </>
-      )}
-      {packaged && (
-        linkPreview ? (() => {
-          const desc = describeFolderInspection(linkPreview.inspection, "link");
-          const insp = linkPreview.inspection;
-          const fileCountLine = insp && insp.exists && !insp.is_empty
-            ? `${insp.file_count}${insp.capped ? "+" : ""} file${insp.file_count === 1 ? "" : "s"} found`
-            : "";
-          return (
-            <div className={"workspace-preview" + (desc.tone ? " " + desc.tone : "")}>
-              <div className="workspace-preview-path">{linkPreview.path}</div>
-              <div className="workspace-preview-headline">{desc.headline}</div>
-              <div className="workspace-preview-sub">{desc.sub}{fileCountLine ? " \u00b7 " + fileCountLine : ""}</div>
-              {desc.canContinue && (
-                <input
-                  className="workspace-rename-input" style={{margin:"8px 0 0", width:"100%", boxSizing:"border-box"}}
-                  value={linkPreview.name} placeholder="Tracker name"
-                  onChange={e => setLinkPreview(p => ({...p, name: e.target.value}))}
-                />
-              )}
-              <div className="workspace-import-actions" style={{marginTop:8}}>
-                <button className="btn" onClick={cancelLinkPreview}>Choose a different folder</button>
-                {desc.canContinue && (
-                  <button className="btn primary" disabled={busyId === "__link__" || !linkPreview.name.trim()}
-                    onClick={confirmLinkFolderNative}>{busyId === "__link__" ? "Linking\u2026" : "Use this folder"}</button>
-                )}
-              </div>
-            </div>
-          );
-        })() : (
-          <>
-            <button className={"workspace-row-main workspace-new-btn" + (linkPreviewBusy ? " spinning" : "")}
-              disabled={linkPreviewBusy} onClick={startLinkFolderNative}>
-              {"\u{1F517}"} {linkPreviewBusy ? "Looking\u2026" : "Use an Existing Folder"}
-            </button>
-            <div className="workspace-action-desc">Points at a folder in place — nothing is copied. Its notes and statuses (if any) come with it.</div>
-          </>
-        )
-      )}
+      <TrackerCreationActions layout="popover" packaged={packaged} onError={setErr} />
     </div>
   );
 }
@@ -3955,259 +4170,18 @@ function ConnectionError(){
 // showing that same button would just 500 -- this screen offers the
 // actual ways to get a first tracker registered instead.
 function NoTrackerOnboarding({packaged}){
-  const [mode, setMode] = useState(null); // null | "new" | "import"
-  const [name, setName] = useState("");
-  const [importFile, setImportFile] = useState(null);
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
-  const fileInputRef = useRef(null);
-  // "Use an Existing Folder" preview state -- same pick -> inspect ->
-  // confirm flow as WorkspacePopover's, since this screen is just the
-  // other place that flow needs to live (the very first tracker, when
-  // there's no rail/switcher yet to host it). See that component for
-  // the fuller explanation of why picking and committing are split.
-  const [linkPreview, setLinkPreview] = useState(null); // {path, name, inspection}
-  const [linkPreviewBusy, setLinkPreviewBusy] = useState(false);
-
-  async function finish(promise, noticeKind){
-    setBusy(true); setError(null);
-    try {
-      await promise;
-      // Only set on success, right before the reload -- see IMPORT_NOTICE_KEY.
-      if (noticeKind) { try { sessionStorage.setItem(IMPORT_NOTICE_KEY, noticeKind); } catch(e) { /* best-effort */ } }
-      clearCache();
-      window.location.reload();
-    } catch (e) { setError(String(e.message || e)); setBusy(false); }
-  }
-
-  const doCreate = () => {
-    const n = name.trim();
-    if (!n) return;
-    finish(apiPost("/api/workspaces", {name: n}));
-  };
-
-  const doImportZip = () => {
-    const n = name.trim();
-    if (!n || !importFile) return;
-    const form = new FormData();
-    form.append("name", n);
-    form.append("file", importFile);
-    finish(uploadFormData(`${API_BASE}/api/workspaces/import`, form), "zip-success");
-  };
-
-  // "Import a Copy of a Folder" preview state -- same pick -> inspect ->
-  // confirm split as the link flow just below (and as
-  // WorkspacePopover's startImportFolderNative/confirmImportFolderNative
-  // -- see that component for the fuller reasoning).
-  const [importPreview, setImportPreview] = useState(null); // {path, name, inspection}
-  const [importPreviewBusy, setImportPreviewBusy] = useState(false);
-
-  async function startImportFolderNative(){
-    const api = window.pywebview && window.pywebview.api;
-    if (!api || !api.pick_folder) { setError("Native folder import isn't available in this build."); return; }
-    setError(null);
-    setImportPreviewBusy(true);
-    try {
-      const picked = await api.pick_folder();
-      if (!picked || !picked.path) { setImportPreviewBusy(false); return; } // cancelled
-      const inspection = await api.inspect_folder(picked.path);
-      const base = (picked.path.replace(/[\\/]+$/, "").split(/[\\/]/).pop()) || picked.path;
-      const defaultName = base.startsWith("JobTracker — ") ? (base.slice("JobTracker — ".length).trim() || base) : base;
-      setImportPreview({path: picked.path, name: defaultName, inspection});
-    } catch (e) {
-      setError(String(e.message || e));
-    } finally {
-      setImportPreviewBusy(false);
-    }
-  }
-
-  function cancelImportPreview(){ setImportPreview(null); }
-
-  async function confirmImportFolderNative(){
-    if (!importPreview) return;
-    const n = importPreview.name.trim();
-    if (!n) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const result = await window.pywebview.api.confirm_import_folder(importPreview.path, n);
-      if (result && result.error) { setError(result.error); setBusy(false); return; }
-      clearCache();
-      window.location.reload();
-    } catch (e) { setError(String(e.message || e)); setBusy(false); }
-  }
-
-  // Same pick_folder -> inspect_folder -> confirm_link_folder sequence
-  // as WorkspacePopover.startLinkFolderNative / confirmLinkFolderNative
-  // -- see that component's comments for the full reasoning.
-  async function startLinkFolderNative(){
-    const api = window.pywebview && window.pywebview.api;
-    if (!api || !api.pick_folder) { setError("Using an existing folder isn't available in this build."); return; }
-    setError(null);
-    setLinkPreviewBusy(true);
-    try {
-      const picked = await api.pick_folder();
-      if (!picked || !picked.path) { setLinkPreviewBusy(false); return; } // cancelled
-      const inspection = await api.inspect_folder(picked.path);
-      const base = (picked.path.replace(/[\\/]+$/, "").split(/[\\/]/).pop()) || picked.path;
-      const defaultName = base.startsWith("JobTracker — ") ? (base.slice("JobTracker — ".length).trim() || base) : base;
-      setLinkPreview({path: picked.path, name: defaultName, inspection});
-    } catch (e) {
-      setError(String(e.message || e));
-    } finally {
-      setLinkPreviewBusy(false);
-    }
-  }
-
-  function cancelLinkPreview(){ setLinkPreview(null); }
-
-  async function confirmLinkFolderNative(){
-    if (!linkPreview) return;
-    const n = linkPreview.name.trim();
-    if (!n) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const result = await window.pywebview.api.confirm_link_folder(linkPreview.path, n);
-      if (result && result.error) { setError(result.error); setBusy(false); return; }
-      clearCache();
-      window.location.reload();
-    } catch (e) { setError(String(e.message || e)); setBusy(false); }
-  }
 
   return (
     <div className="center-screen">
       <div className="onboard-card">
         <h1>{"\u{1F4C2}"} Set up your first tracker</h1>
         <p>
-          Every tracker is just a folder on disk. Create a fresh one, import an
-          existing tracker's .zip export, or {packaged ? "point straight at a folder you already have." : "point _app/ at one by running it from inside that folder."}
+          Every tracker is just a folder on disk. Start a fresh one, bring in
+          a copy of an existing tracker, or {packaged ? "point straight at a folder you already have." : "point _app/ at one by running it from inside that folder."}
         </p>
         {error && <div className="warning-banner">{error}</div>}
-
-        {mode === "new" && (
-          <div style={{marginTop:8}}>
-            <input
-              className="workspace-rename-input" autoFocus placeholder="Tracker name"
-              value={name} onChange={e => setName(e.target.value)}
-              onKeyDown={e => { if (e.key === "Enter") doCreate(); if (e.key === "Escape") setMode(null); }}
-              style={{width:"100%", marginBottom:8}}
-            />
-            <div style={{display:"flex", gap:8}}>
-              <button className="btn" onClick={() => setMode(null)}>Cancel</button>
-              <button className="btn primary" disabled={busy || !name.trim()} onClick={doCreate} style={{flex:1}}>
-                {busy ? "Creating\u2026" : "Create tracker"}
-              </button>
-            </div>
-          </div>
-        )}
-
-        {mode === "import" && (
-          <div style={{marginTop:8}}>
-            <input
-              className="workspace-rename-input" autoFocus placeholder="Tracker name"
-              value={name} onChange={e => setName(e.target.value)}
-              style={{width:"100%", marginBottom:8}}
-            />
-            <div className="dropzone compact" onClick={() => fileInputRef.current && fileInputRef.current.click()} style={{marginBottom:8}}>
-              <input
-                ref={fileInputRef} type="file" accept=".zip" style={{display:"none"}}
-                onChange={e => {
-                  const f = e.target.files && e.target.files[0] ? e.target.files[0] : null;
-                  if (f) { setImportFile(f); if (!name.trim()) setName(f.name.replace(/\.zip$/i, "")); }
-                }}
-              />
-              <span className="dropzone-icon">{"\u{1F4E6}"}</span>
-              <span>{importFile ? importFile.name : "Click to choose a tracker .zip"}</span>
-            </div>
-            <div style={{display:"flex", gap:8}}>
-              <button className="btn" onClick={() => { setMode(null); setImportFile(null); }}>Cancel</button>
-              <button className="btn primary" disabled={busy || !name.trim() || !importFile} onClick={doImportZip} style={{flex:1}}>
-                {busy ? "Importing\u2026" : "Import a Copy"}
-              </button>
-            </div>
-          </div>
-        )}
-
-        {mode === null && linkPreview && (() => {
-          const desc = describeFolderInspection(linkPreview.inspection, "link");
-          const insp = linkPreview.inspection;
-          const fileCountLine = insp && insp.exists && !insp.is_empty
-            ? `${insp.file_count}${insp.capped ? "+" : ""} file${insp.file_count === 1 ? "" : "s"} found`
-            : "";
-          return (
-            <div className={"workspace-preview" + (desc.tone ? " " + desc.tone : "")} style={{marginTop:8, textAlign:"left"}}>
-              <div className="workspace-preview-path">{linkPreview.path}</div>
-              <div className="workspace-preview-headline">{desc.headline}</div>
-              <div className="workspace-preview-sub">{desc.sub}{fileCountLine ? " \u00b7 " + fileCountLine : ""}</div>
-              {desc.canContinue && (
-                <input
-                  className="workspace-rename-input" style={{margin:"8px 0 0", width:"100%", boxSizing:"border-box"}}
-                  value={linkPreview.name} placeholder="Tracker name"
-                  onChange={e => setLinkPreview(p => ({...p, name: e.target.value}))}
-                />
-              )}
-              <div style={{display:"flex", gap:8, marginTop:12}}>
-                <button className="btn" onClick={cancelLinkPreview}>Choose a different folder</button>
-                {desc.canContinue && (
-                  <button className="btn primary" disabled={busy || !linkPreview.name.trim()}
-                    onClick={confirmLinkFolderNative} style={{flex:1}}>
-                    {busy ? "Linking\u2026" : "Use this folder"}
-                  </button>
-                )}
-              </div>
-            </div>
-          );
-        })()}
-
-        {mode === null && !linkPreview && importPreview && (() => {
-          const desc = describeFolderInspection(importPreview.inspection, "import");
-          const insp = importPreview.inspection;
-          const fileCountLine = insp && insp.exists && !insp.is_empty
-            ? `${insp.file_count}${insp.capped ? "+" : ""} file${insp.file_count === 1 ? "" : "s"} found`
-            : "";
-          return (
-            <div className={"workspace-preview" + (desc.tone ? " " + desc.tone : "")} style={{marginTop:8, textAlign:"left"}}>
-              <div className="workspace-preview-path">{importPreview.path}</div>
-              <div className="workspace-preview-headline">{desc.headline}</div>
-              <div className="workspace-preview-sub">{desc.sub}{fileCountLine ? " \u00b7 " + fileCountLine : ""}</div>
-              {desc.canContinue && (
-                <input
-                  className="workspace-rename-input" style={{margin:"8px 0 0", width:"100%", boxSizing:"border-box"}}
-                  value={importPreview.name} placeholder="Tracker name"
-                  onChange={e => setImportPreview(p => ({...p, name: e.target.value}))}
-                />
-              )}
-              <div style={{display:"flex", gap:8, marginTop:12}}>
-                <button className="btn" onClick={cancelImportPreview}>Choose a different folder</button>
-                {desc.canContinue && (
-                  <button className="btn primary" disabled={busy || !importPreview.name.trim()}
-                    onClick={confirmImportFolderNative} style={{flex:1}}>
-                    {busy ? "Importing\u2026" : "Import this folder"}
-                  </button>
-                )}
-              </div>
-            </div>
-          );
-        })()}
-
-        {mode === null && !linkPreview && !importPreview && (
-          <div style={{display:"flex", flexDirection:"column", gap:8, marginTop:8}}>
-            <button className="btn primary" disabled={busy} onClick={() => setMode("new")}>{"\u2795"} Create New Tracker</button>
-            <button className="btn" disabled={busy} onClick={() => setMode("import")}>{"\u{1F4E5}"} Import a Copy (.zip)</button>
-            {packaged && (
-              <button className={"btn" + (importPreviewBusy ? " spinning" : "")} disabled={importPreviewBusy || busy} onClick={startImportFolderNative}>
-                {"\u{1F4C1}"} {importPreviewBusy ? "Looking\u2026" : "Import a Copy of a Folder"}
-              </button>
-            )}
-            {packaged && (
-              <button className={"btn" + (linkPreviewBusy ? " spinning" : "")} disabled={linkPreviewBusy || busy} onClick={startLinkFolderNative}
-                title="Point a tracker at an existing folder in place -- nothing is copied.">
-                {"\u{1F517}"} {linkPreviewBusy ? "Looking\u2026" : "Use an Existing Folder"}
-              </button>
-            )}
-          </div>
-        )}
+        <TrackerCreationActions layout="onboarding" packaged={packaged} onError={setError} />
       </div>
     </div>
   );
@@ -4350,11 +4324,46 @@ function App(){
   useEffect(() => {
     let kind = null;
     try { kind = sessionStorage.getItem(IMPORT_NOTICE_KEY); sessionStorage.removeItem(IMPORT_NOTICE_KEY); } catch(e) { /* best-effort */ }
+    let notice = null;
     if (kind === "zip-success") {
-      setImportNotice({type: "success", message: "Zip successfully imported with all notes, statuses, and dates preserved."});
+      notice = {type: "success", message: "Zip successfully imported with all notes, statuses, and dates preserved."};
     } else if (kind === "folder-warning") {
-      setImportNotice({type: "warning", message: "Files were imported, but any existing notes, statuses, or dates didn't come across — browsers can't include hidden files in a folder upload. Export a .zip from the original tracker for a complete copy."});
+      const suggestChrome = suspectedNoDotfileFolderUpload();
+      const message = suggestChrome
+        ? "Files were imported, but any existing notes, statuses, or dates didn't come across — your browser didn't include hidden files in the folder upload. Chrome has carried these across successfully in testing, or export a .zip from the original tracker for a complete copy every time."
+        : "Files were imported, but any existing notes, statuses, or dates didn't come across — this browser didn't include hidden files in the folder upload this time. Export a .zip from the original tracker for a complete copy.";
+      notice = {type: "warning", message};
+    } else if (kind === "folder-success") {
+      notice = {type: "success", message: "Folder imported — notes, statuses, and dates carried over."};
+    } else if (kind === "folder-native-success") {
+      notice = {type: "success", message: "Folder imported — notes, statuses, and dates carried over."};
     }
+
+    // Separate one-shot flag: how many already-existing "JobTracker —
+    // <name>" folders on disk (see _new_sibling_root in workspace.py)
+    // had nothing in this app's own tracker list pointing at them
+    // anymore, most likely leftovers from an earlier create/import
+    // attempt whose tracker was never properly deleted through the app.
+    // Folded into whatever notice is already showing (or shown on its
+    // own, for the plain "Start Fresh" path, which has no `kind` at
+    // all) rather than a second toast, since this is advisory, not an
+    // error -- the new tracker itself is fine either way.
+    let staleCount = 0;
+    try {
+      const raw = sessionStorage.getItem(STALE_SIBLINGS_KEY);
+      sessionStorage.removeItem(STALE_SIBLINGS_KEY);
+      staleCount = raw ? parseInt(raw, 10) || 0 : 0;
+    } catch(e) { /* best-effort */ }
+    if (staleCount > 0) {
+      const staleMsg = staleCount === 1
+        ? "Note: an older folder with this same name already existed on disk and was left alone — this created a new, separate one instead. Worth a look in Finder if you don't recognize it."
+        : `Note: ${staleCount} older folders with this same name already existed on disk and were left alone — this created a new, separate one instead. Worth a look in Finder if you don't recognize them.`;
+      notice = notice
+        ? {type: "warning", message: `${notice.message} ${staleMsg}`}
+        : {type: "warning", message: staleMsg};
+    }
+
+    if (notice) setImportNotice(notice);
   }, []);
 
   // Keep the localStorage cache warm so the next launch paints instantly.

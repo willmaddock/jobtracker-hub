@@ -135,7 +135,12 @@
     let canContinue = true;
     const defaultName = stripOwnedPrefix(baseNameOf(path)) || 'My Job Search';
 
-    if (inspection.already_linked) {
+    if (inspection.internal_conflict) {
+      tone = 'block';
+      headline = "That's not a tracker folder.";
+      sub = inspection.internal_conflict;
+      canContinue = false;
+    } else if (inspection.already_linked) {
       tone = 'block';
       headline = 'This folder is already linked as "' + (inspection.already_linked_name || 'another tracker') + '".';
       sub = 'Pick a different folder — or, once you\'re in the app, switch to the existing tracker from the sidebar.';

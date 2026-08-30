@@ -355,7 +355,7 @@ def create_workspace(name: str) -> dict:
         base_slug = _slugify(clean_name)
         workspace_id = f"{base_slug}-{uuid.uuid4().hex[:6]}"
 
-        root = _new_sibling_root(clean_name)
+        root, stale_siblings_found = _new_sibling_root(clean_name)
         (root / "Applications").mkdir(parents=True, exist_ok=True)
 
         ws_dir = WORKSPACES_DB_DIR / workspace_id
@@ -369,6 +369,7 @@ def create_workspace(name: str) -> dict:
             "ov_db_path": str(_portable_ov_db_path(root)),
             "created": _now_iso(),
             "kind": "owned",
+            "stale_siblings_found": stale_siblings_found,
         }
         data["workspaces"][workspace_id] = entry
         _save_raw(data)
@@ -424,6 +425,13 @@ def inspect_folder(folder: str | Path) -> dict:
                                 symlinks/relative bits) is already
                                 another workspace's root
         already_linked_name -- that workspace's name, if already_linked
+        internal_conflict   -- human-readable reason this folder can't be
+                                used as a link/import target because it's
+                                JobTracker's own internal storage (its
+                                ".jobtracker" folder itself, or anything
+                                nested inside an existing tracker's root)
+                                -- or None if there's no such conflict.
+                                See _internal_tracker_conflict().
     """
     result = {
         "exists": False,
@@ -435,6 +443,7 @@ def inspect_folder(folder: str | Path) -> dict:
         "has_portable_overrides": False,
         "already_linked": False,
         "already_linked_name": None,
+        "internal_conflict": None,
     }
 
     try:
@@ -466,6 +475,7 @@ def inspect_folder(folder: str | Path) -> dict:
             result["already_linked_name"] = w.get("name")
             break
 
+    result["internal_conflict"] = _internal_tracker_conflict(root, data)
     result["has_portable_overrides"] = _portable_ov_db_path(root).is_file()
 
     try:
@@ -517,7 +527,18 @@ def link_workspace(name: str, folder: str | Path) -> dict:
     `folder` must already exist and be a directory. An Applications/
     subfolder is created inside it if missing (same shape every other
     tracker root has), but nothing already in the folder is touched,
-    moved, or deleted."""
+    moved, or deleted.
+
+    Refuses (WorkspaceError) if `folder` is JobTracker's own internal
+    storage folder, or is nested inside an existing tracker's root at
+    all -- see _internal_tracker_conflict(). Without this check, picking
+    e.g. an existing tracker's own ".jobtracker" folder in the native
+    picker used to succeed silently: it created a spurious empty
+    Applications/ folder inside that real tracker's internal storage and
+    registered a permanently-empty duplicate workspace pointed at it. No
+    data was ever corrupted by that (see HANDOFF.md §3i for the full
+    trace), but it produced a confusing, avoidable mess -- this guard
+    stops it before it can happen."""
     with _lock:
         data = _load_raw()
         existing_names = {w["name"] for w in data["workspaces"].values()}
@@ -526,6 +547,10 @@ def link_workspace(name: str, folder: str | Path) -> dict:
         root = Path(folder).expanduser().resolve()
         if not root.is_dir():
             raise WorkspaceError(f"That folder doesn't exist: {root}")
+
+        conflict = _internal_tracker_conflict(root, data)
+        if conflict:
+            raise WorkspaceError(conflict)
 
         base_slug = _slugify(clean_name)
         workspace_id = f"{base_slug}-{uuid.uuid4().hex[:6]}"
@@ -554,6 +579,49 @@ def link_workspace(name: str, folder: str | Path) -> dict:
         return entry
 
 
+def _internal_tracker_conflict(root: Path, data: dict) -> str | None:
+    """Returns a human-readable reason `root` is NOT a valid link/import
+    target because it's JobTracker's own internal storage, or None if
+    `root` is fine.
+
+    Two cases, both real (see §3i of HANDOFF.md — traced from a native
+    folder-picker click that selected a tracker's own hidden storage
+    folder one level too deep):
+      1. `root`'s own name is the internal storage dirname (".jobtracker")
+         itself.
+      2. `root` sits *inside* another registered workspace's root at all
+         (not just the ".jobtracker" case above -- any folder nested
+         inside an existing tracker is a confusing, almost certainly
+         accidental target for a brand-new tracker).
+
+    Compares against every registered workspace's *resolved* root, the
+    same way inspect_folder's already_linked check does, so a symlink or
+    trailing-slash difference doesn't produce a false negative. `data`
+    is the already-loaded registry (`_load_raw()`'s return value) so
+    callers that already have it don't pay for a second load."""
+    if root.name == OVERRIDES_DIRNAME:
+        return (
+            "That looks like JobTracker's own internal data folder, not a "
+            "tracker folder — pick the folder one level up instead."
+        )
+    for w in data["workspaces"].values():
+        try:
+            other_root = Path(w["root"]).expanduser().resolve()
+        except (OSError, RuntimeError):
+            continue
+        if other_root == root:
+            continue  # that's an already_linked match, not a nesting conflict
+        try:
+            root.relative_to(other_root)
+        except ValueError:
+            continue
+        return (
+            f'That folder is inside the existing tracker "{w.get("name")}" '
+            "— pick a folder outside of any existing tracker instead."
+        )
+    return None
+
+
 def _shared_top_level_prefix(names: list[str]) -> str | None:
     """If every path in `names` starts with the same single top-level
     folder (e.g. zipping/selecting the tracker folder itself, so every
@@ -570,20 +638,35 @@ def _shared_top_level_prefix(names: list[str]) -> str | None:
     return prefix if all(n.startswith(prefix) for n in names) else None
 
 
-def _new_sibling_root(clean_name: str) -> Path:
+def _new_sibling_root(clean_name: str) -> tuple[Path, int]:
     """Picks and creates a not-yet-existing sibling folder for a
     brand-new tracker — same naming/collision handling used by
     create_workspace() and both import paths below. Uses
     _owned_siblings_dir() so packaged mode lands in ~/Documents/JobTracker
-    Hub instead of inside the read-only .app bundle."""
+    Hub instead of inside the read-only .app bundle.
+
+    Returns (root, skipped) where `skipped` is how many already-existing
+    folders of this same base name it had to step past to land on `root`.
+    This app's own registry (workspaces.json) is the only thing that
+    tracks which folders are "real" trackers -- a folder can be left
+    behind on disk with nothing pointing at it anymore (the registry got
+    reset during development, an app reinstall, manual edits, etc.),
+    and this function has no way to tell that apart from a folder someone
+    is actively using. Previously it just silently incremented past
+    whatever it found, which is how a name can quietly accumulate
+    " (2)", " (3)", " (4)"... over repeated create/import attempts with
+    nothing ever surfaced to the person doing it. Returning the count
+    lets callers report it instead of hiding it."""
     siblings_dir = _owned_siblings_dir()
     root = siblings_dir / f"JobTracker — {clean_name}"
     suffix = 2
+    skipped = 0
     while root.exists():
+        skipped += 1
         root = siblings_dir / f"JobTracker — {clean_name} ({suffix})"
         suffix += 1
     root.mkdir(parents=True, exist_ok=True)
-    return root
+    return root, skipped
 
 
 def _resolve_import_dest(root: Path, resolved_root: Path, raw_relpath: str, strip_prefix: str | None) -> Path | None:
@@ -617,7 +700,7 @@ def _resolve_import_dest(root: Path, resolved_root: Path, raw_relpath: str, stri
     return dest
 
 
-def _finish_import(clean_name: str, root: Path, extracted_any: bool, empty_message: str) -> dict:
+def _finish_import(clean_name: str, root: Path, extracted_any: bool, empty_message: str, stale_siblings_found: int) -> dict:
     """Shared tail end of both import paths: bail out (and clean up the
     partially-created root) if nothing importable was found, otherwise
     make sure Applications/ exists, register the new workspace's DB pair,
@@ -646,6 +729,7 @@ def _finish_import(clean_name: str, root: Path, extracted_any: bool, empty_messa
         "ov_db_path": str(_portable_ov_db_path(root)),
         "created": _now_iso(),
         "kind": "owned",
+        "stale_siblings_found": stale_siblings_found,
     }
 
 
@@ -681,7 +765,7 @@ def import_workspace_from_zip(name: str, zip_path: Path) -> dict:
                 raise WorkspaceError("That zip file is empty.")
             strip_prefix = _shared_top_level_prefix(names)
 
-            root = _new_sibling_root(clean_name)
+            root, stale_siblings_found = _new_sibling_root(clean_name)
             resolved_root = root.resolve()
 
             extracted_any = False
@@ -701,6 +785,7 @@ def import_workspace_from_zip(name: str, zip_path: Path) -> dict:
             "Nothing importable was found in that zip — it may not be a "
             "JobTracker export, or everything in it was filtered out "
             "(app files, hidden files, caches).",
+            stale_siblings_found,
         )
         data["workspaces"][entry["id"]] = entry
         _save_raw(data)
@@ -728,7 +813,7 @@ def import_workspace_from_files(name: str, files: list[tuple[str, object]]) -> d
             raise WorkspaceError("That folder is empty.")
         strip_prefix = _shared_top_level_prefix([n.replace("\\", "/") for n in names])
 
-        root = _new_sibling_root(clean_name)
+        root, stale_siblings_found = _new_sibling_root(clean_name)
         resolved_root = root.resolve()
 
         extracted_any = False
@@ -746,6 +831,7 @@ def import_workspace_from_files(name: str, files: list[tuple[str, object]]) -> d
             "Nothing importable was found in that folder — it may not be a "
             "JobTracker tracker folder, or everything in it was filtered "
             "out (app files, hidden files, caches).",
+            stale_siblings_found,
         )
         data["workspaces"][entry["id"]] = entry
         _save_raw(data)
@@ -791,7 +877,7 @@ def import_workspace_from_local_folder(name: str, folder: str | Path) -> dict:
         # layer to strip. strip_prefix stays None here; _resolve_import_dest
         # still applies the same should_ignore() filtering either way.
 
-        root = _new_sibling_root(clean_name)
+        root, stale_siblings_found = _new_sibling_root(clean_name)
         resolved_root = root.resolve()
 
         extracted_any = False
@@ -809,6 +895,7 @@ def import_workspace_from_local_folder(name: str, folder: str | Path) -> dict:
             "Nothing importable was found in that folder — it may not be a "
             "JobTracker tracker folder, or everything in it was filtered "
             "out (app files, hidden files, caches).",
+            stale_siblings_found,
         )
         data["workspaces"][entry["id"]] = entry
         _save_raw(data)

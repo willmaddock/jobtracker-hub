@@ -320,7 +320,7 @@ class Api:
             folder_name = folder_name[len("JobTracker — "):].strip() or folder_name
         clean_name = (name or "").strip() or folder_name or "Imported Tracker"
         try:
-            _http_json(
+            result = _http_json(
                 f"{_api_base(self._port)}/api/workspaces/import-folder-local",
                 method="POST",
                 payload={"name": clean_name, "path": path},
@@ -334,7 +334,14 @@ class Api:
                     pass
             return {"error": detail}
 
-        return {"error": None}
+        # Pass the backend's workspace payload through so the frontend's
+        # confirmImportFolderNative() can read stale_siblings_found the
+        # same way doImport()/doCreate() do for the other import paths
+        # (see STALE_SIBLINGS_KEY in _app/frontend/index.html). Previously
+        # this discarded `result` entirely and always returned a flat
+        # {"error": None}, which is why the native folder-import path
+        # never surfaced the "stale sibling trackers found" notice (HANDOFF §21).
+        return {"error": None, "workspace": result.get("workspace")}
 
     def export_workspace(self, workspace_id: str, suggested_filename: str) -> dict:
         """Native counterpart to the web UI's "Export as zip" button

@@ -497,7 +497,7 @@ def create_and_switch_workspace(req: CreateWorkspaceRequest):
     except ws.WorkspaceError as e:
         raise HTTPException(status_code=400, detail=str(e))
     build(current_root(), current_db_path())
-    return {"ok": True, "workspace": {"id": entry["id"], "name": entry["name"]}}
+    return {"ok": True, "workspace": {"id": entry["id"], "name": entry["name"], "stale_siblings_found": entry.get("stale_siblings_found", 0)}}
 
 
 @app.post("/api/workspaces/link")
@@ -547,7 +547,7 @@ async def import_workspace(name: str = Form(...), file: UploadFile = File(...)):
         tmp_path.unlink(missing_ok=True)
 
     build(current_root(), current_db_path())
-    return {"ok": True, "workspace": {"id": entry["id"], "name": entry["name"]}}
+    return {"ok": True, "workspace": {"id": entry["id"], "name": entry["name"], "stale_siblings_found": entry.get("stale_siblings_found", 0)}}
 
 
 @app.post("/api/workspaces/import-folder")
@@ -574,7 +574,7 @@ async def import_workspace_folder(name: str = Form(...), files: list[UploadFile]
         raise HTTPException(status_code=400, detail=str(e))
 
     build(current_root(), current_db_path())
-    return {"ok": True, "workspace": {"id": entry["id"], "name": entry["name"]}}
+    return {"ok": True, "workspace": {"id": entry["id"], "name": entry["name"], "stale_siblings_found": entry.get("stale_siblings_found", 0)}}
 
 
 class ImportLocalFolderRequest(BaseModel):
@@ -604,7 +604,7 @@ def import_workspace_folder_local(req: ImportLocalFolderRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
     build(current_root(), current_db_path())
-    return {"ok": True, "workspace": {"id": entry["id"], "name": entry["name"]}}
+    return {"ok": True, "workspace": {"id": entry["id"], "name": entry["name"], "stale_siblings_found": entry.get("stale_siblings_found", 0)}}
 
 
 @app.get("/api/workspaces/{workspace_id}/export")

@@ -60,6 +60,48 @@ def test_link_rejects_duplicate_name(client, sample_root, tmp_path):
     assert second.status_code == 400
 
 
+def test_link_rejects_the_jobtracker_folder_itself(client, sample_root):
+    # Regression test for the bug traced in HANDOFF.md §3i: selecting a
+    # tracker's own internal ".jobtracker" storage folder as a link
+    # target used to succeed silently, polluting that real tracker's
+    # storage with a spurious Applications/ folder and registering a
+    # permanently-empty duplicate workspace. Must now be a clean 400,
+    # with nothing created inside the original tracker's storage.
+    client.post("/api/workspaces/link", json={"name": "Real Tracker", "path": str(sample_root)})
+
+    # link_workspace itself only creates Applications/ -- .jobtracker/
+    # (the portable overrides.db's home) is created lazily on first
+    # touch of overrides.db (see test_workspace_list_includes_kind_and_
+    # overrides_flag), same as it would be from real app usage. Trigger
+    # that here so dot_dir exists, matching the real-world scenario this
+    # guards against.
+    client.get("/api/applications")
+    dot_dir = sample_root / ".jobtracker"
+    assert dot_dir.is_dir()
+
+    resp = client.post(
+        "/api/workspaces/link", json={"name": "Bogus", "path": str(dot_dir)}
+    )
+    assert resp.status_code == 400
+    assert "internal data folder" in resp.json()["detail"]
+
+    # The real tracker's internal storage must not have been polluted.
+    assert not (dot_dir / "Applications").exists()
+    names = {w["name"] for w in client.get("/api/workspaces").json()["workspaces"]}
+    assert "Bogus" not in names
+
+
+def test_link_rejects_a_folder_nested_inside_an_existing_tracker(client, sample_root):
+    client.post("/api/workspaces/link", json={"name": "Parent", "path": str(sample_root)})
+    nested = sample_root / "Applications"
+
+    resp = client.post(
+        "/api/workspaces/link", json={"name": "Nested Bogus", "path": str(nested)}
+    )
+    assert resp.status_code == 400
+    assert "Parent" in resp.json()["detail"]
+
+
 def test_switch_between_two_linked_workspaces(client, tmp_path):
     root_a = tmp_path / "a"
     root_b = tmp_path / "b"
