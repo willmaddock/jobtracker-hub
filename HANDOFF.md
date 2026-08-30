@@ -2196,3 +2196,20 @@ the user lifts the pause is answering open question #1 with a real
 the draft is settled enough to build against once that number exists.
 Claude has not staged, committed, or pushed anything, per §6; the FDD
 draft file itself is not yet added to the repo either.
+
+---
+
+## 24. Session 9 — sealed
+
+The tracker-switcher rework and Chrome handoff described across
+§18–21 are implemented, tested, and committed (confirmed by git log —
+this isn't new work, just closing out what §18–21 already recorded in
+full). See those sections for the actual design and testing detail;
+this entry exists only so that work doesn't read as buried mid-history
+under the later Item 7/Item 8 sessions.
+
+**Still stale relative to this work, as of this entry:** the User
+Guide `.tex`/PDF and `CHANGES.md` — neither had been updated for the
+switcher relabel (Start Fresh / Bring In a Copy / Use This Folder
+As-Is) or the Chrome handoff modal. That gap is what
+`DOCS_UPDATE_PLAN.md` addresses.

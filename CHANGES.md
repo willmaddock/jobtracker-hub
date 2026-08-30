@@ -1,3 +1,99 @@
+# Item 8B — Tracker Switcher Reorg & Chrome Handoff: IMPLEMENTED + TESTED + SEALED
+
+## Why this item exists
+
+The switcher's three creation/import actions (Create, Import, Link)
+had grown disconnected from how people actually think about starting
+a tracker. This item regroups them by intent, and closes the one path
+where switching browsers mid-import could silently drop notes,
+statuses, and dates.
+
+## What this item contains
+
+**`_app/frontend/index.html`**
+- The switcher popover and the first-run onboarding screen now group
+  their three actions under three intent-based labels instead of
+  their old technical names: **Start Fresh** (was "Create New
+  Tracker"), **Bring In a Copy** (zip or folder, folder as a
+  sub-choice), and **Use This Folder As-Is** (was "Use an Existing
+  Folder"; desktop/packaged only, link-based, unchanged visibility
+  rule).
+- The browser-only portability warning — telling people a plain
+  folder copy in a non-Chrome browser can lose notes/statuses/dates —
+  now renders as static text next to "Choose a folder instead"
+  *before* the folder picker opens, rather than after the person has
+  already made the lossy choice.
+- New **`ChromeHandoffModal`**: offered when a folder (not zip) is
+  picked for "Bring In a Copy" in a non-Chrome browser without an
+  existing `.jobtracker` marker. An early version tried a
+  `googlechrome://` deep link to jump straight to Chrome; that scheme
+  turned out to be dead on current Safari/macOS (it throws a visible
+  "address is invalid" system alert instead of silently no-op'ing), so
+  the modal was simplified to a single reliable path: copy the
+  destination URL, open Chrome yourself, paste it in, and redo the
+  import there. The modal's closing button reloads the tab
+  automatically once you're done, so the person isn't left staring at
+  a stale, empty pipeline after finishing the import in a different
+  browser window entirely.
+
+**`_app/workspace.py`, `_app/api.py`, `desktop/launcher.py`**
+- `_new_sibling_root()` used to silently increment a tracker's folder
+  name (`… (2)`, `… (3)`, …) whenever it collided with an orphaned
+  folder left behind by an earlier session, with no record that it
+  had happened. It now returns how many collisions it stepped past,
+  threaded through every create/import endpoint and surfaced to the
+  person as an advisory toast — *not* an error, since the new tracker
+  itself is unaffected — pointing them at Finder if the count looks
+  unfamiliar. The packaged desktop's native folder-import path was
+  initially missed (its bridge method discarded the result before
+  this fix), then closed the same session once traced down.
+
+## Test results
+
+**Automated suite: 150/150 passing**, run twice by the user against
+the real environment (this project's frontend has no automated test
+suite of its own — the 150/150 covers the backend changes above).
+
+**Real validation, Safari → Chrome round trip:** the first import
+attempt in Safari failed partway through (the address the person was
+meant to paste turned out invalid on that attempt) but still created
+an empty sibling folder on disk before failing. Redoing "Bring In a
+Copy" in Chrome against the same tracker name succeeded completely —
+719 files carried over, with the app's own collision handling
+correctly suffixing the new, complete folder as `(2)` rather than
+overwriting or duplicating anything. Pipeline showed all 110 real
+applications afterward with notes, statuses, and dates intact.
+
+## Known limitations
+
+- The five pre-existing stale sibling folders that predate this fix
+  (testing debris from this same session) are not cleaned up
+  automatically — deleting them is a manual step for the user
+  whenever convenient.
+- The manufactured-collision scenario that proves the advisory toast
+  fires was only exercised on the two browser-facing import paths, not
+  re-run specifically against the packaged desktop's native path after
+  its bridge fix — that path is confirmed not to error, but hasn't
+  independently produced the toast itself yet.
+- Carries forward all prior items' limitations unchanged.
+
+## Continuation context
+
+- **Item 8B is sealed.** Item 7 (Timeline) below remains sealed and
+  unaffected.
+- **Item 8 (Lifecycle & Outcome Tracking) remains paused**, design-only
+  — see `HANDOFF.md` §23 and `ITEM8_LIFECYCLE_OUTCOME_FDD_DRAFT.md`.
+- **Git has not been committed or pushed.** Committing this
+  documentation update alongside the already-implemented code changes
+  is still the user's own next step.
+
+## Full development log
+
+`HANDOFF.md` §18–22 is the cumulative, session-by-session version of
+this same work; §24 seals it.
+
+---
+
 # Item 7 — Application Timeline: IMPLEMENTED + TESTED + REAL PACKAGED-APP VERIFIED + SEALED
 
 ## Why this item exists

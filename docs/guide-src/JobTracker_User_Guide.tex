@@ -519,17 +519,37 @@ A single running JobTracker instance can manage more than one tracker through it
 
 \subsection{Creating and importing trackers}\label{subsec:workspaces-create}
 
-The switcher offers up to three ways to add a tracker, depending on how you're running JobTracker Hub:
+The switcher offers up to three ways to add a tracker, grouped by intent rather than by mechanism, depending on how you're running JobTracker Hub:
 
 \begin{itemize}
-  \item \app{Create New Tracker} starts a fresh, empty tracker as a sibling folder next to your original one.
-  \item \app{Import a Copy} brings an existing folder of documents or a \file{.zip} export into a new, independent tracker. Use the dropzone for a \file{.zip}, or choose \app{Choose a folder instead} for a folder. In the packaged desktop app, the folder path uses the same preview-before-commit safety step described in Section~3.2.
-  \item \app{Use an Existing Folder} (desktop app only) points a new tracker straight at a folder in place — nothing is copied. It's the same pick-preview-confirm flow as first launch, just reachable again later from the switcher.
+  \item \app{Start Fresh} starts a blank tracker with an empty Applications folder, as a sibling folder next to your original one — for a brand-new job search.
+  \item \app{Bring In a Copy} brings an existing folder of documents or a \file{.zip} export into a new tracker owned by this app — the original folder or \file{.zip} stays untouched. Use the dropzone for a \file{.zip}, or choose \app{Choose a folder instead} for a folder. In the packaged desktop app, the folder path uses the same preview-before-commit safety step described in Section~\ref{subsec:import-preview}.
+  \item \app{Use This Folder As-Is} (desktop app only) points a new tracker straight at a folder in place — nothing is copied, and its notes and statuses (if any) come with it. It's the same pick-preview-confirm flow as first launch, just reachable again later from the switcher.
 \end{itemize}
 
 All three paths apply the same filtering — the application's own \file{_app/} directory is never carried into a new tracker, even if it happens to be present in what you're importing or linking.
 
-\screenshot[0.5\textwidth]{images/new-import-panel.png}{The switcher's \app{Import a Copy} panel, with both \file{.zip} and folder import options.}
+\screenshot[0.5\textwidth]{images/new-import-panel.png}{The switcher's \app{Bring In a Copy} panel, with a tracker name entered and a folder already selected (719 files) via \app{Choose a folder instead}.}
+
+On the packaged desktop app, pointing \app{Use This Folder As-Is} at a folder that already looks like a JobTracker tracker is detected automatically — the panel calls this out explicitly, along with what it will carry over, before you commit:
+
+\screenshot[0.42\textwidth]{images/desktop-use-folder-as-is.png}{The packaged app detecting an existing tracker: ``This already looks like a JobTracker tracker. Its statuses, notes, and follow-up dates will come with it.''}
+
+\subsection{Bringing a browser folder import to Chrome}\label{subsec:chrome-handoff}
+
+Browsers can't see hidden files, so a plain folder copy made through \app{Bring In a Copy} in a non-Chrome browser can't include your existing notes, statuses, or dates — only Chrome has been confirmed to carry those across successfully. To avoid that data loss, JobTracker Hub offers a handoff before the copy happens: if you pick a folder (not a \file{.zip}) for \app{Bring In a Copy} in a browser other than Chrome, and that folder isn't already a fresh, tracker-less pick, a modal opens instead of proceeding with the import.
+
+\screenshot[0.42\textwidth]{images/chrome-handoff-modal.png}{The Chrome handoff modal: copy the address, open Chrome, redo \app{Bring In a Copy} there, then close the modal to refresh this tab.}
+
+The modal walks through four steps: copy the destination address, open Chrome and paste it into the address bar, use \app{Bring In a Copy} again from inside Chrome (which will include everything this time), then come back and click \app{I'm Done --- Close This} once the import finishes in Chrome — this tab reloads automatically to pick up what you just imported. If you'd rather not switch browsers, \app{Continue Importing Here Instead} proceeds with today's browser and the same folder-copy limitation as before.
+
+Chrome itself will ask you to confirm the upload before it proceeds:
+
+\screenshot[\textwidth]{images/chrome-upload-confirm.png}{Chrome's own upload confirmation for a folder import — reflects however many files the picked folder actually contains.}
+
+Once the import finishes in Chrome, the new tracker is fully populated there, and switching back to your original browser and reloading will show the same data, since both are reading from the same tracker folder on disk:
+
+\screenshot[\textwidth]{images/chrome-import-result.png}{The imported tracker in Chrome after a real round trip: full Pipeline counts and a confirmation toast that notes, statuses, and dates were carried over.}
 
 \subsection{Import preview and validation}\label{subsec:import-preview}
 

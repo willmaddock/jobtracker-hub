@@ -113,7 +113,7 @@ record of it, it's just the leftover template you copied *from*. Once
 you're comfortable with the app, it's safe to delete (plain
 `rm -rf sample-tracker` / move to Trash — nothing in the app references
 it). If you'd rather keep it around as a reference tracker instead, click the
-tracker switcher (the **J** top-left) → **Use an Existing Folder**, point
+tracker switcher (the **J** top-left) → **Use This Folder As-Is**, point
 it at `sample-tracker/`, and confirm — you'll see a quick preview (doc
 count, whether it already looks like a tracker) before anything's added
 to the switcher.
@@ -321,28 +321,35 @@ meant to be committed.
 ## Multiple trackers / a second, independent installation
 
 The tracker switcher (click the **J** top-left, or the first-run screen
-if you have no tracker yet) offers three ways to add one:
+if you have no tracker yet) offers three ways to add one, grouped by
+intent:
 
-- **Create New Tracker** — a blank tracker with an empty `Applications/`
+- **Start Fresh** — a blank tracker with an empty `Applications/`
   folder, owned by the app.
-- **Import a Copy** — copies an existing folder's contents (or a `.zip`
+- **Bring In a Copy** — copies an existing folder's contents (or a `.zip`
   export) into a new, independent tracker; the original folder is never
   modified.
-- **Use an Existing Folder** *(packaged `.dmg` build only — browsers
+- **Use This Folder As-Is** *(packaged `.dmg` build only — browsers
   can't hand JavaScript a raw filesystem path)* — points a tracker
   directly at a folder in place, nothing is copied or moved.
 
-In the packaged desktop app, both **Import a Copy**'s "Choose a folder
-instead" option and **Use an Existing Folder** show a preview — file
+In the packaged desktop app, both **Bring In a Copy**'s "Choose a folder
+instead" option and **Use This Folder As-Is** show a preview — file
 count, whether the folder already looks JobTracker-shaped and would
 bring its notes/statuses/dates along, whether it's empty — before
 anything happens, so you can back out and pick a different folder
 instead of committing blind. The one difference: a folder that's
-*already linked as another tracker* is a hard block for **Use an
-Existing Folder** (two trackers can't safely share one live folder) but
-only a soft warning for **Import a Copy** (copying a tracked folder is
+*already linked as another tracker* is a hard block for **Use This
+Folder As-Is** (two trackers can't safely share one live folder) but
+only a soft warning for **Bring In a Copy** (copying a tracked folder is
 harmless). In the browser, folder import still works via your OS's
-folder picker, just without that preview step first.
+folder picker, just without that preview step first — and since
+browsers can't see hidden files, a plain folder copy made this way
+can't carry over existing notes, statuses, or dates the way Chrome has
+been confirmed to. If you pick a folder for **Bring In a Copy** in a
+browser other than Chrome, the app offers a handoff to Chrome instead
+of proceeding with that lossy copy — see the User Guide's "Bringing a
+browser folder import to Chrome" section for the full walkthrough.
 
 **A genuinely separate installation**, outside this app's UI entirely:
 copy `_app/` into any other folder you want to track (a different
