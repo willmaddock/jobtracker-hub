@@ -5,3 +5,6 @@ python-multipart>=0.0.9
 Send2Trash>=1.8
 mammoth>=1.8  # .docx -> HTML, for inline preview only (never writes back to the .docx)
 pypdf>=4.0    # PDF text extraction for the Application Dossier (extract.py); reads only, never writes PDFs
+fpdf2>=2.7    # Renders a discovered/matched email into a saved PDF document (email_pdf.py)
+# Connected accounts (mail_app_store.py) use macOS's built-in `osascript` CLI
+# via subprocess -- no extra package, no keychain, no OAuth client.

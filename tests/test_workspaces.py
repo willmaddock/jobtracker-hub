@@ -61,7 +61,7 @@ def test_link_rejects_duplicate_name(client, sample_root, tmp_path):
 
 
 def test_link_rejects_the_jobtracker_folder_itself(client, sample_root):
-    # Regression test for the bug traced in HANDOFF.md §3i: selecting a
+    # Regression test for the bug traced in docs/archive/handoffs/HANDOFF_SESSION16_LEGACY.md §3i: selecting a
     # tracker's own internal ".jobtracker" storage folder as a link
     # target used to succeed silently, polluting that real tracker's
     # storage with a spurious Applications/ folder and registering a

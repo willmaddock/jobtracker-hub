@@ -108,7 +108,7 @@ def test_inspect_flags_the_jobtracker_folder_itself_as_internal_conflict(client,
     # Selecting a tracker's own internal storage folder in the picker
     # (e.g. hidden files shown in Finder, one click too deep) must be
     # flagged, not silently treated as a normal empty folder. See
-    # HANDOFF.md §3i / §3j.5.
+    # docs/archive/handoffs/HANDOFF_SESSION16_LEGACY.md §3i / §3j.5.
     dot_dir = sample_root / ".jobtracker"
     dot_dir.mkdir()
     body = client.post("/api/workspaces/inspect", json={"path": str(dot_dir)}).json()

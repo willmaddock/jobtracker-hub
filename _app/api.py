@@ -48,8 +48,11 @@ from send2trash import send2trash
 import db
 import dossier
 import overrides_store as ov
+import mail_app_store as mailapp
 import labels
 import workspace as ws
+import email_pdf
+import posting_extract
 from build_index import build, create_application_folder, create_category_folder, ensure_not_empty, iso_mtime, sha256_of
 from classify import classify_section
 from classify import classify_doc_type, is_source_file, normalize_for_search
@@ -688,6 +691,760 @@ def rebuild():
     return {"ok": True}
 
 
+# --- connected accounts -------------------------------------------------------
+# Every connected account is a Mail.app account the user already set up
+# in System Settings -> Internet Accounts. See mail_app_store.py for the
+# AppleScript handshake -- no OAuth, no IMAP credentials, no keychain.
+
+class MailAppConnectBody(BaseModel):
+    name: str   # Mail.app's own account name, e.g. "hotmail" -- what mail_app_store.search_messages() queries by
+    email: str  # display address, e.g. "stumping123@outlook.com"
+
+
+@app.get("/api/accounts")
+def list_accounts():
+    _, ov_conn = get_conns()
+    rows = ov.list_accounts(ov_conn)
+    ov_conn.close()
+    return rows
+
+
+@app.get("/api/accounts/mail-app/available")
+def list_available_mail_app_accounts():
+    """Accounts Mail.app has configured that JobTracker Hub hasn't
+    already connected -- what the '+ Connect an account' picker offers.
+    A MailAppError here (osascript missing, Automation permission
+    denied) surfaces as a 400 with mail_app_store's own message, which
+    is already written for the end user."""
+    try:
+        all_accounts = mailapp.list_mail_app_accounts()
+    except mailapp.MailAppError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    _, ov_conn = get_conns()
+    connected_names = {r["account_name"] for r in ov.list_accounts(ov_conn) if r.get("account_name")}
+    ov_conn.close()
+    return [a for a in all_accounts if a["name"] not in connected_names]
+
+
+@app.post("/api/accounts/mail-app/connect")
+def connect_mail_app_account(body: MailAppConnectBody):
+    """No handshake needed -- Mail.app already owns this account's
+    login. 'Connecting' just means recording it in overrides.db so the
+    rest of the app knows to sync against it."""
+    account_id = mailapp.new_account_id()
+    _, ov_conn = get_conns()
+    ov.upsert_account(ov_conn, account_id, "mail_app", body.email, account_name=body.name)
+    ov_conn.close()
+    return {"ok": True, "account_id": account_id}
+
+
+@app.delete("/api/accounts/{account_id}")
+def disconnect_account(account_id: str):
+    """No tokens to forget -- just drop the row (and its matches)."""
+    _, ov_conn = get_conns()
+    ov.delete_account(ov_conn, account_id)
+    ov_conn.close()
+    return {"ok": True}
+
+
+def _extract_and_store_job_postings(
+    ov_conn, account_id: str, account_name: str, message_id: str,
+    subject: str | None, sender: str | None, received_at: str | None,
+) -> int:
+    """Fetches the body of one job-alert-classified message and persists
+    every individual job it contains as its own job_postings row
+    (CLAUDE_HANDOFF.md sections 2/7.5: extraction happens here, during
+    sync, not lazily on preview). Returns how many NEW jobs this call
+    added (re-running over an already-extracted message is always safe
+    -- see overrides_store.add_job_posting's dedupe_key uniqueness).
+
+    Never raises: a Mail.app fetch failure for one message shouldn't
+    take down the rest of a sync, so any mailapp.MailAppError here is
+    swallowed and treated as "0 postings extracted this time" -- the
+    discovered_matches row for the raw email is unaffected either way,
+    so nothing is lost; the next sync will simply try extraction again.
+    """
+    try:
+        body = mailapp.get_message_preview(account_name, message_id)
+    except mailapp.MailAppError:
+        return 0
+    if not body:
+        return 0
+
+    jobs = posting_extract.extract_postings(sender, subject, body)
+    if not jobs:
+        return 0
+
+    # Every job-board URL in the body, for positional best-effort
+    # association only (CLAUDE_HANDOFF.md section 10's Layer 4 note: not
+    # reliable enough yet to guarantee correct one URL per correct job,
+    # so a job past the end of this list simply gets no URL rather than
+    # a wrong one -- "no fake link" per mail_app_store.guess_posting_url()'s
+    # own philosophy).
+    urls = mailapp.extract_posting_urls(body)
+
+    added = 0
+    for i, job in enumerate(jobs):
+        posting_url = urls[i] if i < len(urls) else None
+        dedupe_key = posting_extract.compute_dedupe_key(
+            account_id, message_id, posting_url, job.get("title"), job.get("company"),
+        )
+        if ov.add_job_posting(
+            ov_conn, account_id, message_id, dedupe_key, job.get("source"),
+            job.get("title"), job.get("company"), job.get("location"),
+            job.get("salary"), job.get("employment_type"), posting_url,
+            received_at, subject, sender,
+        ):
+            added += 1
+    return added
+
+
+@app.post("/api/accounts/{account_id}/sync")
+def sync_account(account_id: str):
+    """For every open (non-archived) application item, searches this
+    account's inbox for messages mentioning the item's company or role
+    (via mail_app_store.search_messages()) and records any new hits as
+    account_matches. A company/role term that's too short or generic to
+    safely drive a `contains` search on its own (e.g. a role label of
+    "IT") is dropped by mail_app_store.is_usable_match_term() before it
+    ever reaches Mail.app -- see that function's docstring; an item left
+    with no usable terms at all is skipped for this sync rather than
+    matched on nothing. The role term (when there's also a usable
+    company term) is passed to search_messages() as role_terms, so a
+    role-only whole-word hit -- e.g. "Resume" or "Tech" matching some
+    unrelated company's mail -- isn't trusted without the company term
+    also appearing; see search_messages()'s docstring for the two live
+    cases that motivated this. Each item's already-confirmed thread ids
+    (fetched once up front via ov.get_all_thread_ids_by_item()) are
+    also passed to search_messages() as `thread_ids`, so a reply whose
+    In-Reply-To/References headers cite one of them attaches
+    deterministically even when its subject/sender share no company or
+    role text at all (e.g. "Re: your submission") -- see
+    search_messages()'s docstring for the full explanation. An item
+    with no usable text terms AND no known thread ids yet is skipped,
+    same as before. Returns how many were new this sync -- de-dupe
+    against prior syncs happens in ov.add_account_match() by
+    message_id, so re-running this is always safe.
+
+    Company-only hits against a multi-item company are routed to the
+    discoveries queue instead of auto-attached (see the
+    `ambiguous_siblings` check below) -- this closes a real
+    misattribution bug: a hit that only whole-word-matched an item's
+    company term (no role term also matched -- either because the role
+    label was too generic to search on at all, e.g. "IT", or it simply
+    wasn't in this message) used to be trusted for whichever item
+    happened to be processed, with nothing to say it was the *right*
+    item once that company has more than one open application.
+    Confirmed against a real tracker: a company-wide "Notice from Adams
+    County" rejection email, mentioning "Adams County Government"
+    broadly with no department/role text in its subject or sender,
+    text-matches ANY open Adams-County-named item regardless of which
+    specific role it's actually about. `ambiguous_matches` in the
+    response counts how many landed in the review queue this way."""
+    jt_conn, ov_conn = get_conns()
+    account = ov.get_account(ov_conn, account_id)
+    if account is None:
+        ov_conn.close()
+        raise HTTPException(status_code=404, detail="No such connected account.")
+
+    account_name = account.get("account_name") or account["email"]
+    apps = [a for a in db.load_applications(jt_conn, ov_conn) if not a["archived"]]
+    thread_ids_by_item = ov.get_all_thread_ids_by_item(ov_conn)
+
+    # Group currently-open items by their normalized effective company,
+    # so a company-only hit can be checked against every sibling item
+    # sharing that company -- not just the one item being processed when
+    # the hit happened to come back. Items with no usable company at all
+    # are simply never ambiguous by this check.
+    company_groups: dict[str, list[str]] = {}
+    for a in apps:
+        c = (a.get("effective_company") or "").strip().lower()
+        if c:
+            company_groups.setdefault(c, []).append(a["item_key"])
+
+    new_count = 0
+    ambiguous_count = 0
+    try:
+        for a in apps:
+            company = a.get("effective_company")
+            role = a.get("role_label")
+            company_terms = [company] if company and company.strip() and mailapp.is_usable_match_term(company) else []
+            role_terms = [role] if role and role.strip() and mailapp.is_usable_match_term(role) else []
+            terms = company_terms + role_terms
+            known_thread_ids = thread_ids_by_item.get(a["item_key"])
+            if not terms and not known_thread_ids:
+                continue
+            # role_terms is only passed through when we also have a
+            # company term to confirm against -- see search_messages()'s
+            # docstring. With no company term at all (rare: the company
+            # name itself was too short/generic), fall back to trusting
+            # the role term alone, same as before this hardening.
+            hits = mailapp.search_messages(
+                account_name, terms,
+                role_terms=role_terms if company_terms else None,
+                thread_ids=known_thread_ids,
+            )
+            norm_company = (company or "").strip().lower()
+            siblings = company_groups.get(norm_company, [])
+            ambiguous_siblings = siblings if len(siblings) > 1 else None
+
+            for h in hits:
+                if h.get("company_only") and ambiguous_siblings:
+                    # A job-alert-shaped subject (e.g. "KPMG just posted a
+                    # 78% match...") never belongs in the ambiguous-
+                    # application queue, even though its company name just
+                    # matched an open item here -- file it as a posting
+                    # instead, with no candidates to attach to. See
+                    # mail_app_store.is_job_posting_style_subject().
+                    if mailapp.is_job_posting_style_subject(h["subject"]):
+                        ov.add_discovered_match(
+                            ov_conn, account_id, h["message_id"], h["subject"], h.get("sender"),
+                            h["received_at"], company, kind="posting",
+                        )
+                        _extract_and_store_job_postings(
+                            ov_conn, account_id, account_name, h["message_id"],
+                            h["subject"], h.get("sender"), h["received_at"],
+                        )
+                        continue
+                    if ov.add_discovered_match(
+                        ov_conn, account_id, h["message_id"], h["subject"], h.get("sender"),
+                        h["received_at"], company,
+                        match_kind="ambiguous", candidate_item_keys=ambiguous_siblings,
+                    ):
+                        ambiguous_count += 1
+                    continue
+                if ov.add_account_match(ov_conn, account_id, a["item_key"], h["message_id"], h["subject"], h["received_at"]):
+                    new_count += 1
+                    ov.add_thread_identifiers(ov_conn, a["item_key"], h.get("thread_message_ids") or [])
+    except mailapp.MailAppPermissionError as e:
+        ov.mark_account_status(ov_conn, account_id, "blocked")
+        ov_conn.close()
+        raise HTTPException(status_code=400, detail=str(e))
+    except mailapp.MailAppError as e:
+        # Anything other than a denied permission (a timeout, a mailbox
+        # lookup failure, osascript itself missing) is surfaced as a
+        # failed attempt, not a persistent 'blocked' state -- retrying
+        # might just work, and mislabeling it as a permission problem
+        # sends the user to the wrong System Settings pane for nothing.
+        ov_conn.close()
+        raise HTTPException(status_code=400, detail=str(e))
+
+    ov.mark_account_status(ov_conn, account_id, "connected")
+    ov.record_sync(ov_conn, account_id, new_count)
+    ov_conn.close()
+    return {"ok": True, "new_matches": new_count, "ambiguous_matches": ambiguous_count}
+
+
+# --- discovery review queue ("Possible new applications") --------------------
+# Separate from sync_account() above on purpose: that endpoint only ever
+# attaches evidence to applications you've already logged. This is the
+# opposite direction -- "scan the inbox for application mail that isn't
+# tied to anything you've tracked yet" -- and it never silently creates a
+# tracker item on its own. A scan only ever produces rows in the
+# discovered_matches review queue; a real item only appears once the user
+# explicitly accepts one via /api/discoveries/{id}/accept below.
+
+@app.post("/api/accounts/{account_id}/discover")
+def discover_new_applications(account_id: str):
+    """Scans this account's inbox (mail_app_store.search_unmatched_messages)
+    for messages that look application-related but don't match any
+    currently-open item, and files each as a pending row in the
+    discovered_matches review queue (de-duped by message_id -- see
+    ov.add_discovered_match). Returns the up-to-date pending queue, same
+    shape as GET /api/discoveries, so the frontend can just re-render
+    from this response instead of making a second round-trip."""
+    jt_conn, ov_conn = get_conns()
+    account = ov.get_account(ov_conn, account_id)
+    if account is None:
+        ov_conn.close()
+        raise HTTPException(status_code=404, detail="No such connected account.")
+
+    account_name = account.get("account_name") or account["email"]
+    apps = [a for a in db.load_applications(jt_conn, ov_conn) if not a["archived"]]
+    known_terms = []
+    for a in apps:
+        for t in (a.get("effective_company"), a.get("role_label")):
+            if t and t.strip() and mailapp.is_usable_match_term(t):
+                known_terms.append(t.strip())
+
+    always_posting_senders = ov.list_job_posting_senders(ov_conn)
+    try:
+        candidates = mailapp.search_unmatched_messages(
+            account_name, known_terms, always_posting_senders=always_posting_senders,
+        )
+    except mailapp.MailAppPermissionError as e:
+        ov.mark_account_status(ov_conn, account_id, "blocked")
+        jt_conn.close()
+        ov_conn.close()
+        raise HTTPException(status_code=400, detail=str(e))
+    except mailapp.MailAppError as e:
+        jt_conn.close()
+        ov_conn.close()
+        raise HTTPException(status_code=400, detail=str(e))
+
+    for c in candidates:
+        # A whitelisted sender (see overrides_store.list_job_posting_senders)
+        # is posting-classified unconditionally -- independent of subject
+        # shape -- alongside the existing subject-pattern heuristic (see
+        # discoveries-sender-classification-and-digests-spec.md Part 5.5a).
+        kind = "posting" if (c.get("force_posting") or mailapp.is_job_posting_style_subject(c["subject"])) else "application"
+        ov.add_discovered_match(
+            ov_conn, account_id, c["message_id"], c["subject"], c["sender"],
+            c["received_at"], c["guessed_company"], kind=kind,
+        )
+        if kind == "posting":
+            _extract_and_store_job_postings(
+                ov_conn, account_id, account_name, c["message_id"],
+                c["subject"], c["sender"], c["received_at"],
+            )
+
+    pending = _discoveries_with_account_email(ov_conn, jt_conn)
+    jt_conn.close()
+    ov_conn.close()
+    return pending
+
+
+def _discoveries_with_account_email(ov_conn, jt_conn=None) -> list[dict]:
+    """Decorates each pending discovery with the connected account's
+    email for display, and -- for 'ambiguous' rows only -- a human-
+    readable label per candidate item_key (e.g. "Adams County — IT"),
+    so the frontend's picker doesn't have to know anything about
+    item_key's internal format. Labeling needs `jt_conn`/db.load_
+    applications() (an item_key alone isn't a label); callers that
+    don't have a jt_conn handy (e.g. after an item-mutating route
+    already closed it) can omit it and candidates fall back to their
+    bare item_keys -- still usable by /attach, just less pretty."""
+    accounts_by_id = {a["id"]: a for a in ov.list_accounts(ov_conn)}
+    labels_by_key = {}
+    if jt_conn is not None:
+        for a in db.load_applications(jt_conn, ov_conn):
+            role = a.get("role_label")
+            label = a.get("effective_company") or a.get("company") or a["item_key"]
+            if role and role != "(root)":
+                label = f"{label} — {role}"
+            labels_by_key[a["item_key"]] = label
+
+    out = []
+    for d in ov.list_pending_discoveries(ov_conn):
+        acct = accounts_by_id.get(d["account_id"])
+        d = dict(d)
+        d["account_email"] = acct["email"] if acct else None
+        if d.get("match_kind") == "ambiguous":
+            d["candidates"] = [
+                {"item_key": k, "label": labels_by_key.get(k, k)}
+                for k in (d.get("candidate_item_keys") or [])
+            ]
+        else:
+            d["candidates"] = []
+        out.append(d)
+    return out
+
+
+@app.get("/api/discoveries")
+def list_discoveries():
+    """The current pending review queue, across all connected accounts --
+    what the Settings panel's 'Possible new applications' section shows.
+    Does not trigger a scan itself; call POST /api/accounts/{id}/discover
+    for that."""
+    jt_conn, ov_conn = get_conns()
+    pending = _discoveries_with_account_email(ov_conn, jt_conn)
+    jt_conn.close()
+    ov_conn.close()
+    return pending
+
+
+@app.post("/api/discoveries/{discovery_id}/dismiss")
+def dismiss_discovery(discovery_id: int):
+    """Marks a candidate as not a real application, so it never resurfaces
+    on a later scan of the same account (see ov.add_discovered_match's
+    de-dupe, which checks for a row at ANY status, not just 'pending')."""
+    _, ov_conn = get_conns()
+    d = ov.get_discovery(ov_conn, discovery_id)
+    if d is None:
+        ov_conn.close()
+        raise HTTPException(status_code=404, detail="No such discovery.")
+    ov.set_discovery_status(ov_conn, discovery_id, "dismissed")
+    ov_conn.close()
+    return {"ok": True}
+
+
+@app.get("/api/discoveries/{discovery_id}/preview")
+def preview_discovery(discovery_id: int):
+    """Lazily fetches the source email's body for the review modal, so
+    the user can judge a candidate without alt-tabbing into Mail.app --
+    see mail_app_store.get_message_preview()'s docstring for why this is
+    on-demand (called only when a review modal opens) rather than stored
+    at scan time. Returns {"body": str | None, "posting_url": str | None,
+    "posting_urls": list[str]} -- body=None means the message could no
+    longer be found (e.g. moved/deleted since the scan), which isn't an
+    error the user needs to see, just an empty preview pane. For
+    kind='posting' discoveries, this is also where the board's job-
+    posting link(s) are found and persisted (see
+    mail_app_store.extract_posting_urls() and
+    discoveries-sender-classification-and-digests-spec.md Part 5.5b) --
+    lazily, on the same trip that already fetches the body, rather than
+    at scan time. posting_urls holds every listing link found (a digest
+    can bundle several); posting_url is kept for backward compat and is
+    always posting_urls[0] once populated."""
+    _, ov_conn = get_conns()
+    discovery = ov.get_discovery(ov_conn, discovery_id)
+    if discovery is None:
+        ov_conn.close()
+        raise HTTPException(status_code=404, detail="No such discovery.")
+
+    account = ov.get_account(ov_conn, discovery["account_id"])
+    if account is None:
+        ov_conn.close()
+        return {
+            "body": None,
+            "posting_url": discovery.get("posting_url"),
+            "posting_urls": discovery.get("posting_urls") or [],
+        }
+
+    account_name = account.get("account_name") or account["email"]
+    try:
+        body = mailapp.get_message_preview(account_name, discovery["message_id"])
+    except mailapp.MailAppError:
+        # A permission/timeout/inbox-loading hiccup here shouldn't block
+        # reviewing the discovery -- the modal just falls back to
+        # subject/sender/date, same as before this endpoint existed.
+        body = None
+
+    posting_url = discovery.get("posting_url")
+    posting_urls = discovery.get("posting_urls") or []
+    if not posting_urls and discovery.get("kind") == "posting" and body:
+        guessed = mailapp.extract_posting_urls(body)
+        if guessed:
+            ov.set_discovery_posting_urls(ov_conn, discovery_id, guessed)
+            posting_urls = guessed
+            posting_url = guessed[0]
+    ov_conn.close()
+    return {"body": body, "posting_url": posting_url, "posting_urls": posting_urls}
+
+
+@app.post("/api/discoveries/{discovery_id}/mark-posting")
+def mark_discovery_as_posting(discovery_id: int):
+    """Relabels a pending discovery as kind='posting' without touching
+    its status -- the board's "drop/click onto Job Postings" action for
+    a Needs-Triage card the classifier didn't already catch (see
+    discoveries-kanban-spec.md Part 2). Durable ahead of any future
+    reclassification of the underlying subject pattern: once marked,
+    this discovery stays a posting on later scans/rebuilds regardless of
+    what mail_app_store.is_job_posting_style_subject() would say about
+    it now. 404 if the discovery doesn't exist; 409 if it's already been
+    accepted/dismissed, same as attach/accept below.
+
+    Also runs job-posting extraction immediately (same
+    _extract_and_store_job_postings() helper sync_account()/
+    discover_new_applications() use), so a discovery the classifier
+    missed and a human had to manually relabel still ends up with its
+    individual jobs on the /api/job-postings board, not just a
+    reclassified discovery row. A failed extraction here (e.g. the
+    account got disconnected since this discovery was found) is
+    swallowed the same way it is at the other two call sites -- the
+    relabel itself still succeeds either way."""
+    jt_conn, ov_conn = get_conns()
+    jt_conn.close()
+    discovery = ov.get_discovery(ov_conn, discovery_id)
+    if discovery is None:
+        ov_conn.close()
+        raise HTTPException(status_code=404, detail="No such discovery.")
+    if discovery["status"] != "pending":
+        ov_conn.close()
+        raise HTTPException(status_code=409, detail="This discovery has already been decided.")
+    ov.set_discovery_kind(ov_conn, discovery_id, "posting")
+    account = ov.get_account(ov_conn, discovery["account_id"])
+    if account is not None:
+        account_name = account.get("account_name") or account["email"]
+        _extract_and_store_job_postings(
+            ov_conn, discovery["account_id"], account_name, discovery["message_id"],
+            discovery.get("subject"), discovery.get("sender"), discovery.get("received_at"),
+        )
+    updated = ov.get_discovery(ov_conn, discovery_id)
+    ov_conn.close()
+    return updated
+
+
+@app.post("/api/discoveries/dismiss-sender")
+def dismiss_discoveries_by_sender(sender: str = Form(...)):
+    """Bulk-dismisses every pending discovery from one exact sender (e.g.
+    a recurring 'LinkedIn Job Alerts' digest) in a single action, instead
+    of clicking Dismiss on each row -- see
+    ov.dismiss_pending_discoveries_by_sender()'s docstring."""
+    jt_conn, ov_conn = get_conns()
+    count = ov.dismiss_pending_discoveries_by_sender(ov_conn, sender)
+    pending = _discoveries_with_account_email(ov_conn, jt_conn)
+    jt_conn.close()
+    ov_conn.close()
+    return {"ok": True, "dismissed_count": count, "discoveries": pending}
+
+
+@app.post("/api/discoveries/sender-classification")
+def add_job_posting_sender_classification(sender: str = Form(...)):
+    """"Always treat this sender as postings" -- teaches the app that
+    every future message from this exact sender should be classified
+    kind='posting' unconditionally, without a code change (see
+    overrides_store.add_job_posting_sender and
+    discoveries-sender-classification-and-digests-spec.md Part 5.5a).
+    Does not touch any already-filed discoveries from this sender --
+    only affects future scans. Mirrors dismiss-sender's shape: returns
+    the up-to-date pending queue so the frontend can re-render from this
+    response instead of a second round-trip."""
+    jt_conn, ov_conn = get_conns()
+    ov.add_job_posting_sender(ov_conn, sender)
+    pending = _discoveries_with_account_email(ov_conn, jt_conn)
+    jt_conn.close()
+    ov_conn.close()
+    return {"ok": True, "discoveries": pending}
+
+
+@app.post("/api/discoveries/{discovery_id}/attach")
+def attach_discovery(discovery_id: int, item_key: str = Form(...)):
+    """Confirms an 'ambiguous' discovery (see sync_account()'s docstring
+    and the discovered_matches schema comment) really belongs to an
+    EXISTING item -- unlike /accept, this never creates a new folder.
+    Records the original email as an account_match on the chosen item
+    (exactly as an ordinary sync would have, had the item been
+    unambiguous) and its Message-ID as a thread identifier, then marks
+    the discovery 'accepted' so it stops resurfacing. `item_key` isn't
+    restricted to the discovery's own candidate_item_keys -- those are
+    a helpful default list for the picker, not a hard constraint, since
+    the user reviewing the email may correctly recognize it belongs to
+    a *different* open item than the ones this sync run happened to
+    consider -- but it must be a real, currently-open item, checked
+    against db.load_applications() below rather than trusted blindly."""
+    jt_conn, ov_conn = get_conns()
+    discovery = ov.get_discovery(ov_conn, discovery_id)
+    if discovery is None:
+        jt_conn.close()
+        ov_conn.close()
+        raise HTTPException(status_code=404, detail="No such discovery.")
+    if discovery["status"] != "pending":
+        jt_conn.close()
+        ov_conn.close()
+        raise HTTPException(status_code=409, detail=f"This discovery was already {discovery['status']}.")
+
+    valid_keys = {a["item_key"] for a in db.load_applications(jt_conn, ov_conn) if not a["archived"]}
+    if item_key not in valid_keys:
+        jt_conn.close()
+        ov_conn.close()
+        raise HTTPException(status_code=400, detail="No such open application item.")
+
+    ov.add_account_match(
+        ov_conn, discovery["account_id"], item_key, discovery["message_id"],
+        discovery["subject"], discovery["received_at"],
+    )
+    if discovery["message_id"]:
+        ov.add_thread_identifiers(ov_conn, item_key, [discovery["message_id"]])
+    ov.set_discovery_status(ov_conn, discovery_id, "accepted")
+
+    pending = _discoveries_with_account_email(ov_conn, jt_conn)
+    jt_conn.close()
+    ov_conn.close()
+    return {"ok": True, "discoveries": pending}
+
+
+def _save_email_evidence_pdf(dest_folder: Path, account, message_id: str, subject: str | None, sender: str | None, received_at: str | None) -> bool:
+    """Fetches the source email's body (best-effort -- see
+    preview_discovery's docstring on why a fetch failure here isn't
+    fatal) and saves it as a real PDF document inside `dest_folder`, so
+    an accepted/matched application has actual evidence to show in
+    Attached Documents instead of only the notes.txt placeholder.
+    Returns True if a PDF was written. Never raises -- a Mail.app
+    hiccup here shouldn't block the folder/item from being created."""
+    body = None
+    if account is not None:
+        account_name = account.get("account_name") or account["email"]
+        try:
+            body = mailapp.get_message_preview(account_name, message_id)
+        except mailapp.MailAppError:
+            body = None
+
+    try:
+        pdf_bytes = email_pdf.render_email_pdf(subject, sender, received_at, body)
+        filename = email_pdf.safe_email_filename(subject) + ".pdf"
+        dest = unique_dest_path(dest_folder, filename)
+        dest.write_bytes(pdf_bytes)
+        return True
+    except OSError:
+        # Disk-full / permission hiccup -- same "don't block the accept
+        # over this" reasoning as the body fetch above.
+        return False
+
+
+@app.post("/api/discoveries/{discovery_id}/accept")
+async def accept_discovery(
+    discovery_id: int,
+    company: str = Form(...),
+    role_label: str = Form(""),
+    status: str = Form(""),
+):
+    """Confirms a discovered message really is a new application: creates
+    a stub Applications/<company>/ folder (same create_application_folder
+    + rebuild path as POST /api/applications/new, so this produces a
+    completely ordinary tracker item -- nothing about it is a special
+    'discovered' item type going forward) and links the original email to
+    the new item as an account_match, exactly as if a normal sync had
+    found it. `company`/`role_label` default to the discovery's own
+    subject/sender-derived guess in the frontend's pre-filled form, but
+    are freely editable there first -- this endpoint takes whatever the
+    user actually submitted, not the stored guess.
+
+    Also saves the source email itself as a PDF into the new folder (see
+    _save_email_evidence_pdf) *before* ensure_not_empty's placeholder
+    check runs, so a freshly-accepted application gets real evidence
+    instead of the generic notes.txt -- ensure_not_empty only drops its
+    placeholder when a folder is still empty, so the PDF (when it saves
+    successfully) preempts it entirely."""
+    if status and status not in db.STATUS_ORDER:
+        raise HTTPException(status_code=400, detail=f"Unknown status '{status}'. Must be one of {db.STATUS_ORDER}.")
+
+    _, ov_conn = get_conns()
+    discovery = ov.get_discovery(ov_conn, discovery_id)
+    if discovery is None:
+        ov_conn.close()
+        raise HTTPException(status_code=404, detail="No such discovery.")
+    if discovery["status"] != "pending":
+        ov_conn.close()
+        raise HTTPException(status_code=409, detail=f"This discovery was already {discovery['status']}.")
+
+    try:
+        dest_folder = create_application_folder(current_root(), company, role_label)
+    except ValueError as e:
+        ov_conn.close()
+        raise HTTPException(status_code=400, detail=str(e))
+    except FileExistsError as e:
+        ov_conn.close()
+        raise HTTPException(status_code=409, detail=str(e))
+
+    account = ov.get_account(ov_conn, discovery["account_id"])
+    _save_email_evidence_pdf(
+        dest_folder, account, discovery["message_id"],
+        discovery["subject"], discovery["sender"], discovery["received_at"],
+    )
+
+    ensure_not_empty(dest_folder)
+    build(current_root(), current_db_path())
+
+    root = current_root().resolve()
+    relpath = str(dest_folder.relative_to(root))
+    jt_conn = db.get_jt_conn(current_db_path())
+    row = jt_conn.execute("SELECT id, item_key FROM items WHERE source_relpath = ?", (relpath,)).fetchone()
+    jt_conn.close()
+
+    if row is not None:
+        if status:
+            ov.upsert_override(ov_conn, row["item_key"], manual_status=status)
+        ov.add_account_match(
+            ov_conn, discovery["account_id"], row["item_key"],
+            discovery["message_id"], discovery["subject"], discovery["received_at"],
+        )
+
+    ov.set_discovery_status(ov_conn, discovery_id, "accepted")
+    ov_conn.close()
+    return {"ok": True, "relpath": relpath, "item_id": row["id"] if row is not None else None}
+
+
+@app.post("/api/discoveries/backfill-email-pdfs")
+def backfill_email_pdfs():
+    """Sweeps every already-linked email (account_matches -- i.e. every
+    application that was synced or accepted before email_pdf.py
+    existed, or where the save failed at the time e.g. a Mail.app
+    hiccup) and saves a PDF for any whose folder doesn't already have
+    one. Idempotent and safe to re-run: a folder that already has an
+    "Email - ...pdf" (any of them -- see email_pdf.EMAIL_PDF_PREFIX) is
+    left alone rather than getting a duplicate. Returns counts so the
+    Settings panel can show the user something happened (or didn't)."""
+    jt_conn, ov_conn = get_conns()
+    root = current_root().resolve()
+
+    matches = ov.list_all_account_matches(ov_conn)
+    accounts_by_id = {a["id"]: a for a in ov.list_accounts(ov_conn)}
+
+    checked = 0
+    saved = 0
+    skipped_existing = 0
+    failed = 0
+    for m in matches:
+        row = jt_conn.execute(
+            "SELECT source_relpath FROM items WHERE item_key = ?", (m["item_key"],)
+        ).fetchone()
+        if row is None:
+            continue  # item no longer exists (deleted/merged since the match was made)
+        checked += 1
+
+        dest_folder = root / row["source_relpath"]
+        if not dest_folder.is_dir():
+            continue
+        already_has_pdf = any(
+            f.name.startswith(email_pdf.EMAIL_PDF_PREFIX) and f.suffix.lower() == ".pdf"
+            for f in dest_folder.iterdir() if f.is_file()
+        )
+        if already_has_pdf:
+            skipped_existing += 1
+            continue
+
+        account = accounts_by_id.get(m["account_id"])
+        # account_matches (unlike discovered_matches) never stored the
+        # original sender address -- only the mailbox it arrived in is
+        # known at this point, so that's what the PDF's "From:" shows.
+        sender_label = account["email"] if account else None
+        ok = _save_email_evidence_pdf(
+            dest_folder, account, m["message_id"], m["subject"], sender_label, m["received_at"],
+        )
+        if ok:
+            saved += 1
+        else:
+            failed += 1
+
+    jt_conn.close()
+    ov_conn.close()
+
+    if saved:
+        build(current_root(), current_db_path())
+
+    return {"ok": True, "checked": checked, "saved": saved, "skipped_existing": skipped_existing, "failed": failed}
+
+
+# --- job postings (CLAUDE_HANDOFF.md sections 2/8/14) ------------------------
+# First-class job records, one row per individual job -- NOT a filtered
+# view of discovered_matches (see CLAUDE_HANDOFF.md section 15: "Do not
+# use discoveries.filter(d => d.kind === 'posting') as the canonical Job
+# Postings count"). Rows are populated during sync/discover by
+# _extract_and_store_job_postings() above, not lazily here.
+
+@app.get("/api/job-postings")
+def list_job_postings():
+    """Every non-dismissed job posting, newest first -- what the Job
+    Postings board renders. The count of this list (not of any
+    discovered_matches query) is the canonical "Job Postings · N" the
+    UI should show (CLAUDE_HANDOFF.md section 4)."""
+    jt_conn, ov_conn = get_conns()
+    postings = ov.list_job_postings(ov_conn, status="new")
+    jt_conn.close()
+    ov_conn.close()
+    return postings
+
+
+@app.post("/api/job-postings/{job_id}/dismiss")
+def dismiss_job_posting(job_id: int):
+    """Hides one job posting from the board without deleting its row --
+    same UX shape as /api/discoveries/{id}/dismiss. Re-extracting the
+    same job on a later sync will not resurrect it (dedupe_key already
+    exists), matching discovered_matches' own dismiss semantics."""
+    jt_conn, ov_conn = get_conns()
+    job = ov.get_job_posting(ov_conn, job_id)
+    if job is None:
+        jt_conn.close()
+        ov_conn.close()
+        raise HTTPException(status_code=404, detail="No such job posting.")
+    ov.set_job_posting_status(ov_conn, job_id, "dismissed")
+    jt_conn.close()
+    ov_conn.close()
+    return {"ok": True}
+
+
 # --- applications / pipeline -------------------------------------------------
 @app.get("/api/applications")
 def list_applications():
@@ -773,6 +1530,17 @@ def application_dossier(item_id: int):
     result["current_status"] = current_status
     result["current_status_date"] = status_change["changed_at"][:10] if status_change else None
     result["current_status_date_known"] = bool(status_change)
+
+    # Item 8: connected-account matches for this item's timeline. Empty
+    # list/dict for everyone until an account is actually connected and
+    # synced -- cheap no-op reads, not worth gating behind a feature flag.
+    matches = ov.get_matches_for_item(ov_conn, item_key)
+    accounts_by_id = {a["id"]: a for a in ov.list_accounts(ov_conn)}
+    for m in matches:
+        acct = accounts_by_id.get(m["account_id"])
+        m["account_email"] = acct["email"] if acct else None
+        m["account_provider"] = acct["provider"] if acct else None
+    result["account_matches"] = matches
 
     jt_conn.close()
     ov_conn.close()

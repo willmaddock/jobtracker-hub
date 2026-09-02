@@ -135,7 +135,7 @@
 Feature & Item 7 --- Application Timeline (document-derived events + status-history-backed current status) \\
 Workflow & One chat = one tested, zipped checkpoint. Claude does not touch GitHub or build the DMG. \\
 Base project & JobTracker Hub, Item 6 / Checkpoint 6 sealed, 144/144 tests passing before this log's Checkpoint 1. \\
-Scope reference & \file{ITEM7_TIMELINE_FDD_DRAFT.md} at the repository root defines v1 scope in full; this log records what was actually built and verified against it. \\
+Scope reference & \file{docs/specs/ITEM7_TIMELINE_FDD_DRAFT.md} defines v1 scope in full; this log records what was actually built and verified against it. \\
 This log & Updated at the end of every checkpoint chat; latest checkpoint's ``Next Steps'' box is always the first thing to read.
 \end{tabularx}
 \vfill
@@ -188,7 +188,7 @@ This log & Updated at the end of every checkpoint chat; latest checkpoint's ``Ne
 \section{Checkpoint 1 --- Application Timeline (Document Events + Status History)}\label{sec:cp1}
 
 \subsection{Scope}
-Build the Timeline view recommended at the end of Item 6: the shape of an application's life -- applied, interviewed, resolved -- derived from evidence the app already extracts, per \file{ITEM7_TIMELINE_FDD_DRAFT.md}. Full FDD text lives at the repository root; the v1-scope summary that matters for this checkpoint:
+Build the Timeline view recommended at the end of Item 6: the shape of an application's life -- applied, interviewed, resolved -- derived from evidence the app already extracts, per \file{docs/specs/ITEM7_TIMELINE_FDD_DRAFT.md}. Full FDD text lives under \\texttt{docs/specs/}; the v1-scope summary that matters for this checkpoint:
 
 \begin{infobox}
 \textbf{v1 scope, in brief.}\label{sec:cp1-fdd-scope} Two kinds of Timeline entry: (1) \textbf{document-derived events}, one per \cmd{application_confirmation}/\cmd{interview_notice} document with a detected date, never merged even when a folder has more than one of either type; (2) a single item-level \textbf{``Current status''} entry, backed by a new append-only \cmd{status_history} log rather than a document, since the real corpus has almost no standalone rejection documents to derive a rejection event from. Explicitly out of v1 scope: recovering a transition date for any status set before \cmd{status_history} existed, and showing more than the single latest transition to the current status.
@@ -244,7 +244,7 @@ A manual click-through was carried out in a later session directly against the r
 \end{itemize}
 
 \subsection{Deliverable}
-\file{jobtracker-hub-item7-merged.zip} (implementation) and this closeout's handoff zip -- full repository source (minus \file{.venv}, \file{.git}, caches, and local workspace state), plus this development log, \file{ITEM7_TIMELINE_FDD_DRAFT.md}, and an updated \file{CHANGES.md} at the repository root.
+\file{jobtracker-hub-item7-merged.zip} (implementation) and this closeout's handoff zip -- full repository source (minus \file{.venv}, \file{.git}, caches, and local workspace state), plus this development log, \file{docs/specs/ITEM7_TIMELINE_FDD_DRAFT.md}, and an updated \file{CHANGES.md} at the repository root.
 
 \section{Item 7 Closeout}\label{sec:closeout}
 

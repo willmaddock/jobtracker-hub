@@ -61,7 +61,7 @@ api.py's application_dossier for exactly how the tier is used.
 
 Item 7 adds `timeline_events`: one entry per application_confirmation or
 interview_notice document that has a detected date (see
-ITEM7_TIMELINE_FDD_DRAFT.md's "v1 scope" -- built from real-corpus
+docs/specs/ITEM7_TIMELINE_FDD_DRAFT.md's "v1 scope" -- built from real-corpus
 evidence, not the abstract 6-stage event list originally proposed).
 Unlike `detected_date_applied` above, this is NOT a single winner-take-all
 value -- every matching document becomes its own event (e.g. a phone

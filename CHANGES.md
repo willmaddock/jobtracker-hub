@@ -82,14 +82,14 @@ applications afterward with notes, statuses, and dates intact.
 - **Item 8B is sealed.** Item 7 (Timeline) below remains sealed and
   unaffected.
 - **Item 8 (Lifecycle & Outcome Tracking) remains paused**, design-only
-  — see `HANDOFF.md` §23 and `ITEM8_LIFECYCLE_OUTCOME_FDD_DRAFT.md`.
+  — see `docs/archive/handoffs/HANDOFF_SESSION16_LEGACY.md` §23 and `docs/specs/ITEM8_LIFECYCLE_OUTCOME_FDD_DRAFT.md`.
 - **Git has not been committed or pushed.** Committing this
   documentation update alongside the already-implemented code changes
   is still the user's own next step.
 
 ## Full development log
 
-`HANDOFF.md` §18–22 is the cumulative, session-by-session version of
+`docs/archive/handoffs/HANDOFF_SESSION16_LEGACY.md` §18–22 is the cumulative, session-by-session version of
 this same work; §24 seals it.
 
 ---
@@ -102,7 +102,7 @@ Checkpoint 6 of Item 6 (Auto-Fill Date Applied) left "Timeline view" as
 the recommended next feature: showing the shape of an application's
 life — applied, interviewed, resolved — from evidence the app already
 has, rather than anything the user has to type. Full scope definition:
-[`ITEM7_TIMELINE_FDD_DRAFT.md`](ITEM7_TIMELINE_FDD_DRAFT.md).
+[`docs/specs/ITEM7_TIMELINE_FDD_DRAFT.md`](docs/specs/ITEM7_TIMELINE_FDD_DRAFT.md).
 
 ## What this item contains
 
@@ -230,7 +230,7 @@ excluded from these results.
   `test_repeated_save_of_same_status_does_not_duplicate_history`
   (part of the passing 144/144 run), so this is corroborating
   real-app evidence layered on an already-verified case, not the only
-  evidence for it — see `ITEM7_TIMELINE_FDD_DRAFT.md`.
+  evidence for it — see `docs/specs/ITEM7_TIMELINE_FDD_DRAFT.md`.
 - Cannot recover a transition date for any status set before
   `status_history` existed — by design, not a bug; see the FDD draft
   and `current_status_date_known`.

@@ -108,7 +108,7 @@ CREATE TABLE IF NOT EXISTS document_extractions (
 -- most recent row matching a given status is that status's transition
 -- date. Only covers changes made after this table shipped -- it cannot
 -- retroactively recover a date for a status set earlier (see
--- ITEM7_TIMELINE_FDD_DRAFT.md).
+-- docs/specs/ITEM7_TIMELINE_FDD_DRAFT.md).
 CREATE TABLE IF NOT EXISTS status_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     item_key TEXT NOT NULL,
@@ -121,6 +121,176 @@ CREATE TABLE IF NOT EXISTS status_history (
 );
 
 CREATE INDEX IF NOT EXISTS idx_status_history_item_key ON status_history(item_key);
+
+-- Connected email accounts. Every row is a Mail.app account the user
+-- already configured in System Settings -> Internet Accounts -- no
+-- credentials of any kind live here or anywhere else in this app. See
+-- mail_app_store.py for the AppleScript handshake.
+CREATE TABLE IF NOT EXISTS accounts (
+    id TEXT PRIMARY KEY,          -- uuid4, generated at connect time
+    provider TEXT NOT NULL,       -- always 'mail_app' now; old rows may say 'gmail'/'outlook'/'icloud'/'imap' from before this app went macOS-only, see _migrate()
+    email TEXT NOT NULL,
+    account_name TEXT,            -- Mail.app's own account name (what mail_app_store.search_messages() queries by) -- may differ from `email`, e.g. an account named "hotmail" whose address is a different alias
+    status TEXT NOT NULL DEFAULT 'connected',  -- 'connected' | 'blocked' | 'disconnected'  ('blocked' = last sync hit a denied Automation permission)
+    last_synced_at TEXT,
+    matched_email_count INTEGER NOT NULL DEFAULT 0,
+    connected_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+-- One row per email matched to an application item, so the dossier/
+-- timeline can cite "via which account" without re-fetching the inbox.
+-- Only extracted text is ever stored (mirrors document_extractions in
+-- db.py) -- never the raw message.
+CREATE TABLE IF NOT EXISTS account_matches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id TEXT NOT NULL,
+    item_key TEXT NOT NULL,
+    message_id TEXT NOT NULL,     -- provider's message id, for de-dupe on re-sync
+    subject TEXT,
+    received_at TEXT,
+    matched_at TEXT NOT NULL,
+    UNIQUE(account_id, message_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_account_matches_item_key ON account_matches(item_key);
+
+-- Discovery review queue ("Possible new applications"): a message that
+-- *looks* application-related (mail_app_store.search_unmatched_messages'
+-- ATS heuristics) but doesn't match any currently-tracked item. Distinct
+-- from account_matches, which only ever links a message to an item that
+-- already exists -- a row here means "maybe log a new application from
+-- this", and nothing becomes a real item (or an account_match) until the
+-- user explicitly accepts it via /api/discoveries/{id}/accept. Rejecting
+-- (status='dismissed') is remembered too, so a dismissed message doesn't
+-- keep resurfacing on every later scan.
+CREATE TABLE IF NOT EXISTS discovered_matches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id TEXT NOT NULL,
+    message_id TEXT NOT NULL,
+    subject TEXT,
+    sender TEXT,
+    received_at TEXT,
+    guessed_company TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',  -- 'pending' | 'accepted' | 'dismissed'
+    created_at TEXT NOT NULL,
+    -- 'unmatched' (default): search_unmatched_messages() found mail that
+    -- doesn't look like it belongs to anything tracked yet -- accepting
+    -- one of these creates a brand-new item (see /api/discoveries/{id}/accept).
+    -- 'ambiguous': sync_account() found a company-only text match (see
+    -- mail_app_store.search_messages()'s "company_only" field) against a
+    -- company with more than one open item, so which specific item this
+    -- email actually belongs to can't be inferred automatically --
+    -- accepting one of these attaches it to an EXISTING item instead of
+    -- creating a new one (see /api/discoveries/{id}/attach).
+    match_kind TEXT NOT NULL DEFAULT 'unmatched',
+    -- JSON-encoded list of item_keys sharing the guessed company, for
+    -- 'ambiguous' rows only (NULL for 'unmatched' rows). The frontend
+    -- offers these as the picker options for /attach.
+    candidate_item_keys TEXT,
+    -- Orthogonal to match_kind above: match_kind is about *matching
+    -- confidence* (does this clearly belong to one item, or could it be
+    -- several?); `kind` is about *what the email itself is*.
+    -- 'application' (default): this is mail about an application --
+    -- current behavior, unchanged, still goes through the
+    -- unmatched/ambiguous triage above.
+    -- 'posting': subject/body reads as a job-alert/listing notice (e.g.
+    -- "KPMG just posted a 78% match Front End Engineer...") rather than
+    -- confirmation that the user applied to anything -- see
+    -- mail_app_store.is_job_posting_style_subject(). These are routed
+    -- straight past the ambiguous-application queue regardless of any
+    -- company-name overlap (see api.py's sync_account() and
+    -- discover_new_applications()); candidate_item_keys is always empty
+    -- for these rows since there's no application to attach to.
+    kind TEXT NOT NULL DEFAULT 'application',
+    -- Best-effort job-board/careers-page URL pulled from the message body
+    -- the first time it's previewed (see mail_app_store.guess_posting_url()
+    -- and api.py's preview_discovery()). NULL until a preview has run, and
+    -- stays NULL forever if no recognizable link was found in the body --
+    -- the frontend shows nothing rather than a fake link in that case.
+    -- Populated lazily (on preview), not at scan time, for the same reason
+    -- the body itself is fetched lazily: cheap scans, cost paid only for
+    -- discoveries the user actually opens.
+    posting_url TEXT,
+    -- Every job-board/listing URL found in the message body (JSON array),
+    -- for digest emails that bundle several distinct postings into one
+    -- message (see mail_app_store.extract_posting_urls() and
+    -- discoveries-sender-classification-and-digests-spec.md Part 5.5b).
+    -- posting_url above is kept for backward compat and always mirrors
+    -- posting_urls[0] once this is populated; posting_urls is the richer
+    -- field new code should read. Same lazy-on-preview population as
+    -- posting_url -- NULL until a preview has run.
+    posting_urls TEXT,
+    UNIQUE(account_id, message_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_discovered_matches_status ON discovered_matches(status);
+
+-- Senders the user has explicitly taught this app to always treat as
+-- job-posting mail, regardless of subject phrasing -- the escape hatch
+-- for a digest sender whose subject shape search_unmatched_messages()'s
+-- heuristics don't recognize (e.g. LinkedIn renaming the subject to
+-- whatever listing ranks first, so it never contains an ATS phrase). See
+-- discoveries-sender-classification-and-digests-spec.md Part 5.5a. Keyed
+-- on the exact sender string (mirrors dismiss_pending_discoveries_by_
+-- sender's keying), not domain, so a human recruiter at the same domain
+-- (e.g. a real person @linkedin.com) is never accidentally swept in.
+CREATE TABLE IF NOT EXISTS job_posting_senders (
+    sender TEXT PRIMARY KEY,
+    added_at TEXT
+);
+
+-- Every Message-ID known to belong to a given item's email thread --
+-- both messages that were themselves confirmed matches, and any
+-- Message-ID their In-Reply-To/References headers cited (see
+-- mail_app_store.search_messages()'s thread_ids parameter). A future
+-- sync passes this set back in, so a reply whose subject/sender share
+-- nothing textually with the item (e.g. "Re: your submission") still
+-- attaches deterministically once its headers cite an id already here.
+-- Purely additive -- rows are only ever inserted, never removed except
+-- via the item's own deletion cleanup.
+CREATE TABLE IF NOT EXISTS thread_identifiers (
+    item_key TEXT NOT NULL,
+    message_id TEXT NOT NULL,
+    PRIMARY KEY (item_key, message_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_thread_identifiers_item_key ON thread_identifiers(item_key);
+
+-- First-class job-posting records (CLAUDE_HANDOFF.md section 8) -- the
+-- replacement for counting discovered_matches rows with kind='posting'
+-- as "Job Postings". One row per individual job, not per email: a
+-- single digest message can (and usually does) produce several of
+-- these, all sharing the same message_id but with different dedupe_key
+-- values (see posting_extract.compute_dedupe_key()).
+CREATE TABLE IF NOT EXISTS job_postings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id TEXT NOT NULL,
+    message_id TEXT NOT NULL,
+    source TEXT,                    -- 'linkedin' | 'handshake' | ...
+    title TEXT,
+    company TEXT,
+    location TEXT,
+    salary TEXT,
+    employment_type TEXT,
+    posting_url TEXT,
+    received_at TEXT,
+    email_subject TEXT,
+    sender TEXT,
+    -- 'new' (default) | 'dismissed' -- dismissing hides a job from the
+    -- board without deleting it, same UX shape as discovered_matches.
+    status TEXT NOT NULL DEFAULT 'new',
+    created_at TEXT NOT NULL,
+    -- See posting_extract.compute_dedupe_key(): account_id + normalized
+    -- posting URL when available, else account_id + message_id +
+    -- normalized title + normalized company. UNIQUE here is what makes
+    -- add_job_posting() safe to call repeatedly across syncs -- a
+    -- repeated sync re-extracting the same digest is a no-op, not a
+    -- duplicate row (CLAUDE_HANDOFF.md section 9).
+    dedupe_key TEXT NOT NULL UNIQUE
+);
+
+CREATE INDEX IF NOT EXISTS idx_job_postings_status ON job_postings(status);
 """
 
 
@@ -136,6 +306,28 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE item_overrides ADD COLUMN date_applied_source TEXT")
         conn.commit()
 
+    acct_cols = {r["name"] for r in conn.execute("PRAGMA table_info(accounts)")}
+    if "account_name" not in acct_cols:
+        conn.execute("ALTER TABLE accounts ADD COLUMN account_name TEXT")
+        conn.commit()
+
+    disc_cols = {r["name"] for r in conn.execute("PRAGMA table_info(discovered_matches)")}
+    if "match_kind" not in disc_cols:
+        conn.execute("ALTER TABLE discovered_matches ADD COLUMN match_kind TEXT NOT NULL DEFAULT 'unmatched'")
+        conn.commit()
+    if "candidate_item_keys" not in disc_cols:
+        conn.execute("ALTER TABLE discovered_matches ADD COLUMN candidate_item_keys TEXT")
+        conn.commit()
+    if "kind" not in disc_cols:
+        conn.execute("ALTER TABLE discovered_matches ADD COLUMN kind TEXT NOT NULL DEFAULT 'application'")
+        conn.commit()
+    if "posting_url" not in disc_cols:
+        conn.execute("ALTER TABLE discovered_matches ADD COLUMN posting_url TEXT")
+        conn.commit()
+    if "posting_urls" not in disc_cols:
+        conn.execute("ALTER TABLE discovered_matches ADD COLUMN posting_urls TEXT")
+        conn.commit()
+
 
 def get_conn(db_path: Path) -> sqlite3.Connection:
     # overrides.db now lives inside the workspace's own root (see
@@ -145,8 +337,17 @@ def get_conn(db_path: Path) -> sqlite3.Connection:
     # a .jobtracker/ folder yet, so make sure it exists before sqlite
     # tries to create the file inside it.
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path)
+    # busy_timeout widens how long a writer retries before giving up
+    # (Python's sqlite3 default is only 5s) so concurrent writers -- e.g.
+    # two "Sync now" calls, or a sync overlapping a disconnect -- queue and
+    # retry instead of surfacing "database is locked" under heavier
+    # contention. WAL additionally lets readers proceed without blocking
+    # on a writer at all, and survives this same class of failure better
+    # under load than the default rollback journal.
+    conn = sqlite3.connect(db_path, timeout=30)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=30000")
     conn.executescript(SCHEMA)
     _migrate(conn)
     return conn
@@ -441,3 +642,414 @@ def set_extraction(
         (content_hash, extractor_version, json.dumps(data), now_iso()),
     )
     conn.commit()
+
+
+# --- connected accounts (Item 8 foundation) -----------------------------------
+# Row lifecycle only -- never touches credentials, because there are
+# none: mail_app_store.py just asks Mail.app questions over
+# AppleScript. This module persists the display-facing rows those
+# calls produce.
+
+def list_accounts(conn: sqlite3.Connection) -> list[dict]:
+    rows = conn.execute("SELECT * FROM accounts ORDER BY connected_at").fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_account(conn: sqlite3.Connection, account_id: str) -> dict | None:
+    row = conn.execute("SELECT * FROM accounts WHERE id = ?", (account_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def upsert_account(
+    conn: sqlite3.Connection,
+    account_id: str,
+    provider: str,
+    email: str,
+    status: str = "connected",
+    account_name: str | None = None,
+) -> None:
+    """Called once when the user picks a Mail.app account to connect,
+    and again whenever its status changes (e.g. back to 'connected'
+    after a sync that used to be 'blocked' succeeds)."""
+    existing = get_account(conn, account_id)
+    now = now_iso()
+    conn.execute(
+        """
+        INSERT INTO accounts (id, provider, email, account_name, status, connected_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            status=excluded.status,
+            account_name=COALESCE(excluded.account_name, accounts.account_name),
+            updated_at=excluded.updated_at
+        """,
+        (
+            account_id, provider, email,
+            account_name or (existing.get("account_name") if existing else None),
+            status,
+            existing.get("connected_at") if existing else now,
+            now,
+        ),
+    )
+    conn.commit()
+
+
+def mark_account_status(conn: sqlite3.Connection, account_id: str, status: str) -> None:
+    """status in {'connected','blocked','disconnected'} -- flip to 'blocked'
+    when a sync hits a denied macOS Automation permission, so the accounts
+    list can surface that instead of silently going stale."""
+    conn.execute(
+        "UPDATE accounts SET status = ?, updated_at = ? WHERE id = ?",
+        (status, now_iso(), account_id),
+    )
+    conn.commit()
+
+
+def record_sync(conn: sqlite3.Connection, account_id: str, new_match_count: int) -> None:
+    conn.execute(
+        """
+        UPDATE accounts
+        SET last_synced_at = ?, matched_email_count = matched_email_count + ?, updated_at = ?
+        WHERE id = ?
+        """,
+        (now_iso(), new_match_count, now_iso(), account_id),
+    )
+    conn.commit()
+
+
+def delete_account(conn: sqlite3.Connection, account_id: str) -> None:
+    conn.execute("DELETE FROM account_matches WHERE account_id = ?", (account_id,))
+    conn.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
+    conn.commit()
+
+
+def add_account_match(
+    conn: sqlite3.Connection,
+    account_id: str,
+    item_key: str,
+    message_id: str,
+    subject: str | None,
+    received_at: str | None,
+) -> bool:
+    """Returns False (no-op) on a duplicate message_id for this account --
+    that's the re-sync de-dupe, not an error."""
+    try:
+        conn.execute(
+            """
+            INSERT INTO account_matches (account_id, item_key, message_id, subject, received_at, matched_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (account_id, item_key, message_id, subject, received_at, now_iso()),
+        )
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False
+
+
+def list_all_account_matches(conn: sqlite3.Connection) -> list[dict]:
+    """Every matched email across every item, regardless of account --
+    the sweep list for api.backfill_email_pdfs(), which needs to check
+    each one's on-disk folder for a missing evidence PDF (see that
+    endpoint's docstring). Unlike get_matches_for_item, not scoped to a
+    single item_key."""
+    rows = conn.execute("SELECT * FROM account_matches ORDER BY matched_at").fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_matches_for_item(conn: sqlite3.Connection, item_key: str) -> list[dict]:
+    rows = conn.execute(
+        "SELECT * FROM account_matches WHERE item_key = ? ORDER BY received_at",
+        (item_key,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+# --- thread identifiers (deterministic reply-matching) -----------------------
+
+def add_thread_identifiers(conn: sqlite3.Connection, item_key: str, message_ids: list[str]) -> None:
+    """Record any of `message_ids` not already known for this item.
+    Silently ignores blank/None entries and repeats (INSERT OR IGNORE
+    against the (item_key, message_id) primary key) -- a no-op call
+    with an empty or all-blank list is fine, callers don't need to
+    pre-filter."""
+    clean = {m.strip() for m in (message_ids or []) if m and m.strip()}
+    if not clean:
+        return
+    conn.executemany(
+        "INSERT OR IGNORE INTO thread_identifiers (item_key, message_id) VALUES (?, ?)",
+        [(item_key, m) for m in clean],
+    )
+    conn.commit()
+
+
+def get_all_thread_ids_by_item(conn: sqlite3.Connection) -> dict[str, list[str]]:
+    """Every known thread id, grouped by item_key -- one query for the
+    whole sync rather than one query per item, since sync_account()
+    needs this map for every open application up front before it can
+    call search_messages() at all."""
+    rows = conn.execute("SELECT item_key, message_id FROM thread_identifiers").fetchall()
+    out: dict[str, list[str]] = {}
+    for r in rows:
+        out.setdefault(r["item_key"], []).append(r["message_id"])
+    return out
+
+
+def delete_thread_identifiers(conn: sqlite3.Connection, item_key: str) -> None:
+    conn.execute("DELETE FROM thread_identifiers WHERE item_key = ?", (item_key,))
+    conn.commit()
+
+
+# --- discovery review queue ("Possible new applications") --------------------
+
+def add_discovered_match(
+    conn: sqlite3.Connection,
+    account_id: str,
+    message_id: str,
+    subject: str | None,
+    sender: str | None,
+    received_at: str | None,
+    guessed_company: str | None,
+    match_kind: str = "unmatched",
+    candidate_item_keys: list[str] | None = None,
+    kind: str = "application",
+) -> bool:
+    """Returns False (no-op) if this (account_id, message_id) is already
+    in the table, at ANY status -- including 'accepted' or 'dismissed'.
+    That's what makes an accepted/dismissed discovery never resurface on
+    a later scan: this only ever inserts, it never resets a decided row
+    back to 'pending'.
+
+    `match_kind`/`candidate_item_keys`: see the discovered_matches schema
+    comment. Pass match_kind='ambiguous' with the sibling item_keys when
+    filing a company-only sync hit against a multi-item company (see
+    api.py's sync_account()); left at the 'unmatched' default for the
+    ordinary inbox-scan discovery flow, which doesn't need candidates.
+
+    `kind`: 'application' (default) or 'posting' -- see the schema
+    comment. Callers should pass kind='posting' (and leave
+    candidate_item_keys unset) whenever
+    mail_app_store.is_job_posting_style_subject() matches, regardless of
+    what match_kind would otherwise have been -- a job-alert email never
+    belongs in the ambiguous-application queue even if its company name
+    happens to overlap an existing item."""
+    encoded_candidates = json.dumps(candidate_item_keys) if candidate_item_keys else None
+    try:
+        conn.execute(
+            """
+            INSERT INTO discovered_matches
+                (account_id, message_id, subject, sender, received_at, guessed_company,
+                 status, created_at, match_kind, candidate_item_keys, kind)
+            VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)
+            """,
+            (account_id, message_id, subject, sender, received_at, guessed_company,
+             now_iso(), match_kind, encoded_candidates, kind),
+        )
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False
+
+
+def _decode_discovery(row: sqlite3.Row) -> dict:
+    d = dict(row)
+    raw = d.get("candidate_item_keys")
+    try:
+        d["candidate_item_keys"] = json.loads(raw) if raw else []
+    except (TypeError, ValueError):
+        d["candidate_item_keys"] = []
+    raw_urls = d.get("posting_urls")
+    try:
+        d["posting_urls"] = json.loads(raw_urls) if raw_urls else []
+    except (TypeError, ValueError):
+        d["posting_urls"] = []
+    return d
+
+
+def list_pending_discoveries(conn: sqlite3.Connection) -> list[dict]:
+    rows = conn.execute(
+        "SELECT * FROM discovered_matches WHERE status = 'pending' ORDER BY received_at DESC, id DESC"
+    ).fetchall()
+    return [_decode_discovery(r) for r in rows]
+
+
+def get_discovery(conn: sqlite3.Connection, discovery_id: int) -> dict | None:
+    row = conn.execute("SELECT * FROM discovered_matches WHERE id = ?", (discovery_id,)).fetchone()
+    return _decode_discovery(row) if row else None
+
+
+def set_discovery_posting_url(conn: sqlite3.Connection, discovery_id: int, posting_url: str) -> None:
+    """Persists the job-board link found in a posting's body on first
+    preview (see mail_app_store.guess_posting_url()), so later loads of
+    /api/discoveries don't need to re-fetch the email to show the link on
+    the card. Never overwrites with an empty guess -- callers should only
+    call this once a real URL was found."""
+    conn.execute(
+        "UPDATE discovered_matches SET posting_url = ? WHERE id = ?",
+        (posting_url, discovery_id),
+    )
+    conn.commit()
+
+
+def set_discovery_posting_urls(conn: sqlite3.Connection, discovery_id: int, posting_urls: list[str]) -> None:
+    """Persists every job-board/listing link found in a digest email's
+    body (see mail_app_store.extract_posting_urls()) on first preview --
+    same lazy-cache timing as set_discovery_posting_url(). Keeps the
+    single-value posting_url column in sync as posting_urls[0], so any
+    code that still only reads posting_url continues to work unchanged.
+    Never call with an empty list -- callers should only call this once
+    at least one real URL was found."""
+    conn.execute(
+        "UPDATE discovered_matches SET posting_urls = ?, posting_url = ? WHERE id = ?",
+        (json.dumps(posting_urls), posting_urls[0] if posting_urls else None, discovery_id),
+    )
+    conn.commit()
+
+
+def set_discovery_status(conn: sqlite3.Connection, discovery_id: int, status: str) -> None:
+    """status in {'pending', 'accepted', 'dismissed'}."""
+    conn.execute(
+        "UPDATE discovered_matches SET status = ? WHERE id = ?",
+        (status, discovery_id),
+    )
+    conn.commit()
+
+
+def set_discovery_kind(conn: sqlite3.Connection, discovery_id: int, kind: str) -> None:
+    """kind in {'application', 'posting'}. Used by the board's "mark as
+    posting" action (drag or click a Needs-Triage card onto Job
+    Postings) -- relabels a discovery without touching its status, so it
+    moves columns without being resolved/dismissed. Also clears
+    candidate_item_keys when moving to 'posting', since a posting never
+    has an application to attach to."""
+    if kind == "posting":
+        conn.execute(
+            "UPDATE discovered_matches SET kind = ?, candidate_item_keys = NULL WHERE id = ?",
+            (kind, discovery_id),
+        )
+    else:
+        conn.execute(
+            "UPDATE discovered_matches SET kind = ? WHERE id = ?",
+            (kind, discovery_id),
+        )
+    conn.commit()
+
+
+def dismiss_pending_discoveries_by_sender(conn: sqlite3.Connection, sender: str) -> int:
+    """Bulk-dismisses every currently-pending discovery from an exact
+    `sender` value (the same string list_pending_discoveries() returns
+    per row, e.g. \"LinkedIn Job Alerts <jobalerts-noreply@linkedin.com>\")
+    -- the review queue's escape hatch for a single noisy recurring
+    sender that would otherwise mean clicking Dismiss one row at a time.
+    Uses the same 'dismissed' status as a single dismiss, so add_discovered_match's
+    de-dupe check keeps these from resurfacing on a later scan just like
+    any other dismissed row. Returns the number of rows affected."""
+    cur = conn.execute(
+        "UPDATE discovered_matches SET status = 'dismissed' WHERE status = 'pending' AND sender = ?",
+        (sender,),
+    )
+    conn.commit()
+    return cur.rowcount
+
+
+# --- job-posting sender whitelist --------------------------------------------
+# See discoveries-sender-classification-and-digests-spec.md Part 5.5a: the
+# user-taught alternative to hardcoding a new digest sender's domain into
+# mail_app_store.py's _MIXED_SIGNAL_SENDER_DOMAINS.
+
+def add_job_posting_sender(conn: sqlite3.Connection, sender: str) -> None:
+    """Idempotent -- re-adding an already-whitelisted sender is a no-op,
+    not an error."""
+    conn.execute(
+        "INSERT OR IGNORE INTO job_posting_senders (sender, added_at) VALUES (?, ?)",
+        (sender, now_iso()),
+    )
+    conn.commit()
+
+
+def remove_job_posting_sender(conn: sqlite3.Connection, sender: str) -> None:
+    conn.execute("DELETE FROM job_posting_senders WHERE sender = ?", (sender,))
+    conn.commit()
+
+
+def list_job_posting_senders(conn: sqlite3.Connection) -> list[str]:
+    """Every whitelisted exact sender string, oldest first -- fetched by
+    api.py before each discover_new_applications() call and passed into
+    mail_app_store.search_unmatched_messages() as `always_posting_senders`."""
+    rows = conn.execute("SELECT sender FROM job_posting_senders ORDER BY added_at").fetchall()
+    return [r["sender"] for r in rows]
+
+
+# --- job_postings: first-class job records (CLAUDE_HANDOFF.md section 8) -----
+
+def add_job_posting(
+    conn: sqlite3.Connection,
+    account_id: str,
+    message_id: str,
+    dedupe_key: str,
+    source: str | None,
+    title: str | None,
+    company: str | None,
+    location: str | None,
+    salary: str | None,
+    employment_type: str | None,
+    posting_url: str | None,
+    received_at: str | None,
+    email_subject: str | None,
+    sender: str | None,
+) -> bool:
+    """Returns False (no-op) if a job with this exact dedupe_key already
+    exists -- see the job_postings.dedupe_key UNIQUE constraint and
+    posting_extract.compute_dedupe_key(). This is what makes re-running
+    extraction over the same digest on a later sync safe (CLAUDE_HANDOFF.md
+    section 9's "same email scanned twice -> no duplicates")."""
+    try:
+        conn.execute(
+            """
+            INSERT INTO job_postings
+                (account_id, message_id, source, title, company, location, salary,
+                 employment_type, posting_url, received_at, email_subject, sender,
+                 status, created_at, dedupe_key)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', ?, ?)
+            """,
+            (account_id, message_id, source, title, company, location, salary,
+             employment_type, posting_url, received_at, email_subject, sender,
+             now_iso(), dedupe_key),
+        )
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False
+
+
+def list_job_postings(conn: sqlite3.Connection, status: str = "new") -> list[dict]:
+    """All job postings at the given status (default 'new', i.e. not
+    dismissed), newest first. Pass status=None for every row regardless
+    of status."""
+    if status is None:
+        rows = conn.execute(
+            "SELECT * FROM job_postings ORDER BY received_at DESC, id DESC"
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM job_postings WHERE status = ? ORDER BY received_at DESC, id DESC",
+            (status,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_job_posting(conn: sqlite3.Connection, job_id: int) -> dict | None:
+    row = conn.execute("SELECT * FROM job_postings WHERE id = ?", (job_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def set_job_posting_status(conn: sqlite3.Connection, job_id: int, status: str) -> None:
+    """status in {'new', 'dismissed'}."""
+    conn.execute("UPDATE job_postings SET status = ? WHERE id = ?", (status, job_id))
+    conn.commit()
+
+
+def count_job_postings(conn: sqlite3.Connection, status: str = "new") -> int:
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM job_postings WHERE status = ?", (status,)
+    ).fetchone()
+    return row["n"] if row else 0

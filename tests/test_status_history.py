@@ -11,7 +11,7 @@ Two layers, same split as test_overrides_store.py / test_dossier.py:
     pattern) wherever a test needs to inspect status_history rows the
     public API doesn't expose directly.
 
-See ITEM7_TIMELINE_FDD_DRAFT.md: this table can only answer "when did
+See docs/specs/ITEM7_TIMELINE_FDD_DRAFT.md: this table can only answer "when did
 this become X" for changes made after it shipped -- a status set before
 that (including anything already in a real tracker today) has no
 recoverable date, and current_status_date/current_status_date_known

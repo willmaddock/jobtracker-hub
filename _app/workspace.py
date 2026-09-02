@@ -536,7 +536,7 @@ def link_workspace(name: str, folder: str | Path) -> dict:
     picker used to succeed silently: it created a spurious empty
     Applications/ folder inside that real tracker's internal storage and
     registered a permanently-empty duplicate workspace pointed at it. No
-    data was ever corrupted by that (see HANDOFF.md §3i for the full
+    data was ever corrupted by that (see docs/archive/handoffs/HANDOFF_SESSION16_LEGACY.md §3i for the full
     trace), but it produced a confusing, avoidable mess -- this guard
     stops it before it can happen."""
     with _lock:
@@ -584,7 +584,7 @@ def _internal_tracker_conflict(root: Path, data: dict) -> str | None:
     target because it's JobTracker's own internal storage, or None if
     `root` is fine.
 
-    Two cases, both real (see §3i of HANDOFF.md — traced from a native
+    Two cases, both real (see §3i of docs/archive/handoffs/HANDOFF_SESSION16_LEGACY.md — traced from a native
     folder-picker click that selected a tracker's own hidden storage
     folder one level too deep):
       1. `root`'s own name is the internal storage dirname (".jobtracker")

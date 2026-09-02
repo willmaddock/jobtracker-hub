@@ -2,7 +2,7 @@
 Tests for Item 7 v1's doc-derived Timeline events: one entry per
 application_confirmation or interview_notice document that has a
 detected date (see dossier.py's TIMELINE_EVENT_DOC_TYPES and
-ITEM7_TIMELINE_FDD_DRAFT.md's "v1 scope"). Exercised end-to-end through
+docs/specs/ITEM7_TIMELINE_FDD_DRAFT.md's "v1 scope"). Exercised end-to-end through
 the real API/index/extraction stack, same pattern as test_dossier.py.
 
 Deliberately NOT covered here: the "Current status" entry (that's
