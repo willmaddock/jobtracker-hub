@@ -159,6 +159,51 @@ def _needs_first_run(port: int) -> bool:
     return result.get("active") is None
 
 
+def _guard_external_navigation(window, port: int) -> None:
+    """Keeps the desktop window pinned to the local app instead of letting
+    it wander off to whatever site an in-app link points at.
+
+    window.events.loaded fires after *every* successful navigation, not
+    just the first one (pywebview re-injects its JS bridge on each page
+    load -- see inject_pywebview in pywebview's util.py -- and that's what
+    fires this event). That makes it a reliable place to notice the window
+    has navigated away from the app's own origin.
+
+    The gap this closes: our own React UI already routes external links
+    through openExternalUrl() -> POST /api/open-url (see the frontend and
+    api.py), which shells out to the OS's real browser. But a PDF opened
+    in the in-app viewer (e.g. Job Bulletin.pdf) is rendered by the native
+    WebKit/WebView2 PDF viewer, not by our React code, so a link clicked
+    *inside* that PDF (like "review the full job description here") is
+    invisible to our JS click handlers entirely. Left alone, WKWebView
+    just navigates the whole app window to that external URL in place --
+    with no back/forward chrome anywhere in this frameless app to escape
+    it, the user is stuck looking at someone else's website forever.
+
+    Fix: when a load lands on a URL outside our own local origin, hand
+    that URL to the same /api/open-url endpoint (so it opens in the
+    user's actual default browser) and immediately snap the window back
+    to the app's own root -- covers every such link, not just the one
+    from this bug report, with no per-page special-casing needed.
+    """
+    base = _api_base(port)
+
+    def _on_loaded() -> None:
+        try:
+            current = window.get_current_url() or ""
+        except Exception:
+            return
+        if not current or current.startswith(base) or current == "about:blank":
+            return
+        try:
+            _http_json(f"{base}/api/open-url", method="POST", payload={"url": current})
+        except Exception:
+            pass
+        window.load_url(base)
+
+    window.events.loaded += _on_loaded
+
+
 class Api:
     """pywebview js_api bridge -- methods here are callable from
     first_run.html as window.pywebview.api.<name>(...)."""
@@ -248,6 +293,7 @@ class Api:
         main_window = webview.create_window(
             APP_NAME, _api_base(self._port), width=1200, height=800, js_api=self,
         )
+        _guard_external_navigation(main_window, self._port)
         self._window_ref[0] = main_window
         threading.Timer(0.5, window.destroy).start()
 
@@ -427,6 +473,15 @@ def main() -> None:
         # before webview.start().
         webview.settings["ALLOW_DOWNLOADS"] = True
 
+        # Defense in depth alongside _guard_external_navigation() below:
+        # this covers target="_blank" links (opened as a *new* webview),
+        # which pywebview can redirect to the OS browser itself before a
+        # window ever appears. It does NOT cover a same-window navigation
+        # (e.g. a plain link clicked inside the in-app PDF viewer), which
+        # is what _guard_external_navigation handles instead. Must also be
+        # set before webview.start().
+        webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = True
+
         first_run = _needs_first_run(port)
         window_ref: list = [None]
         api = Api(port, window_ref)
@@ -444,6 +499,7 @@ def main() -> None:
             )
         else:
             window = webview.create_window(APP_NAME, _api_base(port), width=1200, height=800, js_api=api)
+            _guard_external_navigation(window, port)
 
         # js_api methods are only invoked from JS after the window has
         # loaded, i.e. strictly after create_window() returns here, so
