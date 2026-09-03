@@ -777,16 +777,29 @@ def _extract_and_store_job_postings(
         return 0
 
     # Every job-board URL in the body, for positional best-effort
-    # association only (CLAUDE_HANDOFF.md section 10's Layer 4 note: not
-    # reliable enough yet to guarantee correct one URL per correct job,
-    # so a job past the end of this list simply gets no URL rather than
-    # a wrong one -- "no fake link" per mail_app_store.guess_posting_url()'s
-    # own philosophy).
+    # association only (CLAUDE_HANDOFF.md section 10's Layer 4 note: URL
+    # evidence is a deliberately separate layer from Layer 3's line-based
+    # body-structure parsing above -- splicing URLs back into that parser
+    # would risk corrupting job extraction itself, since a raw URL on its
+    # own line looks just like a new job title to it. Position-in-body
+    # matching isn't architecturally available here for that reason.
+    #
+    # So positional association is trusted ONLY when the URL count
+    # exactly matches the job count -- the common well-formed-digest case
+    # this was designed for. Any mismatch (e.g. an extra "view digest"/
+    # header link ahead of the real per-job links, or a job with no link
+    # at all) means there's no reliable way to tell which URL maps to
+    # which job, so none are guessed rather than risking every job after
+    # the mismatch getting silently attached to the wrong listing -- "no
+    # fake link" per mail_app_store.guess_posting_url()'s own philosophy,
+    # extended here to "no fake pairing" too. See audit finding #3 /
+    # tests/test_audit_findings.py.
     urls = mailapp.extract_posting_urls(body)
+    urls_for_jobs = urls if len(urls) == len(jobs) else []
 
     added = 0
     for i, job in enumerate(jobs):
-        posting_url = urls[i] if i < len(urls) else None
+        posting_url = urls_for_jobs[i] if i < len(urls_for_jobs) else None
         dedupe_key = posting_extract.compute_dedupe_key(
             account_id, message_id, posting_url, job.get("title"), job.get("company"),
         )
@@ -827,8 +840,13 @@ def sync_account(account_id: str):
     against prior syncs happens in ov.add_account_match() by
     message_id, so re-running this is always safe.
 
-    Company-only hits against a multi-item company are routed to the
-    discoveries queue instead of auto-attached (see the
+    Company-only hits are first checked against
+    mailapp.is_job_posting_style_subject() regardless of how many open
+    items that company has -- a job-alert digest is never application
+    correspondence, whether the company has one open item or several.
+    Only once a company-only hit is *not* job-posting-shaped does the
+    open-item count matter: against a multi-item company it's routed to
+    the discoveries queue instead of auto-attached (see the
     `ambiguous_siblings` check below) -- this closes a real
     misattribution bug: a hit that only whole-word-matched an item's
     company term (no role term also matched -- either because the role
@@ -890,12 +908,17 @@ def sync_account(account_id: str):
             ambiguous_siblings = siblings if len(siblings) > 1 else None
 
             for h in hits:
-                if h.get("company_only") and ambiguous_siblings:
+                if h.get("company_only"):
                     # A job-alert-shaped subject (e.g. "KPMG just posted a
-                    # 78% match...") never belongs in the ambiguous-
-                    # application queue, even though its company name just
-                    # matched an open item here -- file it as a posting
-                    # instead, with no candidates to attach to. See
+                    # 78% match...") never belongs in the application
+                    # thread, even though its company name just matched an
+                    # open item here -- file it as a posting instead, with
+                    # no candidate to attach to. Checked unconditionally
+                    # for every company-only hit (not just when the company
+                    # has multiple open items): a single-open-item company
+                    # is just as capable of receiving a job-alert digest as
+                    # a multi-item one, and this same subject text isn't
+                    # application correspondence either way. See
                     # mail_app_store.is_job_posting_style_subject().
                     if mailapp.is_job_posting_style_subject(h["subject"]):
                         ov.add_discovered_match(
@@ -907,13 +930,18 @@ def sync_account(account_id: str):
                             h["subject"], h.get("sender"), h["received_at"],
                         )
                         continue
-                    if ov.add_discovered_match(
-                        ov_conn, account_id, h["message_id"], h["subject"], h.get("sender"),
-                        h["received_at"], company,
-                        match_kind="ambiguous", candidate_item_keys=ambiguous_siblings,
-                    ):
-                        ambiguous_count += 1
-                    continue
+                    if ambiguous_siblings:
+                        if ov.add_discovered_match(
+                            ov_conn, account_id, h["message_id"], h["subject"], h.get("sender"),
+                            h["received_at"], company,
+                            match_kind="ambiguous", candidate_item_keys=ambiguous_siblings,
+                        ):
+                            ambiguous_count += 1
+                        continue
+                    # Company-only hit, not job-posting-shaped, and the
+                    # company has only this one open item -- no sibling to
+                    # be ambiguous against, so it's trusted for this item
+                    # the same way it always was before this hardening.
                 if ov.add_account_match(ov_conn, account_id, a["item_key"], h["message_id"], h["subject"], h["received_at"]):
                     new_count += 1
                     ov.add_thread_identifiers(ov_conn, a["item_key"], h.get("thread_message_ids") or [])

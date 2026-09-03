@@ -115,6 +115,25 @@ hdiutil create -volname "$APP_NAME" -srcfolder "$STAGING_DIR" -ov \
 MOUNT_POINT="/Volumes/${APP_NAME}"
 hdiutil attach "$RW_DMG" -mountpoint "$MOUNT_POINT" -quiet -nobrowse
 
+# --- give the mounted volume your app's icon instead of the generic
+# external-drive icon Finder shows by default. This is the icon on the
+# "JobTracker Hub" item Finder shows for the few seconds after someone
+# double-clicks the .dmg and it mounts -- separate from (and simpler to
+# script than) giving the outer, unmounted .dmg file itself a custom
+# icon, which needs Rez/DeRez rather than SetFile and isn't done here.
+ICON_ICNS="assets/icon.icns"
+if [[ -f "$ICON_ICNS" ]]; then
+  if command -v SetFile >/dev/null 2>&1; then
+    cp "$ICON_ICNS" "$MOUNT_POINT/.VolumeIcon.icns"
+    SetFile -a V "$MOUNT_POINT/.VolumeIcon.icns"
+    SetFile -a C "$MOUNT_POINT"
+  else
+    echo "warning: SetFile not found (run 'xcode-select --install') -- mounted volume will keep the default icon." >&2
+  fi
+else
+  echo "warning: $ICON_ICNS not found -- mounted volume will keep the default icon." >&2
+fi
+
 # --- style the window via Finder/AppleScript -------------------------
 osascript <<APPLESCRIPT
 tell application "Finder"

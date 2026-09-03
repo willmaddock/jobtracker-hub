@@ -1,4 +1,69 @@
-# Item 8B — Tracker Switcher Reorg & Chrome Handoff: IMPLEMENTED + TESTED + SEALED
+# Item 8D — DMG: Mounted Volume Gets the Real App Icon: IMPLEMENTED
+
+## Why this item exists
+
+`assets/icon.icns` was only ever applied to the `.app` bundle itself.
+Both the unmounted `JobTracker Hub.dmg` file and the mounted volume
+Finder shows after double-clicking it (the "JobTracker Hub" item in the
+install window) fell back to macOS's generic disk-image icon, since
+nothing in `scripts/package-dmg.sh` ever told Finder otherwise.
+
+## What this item contains
+
+**`scripts/package-dmg.sh`**
+- After mounting the temporary read-write dmg, copies `assets/icon.icns`
+  in as the volume's `.VolumeIcon.icns`, marks it invisible, and sets the
+  "has custom icon" Finder flag on the mount point via `SetFile` (part of
+  the Xcode Command Line Tools) -- the standard mechanism Finder uses for
+  a folder/volume's custom icon. Guarded behind `command -v SetFile` and
+  an `assets/icon.icns` existence check, each with a warning instead of
+  aborting the build, since this is cosmetic and shouldn't be able to
+  break packaging.
+- The *outer*, unmounted `.dmg` file's own icon is a different mechanism
+  (a single file's custom icon, not a folder/volume's) and needs
+  `Rez`/`DeRez` rather than `SetFile` -- not scripted here. Set it by hand
+  instead: open `assets/icon.icns` in Preview, Select All + Copy, then
+  Get Info on the built `.dmg`, click its icon well, and Paste.
+- Only affects *newly built* dmgs -- rerun `./scripts/build-macos.sh`
+  then `./scripts/package-dmg.sh` to get the new icon; it does not
+  retroactively change a `.dmg` already sitting on someone's Desktop.
+
+
+
+## Why this item exists
+
+In the packaged desktop app, clicking a link rendered *inside* a PDF in
+the in-app viewer (e.g. "review the full job description here" inside a
+`Job Bulletin.pdf`) navigated the app's own native window to that
+external site, in place, with no back/forward chrome anywhere in this
+frameless app to escape it. The app's own React UI already routes
+external links through `openExternalUrl()` -> `POST /api/open-url` (see
+`_app/frontend/index.html` and `_app/api.py`), but a PDF opened in the
+native WebKit/WebView2 PDF viewer is opaque to that JS entirely, so links
+inside it bypassed the guard completely. Confirmed only on macOS
+(WKWebView); the underlying pywebview behavior is not platform-specific.
+
+## What this item contains
+
+**`desktop/launcher.py`**
+- New `_guard_external_navigation(window, port)`: subscribes to
+  `window.events.loaded`, which pywebview fires after *every* successful
+  navigation (not just the first). When a load lands outside the app's
+  own local origin, it hands that URL to the existing `/api/open-url`
+  endpoint (same OS-opener path the rest of the app already uses) and
+  immediately snaps the window back to the app's own root — no
+  per-page special-casing needed, since it catches any external link
+  from anywhere inside the shell, not just the one from this report.
+- Wired into both places a main app window gets created: the normal
+  launch path in `main()`, and the window swap in
+  `Api.confirm_first_run_link()` after first-run setup.
+- Also sets `webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = True`
+  as defense in depth for `target="_blank"` links, which pywebview can
+  redirect to the OS browser itself before a popup window ever opens —
+  a different code path from the same-window navigation the new guard
+  handles.
+
+
 
 ## Why this item exists
 

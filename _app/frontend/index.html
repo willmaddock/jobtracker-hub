@@ -923,7 +923,7 @@ function ThemeToggle({pref, applied, setTheme}){
   const cycle = () => setTheme(order[(order.indexOf(pref) + 1) % order.length]);
   const icon = pref === "system" ? (applied === "dark" ? "\u{1F5A5}\uFE0F\u{1F319}" : "\u{1F5A5}\uFE0F\u2600\uFE0F") : THEME_ICONS[pref];
   return (
-    <button className="btn icon" title={`Theme: ${pref} (click to cycle)`} onClick={cycle}>
+    <button className="btn icon" title={`Theme: ${pref} (click to cycle)`} aria-label={`Theme: ${pref} (click to cycle)`} onClick={cycle}>
       {THEME_ICONS[pref]}
     </button>
   );
@@ -1012,9 +1012,18 @@ function describeFolderInspection(inspection, mode){
 // dialog instead. That's worse than doing nothing, so the scheme link has
 // been removed entirely -- copy-and-paste is now the one and only path,
 // which is slower but never fails confusingly.
-function ChromeHandoffModal({onContinueAnyway, onCancel}){
+function ChromeHandoffModal({onContinueAnyway, onCancel, existingMatch, onSwitchToExisting}){
   const [copied, setCopied] = useState(false);
   const plainUrl = `${window.location.origin}${window.location.pathname}?view=pipeline`;
+
+  // Document-level listener so Escape works regardless of what has focus --
+  // this modal lives in the pre-workspace onboarding flow, outside the
+  // App-level Escape handler that covers the palette/viewer/settings.
+  useEffect(() => {
+    function onKey(e){ if (e.key === "Escape") onCancel(); }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onCancel]);
 
   async function copyUrl(){
     try { await navigator.clipboard.writeText(plainUrl); setCopied(true); setTimeout(() => setCopied(false), 1500); }
@@ -1038,13 +1047,36 @@ function ChromeHandoffModal({onContinueAnyway, onCancel}){
   return (
     <div className="modal-backdrop" onClick={onCancel}>
       <div className="modal" onClick={e => e.stopPropagation()} style={{position:"relative", maxWidth:460}}>
-        <button className="close-x" onClick={onCancel}>{"\u2715"}</button>
+        <button className="close-x" aria-label="Close" onClick={onCancel}>{"\u2715"}</button>
         <h2>Bring in a complete copy instead?</h2>
         <p style={{color:"var(--text-mute)", fontSize:12, marginTop:6}}>
           This browser won't include your existing notes, statuses, or
           dates in a folder copy. Chrome has carried these across
           successfully in testing. Here's how to switch over:
         </p>
+
+        {existingMatch && onSwitchToExisting && (
+          <div className="workspace-preview" style={{marginTop:12}}>
+            <div className="workspace-preview-headline">
+              You already have a tracker named "{existingMatch.name}"
+            </div>
+            <div className="workspace-preview-sub">
+              If you already brought this in over in Chrome, there's
+              nothing left to do here — just switch to it.
+            </div>
+            <div className="workspace-import-actions" style={{marginTop:8}}>
+              <button className="btn primary" onClick={() => onSwitchToExisting(existingMatch.id)}>
+                Switch to "{existingMatch.name}"
+              </button>
+            </div>
+          </div>
+        )}
+
+        {existingMatch && onSwitchToExisting && (
+          <p style={{color:"var(--text-mute)", fontSize:12, marginTop:12, marginBottom:0}}>
+            Otherwise, if this is a different import, here's how to bring it in fresh:
+          </p>
+        )}
 
         <ol style={{margin:"14px 0 0", paddingLeft:20, fontSize:13, lineHeight:1.6, color:"var(--text-strong)"}}>
           <li>
@@ -1078,7 +1110,7 @@ function ChromeHandoffModal({onContinueAnyway, onCancel}){
   );
 }
 
-function TrackerCreationActions({layout, packaged, onError}){
+function TrackerCreationActions({layout, packaged, onError, existingWorkspaces, onSwitchWorkspace}){
   const onboarding = layout === "onboarding";
 
   const [creating, setCreating] = useState(false);
@@ -1111,6 +1143,19 @@ function TrackerCreationActions({layout, packaged, onError}){
   // when the picked folder is missing .jobtracker and we're not already
   // in a browser known to carry it. See ChromeHandoffModal above.
   const [chromeHandoffOpen, setChromeHandoffOpen] = useState(false);
+
+  // If the name typed in for this import already matches a tracker this
+  // app knows about, the Chrome-handoff modal's own suggestion (redo the
+  // import over there) is often the wrong advice -- the person likely
+  // already did that import in Chrome and just needs to switch to it
+  // here instead. existingWorkspaces is only passed from WorkspacePopover
+  // (null during onboarding, where by definition nothing exists yet), so
+  // this is always a no-op there.
+  const existingWorkspaceMatch = useMemo(() => {
+    const n = importName.trim().toLowerCase();
+    if (!n || !existingWorkspaces) return null;
+    return existingWorkspaces.find(w => (w.name || "").trim().toLowerCase() === n) || null;
+  }, [importName, existingWorkspaces]);
 
   async function doCreate(){
     const n = newName.trim();
@@ -1471,6 +1516,8 @@ function TrackerCreationActions({layout, packaged, onError}){
         <ChromeHandoffModal
           onCancel={() => setChromeHandoffOpen(false)}
           onContinueAnyway={() => { setChromeHandoffOpen(false); doImport(); }}
+          existingMatch={existingWorkspaceMatch}
+          onSwitchToExisting={onSwitchWorkspace ? (id) => { setChromeHandoffOpen(false); onSwitchWorkspace(id); } : null}
         />
       )}
     </div>
@@ -1657,20 +1704,23 @@ function WorkspacePopover({onClose, anchorRef, packaged, statusInfo}){
           )}
           {renamingId !== w.id && (
             <div className="workspace-row-actions">
-              <button className="workspace-row-btn" title="Rename"
+              <button className="workspace-row-btn" title="Rename" aria-label="Rename tracker"
                 onClick={() => { setRenamingId(w.id); setRenameVal(w.name); }}>{"\u270E"}</button>
               <button className={"workspace-row-btn" + (busyId === w.id ? " spinning" : "")}
                 disabled={busyId === w.id}
                 title={busyId === w.id ? "Exporting\u2026" : "Export as zip"}
+                aria-label={busyId === w.id ? "Exporting" : "Export as zip"}
                 onClick={() => doExport(w.id, w.name)}>{"\u2913"}</button>
               {w.id !== "default" && (
                 w.kind === "linked" ? (
                   <button className={"workspace-row-btn" + (busyId === w.id ? " spinning" : "")}
                     disabled={busyId === w.id} title="Unlink (just removes it from this list — the folder itself is never touched)"
+                    aria-label="Unlink tracker"
                     onClick={() => doDelete(w.id, w.name, w.kind)}>{"\u26D3\uFE0F"}</button>
                 ) : (
                   <button className={"workspace-row-btn" + (busyId === w.id ? " spinning" : "")}
                     disabled={busyId === w.id} title="Delete (its cache is removed; its tracker folder is sent to the Trash)"
+                    aria-label="Delete tracker"
                     onClick={() => doDelete(w.id, w.name, w.kind)}>{"\u2715"}</button>
                 )
               )}
@@ -1679,7 +1729,8 @@ function WorkspacePopover({onClose, anchorRef, packaged, statusInfo}){
         </div>
       ))}
       <div className="workspace-pop-divider" />
-      <TrackerCreationActions layout="popover" packaged={packaged} onError={setErr} />
+      <TrackerCreationActions layout="popover" packaged={packaged} onError={setErr}
+        existingWorkspaces={data ? data.workspaces : null} onSwitchWorkspace={doSwitch} />
     </div>
   );
 }
@@ -1710,20 +1761,20 @@ function Rail({page, setPage, attentionCount, emailCount, onOpenPalette, onOpenS
       <div className="rail-logo-anchor">
         {expanded ? (
           <button ref={logoRef} className={"rail-logo-row" + (workspacePopoverOpen ? " open" : "")}
-            title="Click to switch trackers" onClick={onToggleWorkspacePopover}>
+            title="Click to switch trackers" aria-label="Switch trackers" onClick={onToggleWorkspacePopover}>
             <span className="rail-logo">J</span>
             <span className="rail-btn-label rail-logo-label">{trackerName || "JobTracker Hub"}</span>
             <span className="rail-logo-label-caret">{"\u2304"}</span>
           </button>
         ) : (
           <button ref={logoRef} className={"rail-logo" + (workspacePopoverOpen ? " open" : "")}
-            title="JobTracker Hub — click to switch trackers" onClick={onToggleWorkspacePopover}>J</button>
+            title="JobTracker Hub — click to switch trackers" aria-label="JobTracker Hub — switch trackers" onClick={onToggleWorkspacePopover}>J</button>
         )}
         {workspacePopoverOpen && <WorkspacePopover onClose={onCloseWorkspacePopover} anchorRef={logoRef} packaged={packaged} statusInfo={statusInfo} />}
       </div>
       <div className="rail-nav">
         {items.map(it => (
-          <button key={it.key} title={expanded ? undefined : it.title} className={"rail-btn" + (page===it.key ? " active":"")}
+          <button key={it.key} title={expanded ? undefined : it.title} aria-label={it.title} className={"rail-btn" + (page===it.key ? " active":"")}
             onClick={() => setPage(it.key)}>
             {NAV_ICONS[it.key]}
             {expanded && <span className="rail-btn-label">{it.title}</span>}
@@ -1732,13 +1783,13 @@ function Rail({page, setPage, attentionCount, emailCount, onOpenPalette, onOpenS
         ))}
       </div>
       <div className="rail-bottom">
-        <button title={expanded ? undefined : "Command palette (⌘K)"} className="rail-btn" onClick={onOpenPalette}>
+        <button title={expanded ? undefined : "Command palette (⌘K)"} aria-label="Command palette" className="rail-btn" onClick={onOpenPalette}>
           {"\u2318"}{expanded && <span className="rail-btn-label">Command palette</span>}
         </button>
-        <button title={expanded ? undefined : "Settings"} className="rail-btn" onClick={onOpenSettings}>
+        <button title={expanded ? undefined : "Settings"} aria-label="Settings" className="rail-btn" onClick={onOpenSettings}>
           {NAV_ICONS.settings}{expanded && <span className="rail-btn-label">Settings</span>}
         </button>
-        <button title={expanded ? "Collapse sidebar" : "Expand sidebar"} className="rail-btn rail-collapse-btn" onClick={toggleExpanded}>
+        <button title={expanded ? "Collapse sidebar" : "Expand sidebar"} aria-label={expanded ? "Collapse sidebar" : "Expand sidebar"} className="rail-btn rail-collapse-btn" onClick={toggleExpanded}>
           {expanded ? "\u00AB" : "\u00BB"}{expanded && <span className="rail-btn-label">Collapse</span>}
         </button>
         {expanded && <div className="rail-version">{"\u00A9 " + new Date().getFullYear() + " JobTracker Hub \u00B7 v" + APP_VERSION}</div>}
@@ -1787,17 +1838,17 @@ function DocGrid({docs, docTypeLabels, onOpen, onView, query, onFixType, onRenam
               </div>
               <div className="doc-actions">
                 {isInlineViewable(d) && (
-                  <button className="doc-open" title="View inline" onClick={() => onView(d)}>{"\u{1F441}"}</button>
+                  <button className="doc-open" title="View inline" aria-label="View inline" onClick={() => onView(d)}>{"\u{1F441}"}</button>
                 )}
-                <button className="doc-open" title="Open in OS" onClick={() => onOpen(d.relpath)}>{"\u2197"}</button>
+                <button className="doc-open" title="Open in OS" aria-label="Open in OS" onClick={() => onOpen(d.relpath)}>{"\u2197"}</button>
                 {onFixType && d.doc_type === "other" && (
-                  <button className="doc-open" title="Correct the document type (doesn't rename the file)" onClick={() => onFixType(d)}>{"\u270E"}</button>
+                  <button className="doc-open" title="Correct the document type (doesn't rename the file)" aria-label="Correct document type" onClick={() => onFixType(d)}>{"\u270E"}</button>
                 )}
                 {onRename && (
-                  <button className="doc-open" title="Rename file" onClick={() => onRename(d)}>{"\u{1F4DD}"}</button>
+                  <button className="doc-open" title="Rename file" aria-label="Rename file" onClick={() => onRename(d)}>{"\u{1F4DD}"}</button>
                 )}
                 {onDelete && (
-                  <button className="doc-open" title="Move to Trash" onClick={() => onDelete(d)}>{"\u{1F5D1}\uFE0F"}</button>
+                  <button className="doc-open" title="Move to Trash" aria-label="Move to Trash" onClick={() => onDelete(d)}>{"\u{1F5D1}\uFE0F"}</button>
                 )}
               </div>
             </div>
@@ -1872,7 +1923,7 @@ function ContactGroup({label, kind, values, fireToast}){
       {values.map(v => (
         <div className="contact-row" key={v}>
           <span className="contact-value" title={v}>{v}</span>
-          <button className="contact-btn" onClick={() => copy(v)} title="Copy">{"\u{1F4CB}"}</button>
+          <button className="contact-btn" onClick={() => copy(v)} title="Copy" aria-label="Copy">{"\u{1F4CB}"}</button>
           <button className="contact-btn" onClick={() => act(v)} title={actionLabel}>{actionLabel}</button>
         </div>
       ))}
@@ -2802,11 +2853,11 @@ function HubLinkCard({link, accent, override, onSaveOverride, location}){
         <span className="hub-tag" style={{background:accent+"22", color:accent, border:`1px solid ${accent}55`}}>{link.tag}</span>
         <div style={{display:"flex", gap:2}}>
           {ov && (
-            <button className="hub-card-edit" title="Reset to default" onClick={() => onSaveOverride(link.name, null)}>
+            <button className="hub-card-edit" title="Reset to default" aria-label="Reset to default" onClick={() => onSaveOverride(link.name, null)}>
               {"\u21BA"}
             </button>
           )}
-          <button className="hub-card-edit" title={editing ? "Cancel" : "Edit this card"}
+          <button className="hub-card-edit" title={editing ? "Cancel" : "Edit this card"} aria-label={editing ? "Cancel" : "Edit this card"}
             onClick={() => editing ? setEditing(false) : startEdit()}>
             {editing ? "\u2715" : "\u270E"}
           </button>
@@ -2864,11 +2915,11 @@ function CustomHubCard({card, accent, onSave, onDelete}){
       <div className="hub-card-top">
         <span className="hub-tag" style={{background:accent+"22", color:accent, border:`1px solid ${accent}55`}}>Custom</span>
         <div style={{display:"flex", gap:2}}>
-          <button className="hub-card-edit" title="Delete this card" onClick={() => onDelete(card.id)}>
+          <button className="hub-card-edit" title="Delete this card" aria-label="Delete this card" onClick={() => onDelete(card.id)}>
             {"\u{1F5D1}"}
           </button>
           {!editing && (
-            <button className="hub-card-edit" title="Edit this card" onClick={() => {
+            <button className="hub-card-edit" title="Edit this card" aria-label="Edit this card" onClick={() => {
               setTitleDraft(card.title || ""); setUrlDraft(card.url || ""); setNoteDraft(card.note || ""); setEditing(true);
             }}>{"\u270E"}</button>
           )}
@@ -3413,6 +3464,8 @@ function ManagePage({onRefreshApps, meta, onCategoriesChanged}){
   const [categories, setCategories] = useState(null);
   const [catErr, setCatErr] = useState(null);
   const [catBusy, setCatBusy] = useState(false);
+  const [mergeBusy, setMergeBusy] = useState(false);
+  const [mergeErr, setMergeErr] = useState(null);
 
   const load = () => apiGet("/api/manage").then(setData).catch(e => setErr(String(e.message||e)));
   const loadCategories = () => apiGet("/api/categories").then(setCategories).catch(e => setCatErr(String(e.message||e)));
@@ -3446,9 +3499,14 @@ function ManagePage({onRefreshApps, meta, onCategoriesChanged}){
                 style={{background:"var(--bg)", border:"1px solid var(--border)", color:"var(--text)", borderRadius:6, padding:"6px 10px"}}>
                 {names.map(n => <option key={n} value={n}>{n}</option>)}
               </select>
-              <button className="btn primary" onClick={async () => {
-                await apiPost("/api/manage/merge", {names, canonical: canonicalChoice[key] || names[0]});
-                await load(); onRefreshApps();
+              <button className="btn primary" disabled={mergeBusy} onClick={async () => {
+                setMergeBusy(true);
+                try {
+                  await apiPost("/api/manage/merge", {names, canonical: canonicalChoice[key] || names[0]});
+                  await load(); onRefreshApps();
+                }
+                catch (e) { setMergeErr(String(e.message||e)); }
+                finally { setMergeBusy(false); }
               }}>Merge</button>
             </div>
           </div>
@@ -3456,12 +3514,18 @@ function ManagePage({onRefreshApps, meta, onCategoriesChanged}){
       ))}
 
       <div className="section-label">Current merges</div>
+      {mergeErr && <div className="warning-banner" style={{marginBottom:10}}>{mergeErr}</div>}
       {Object.keys(data.aliases||{}).length === 0 && <EmptyState icon={"\u{1F517}"} title="No merges yet" />}
       {Object.entries(data.aliases||{}).map(([alias, canonical]) => (
         <div className="list-card" key={alias} style={{alignItems:"center"}}>
           <div className="list-card-body" style={{display:"flex", justifyContent:"space-between", alignItems:"center"}}>
             <span>{alias} &nbsp;→&nbsp; <b>{canonical}</b></span>
-            <button className="btn" onClick={async () => { await apiPost("/api/manage/unmerge", {alias}); await load(); onRefreshApps(); }}>Undo</button>
+            <button className="btn" disabled={mergeBusy} onClick={async () => {
+              setMergeBusy(true);
+              try { await apiPost("/api/manage/unmerge", {alias}); await load(); onRefreshApps(); }
+              catch (e) { setMergeErr(String(e.message||e)); }
+              finally { setMergeBusy(false); }
+            }}>Undo</button>
           </div>
         </div>
       ))}
@@ -3652,10 +3716,18 @@ function FixTypeModal({doc, docTypeLabels, onClose, onSave}){
   const [val, setVal] = useState(doc.doc_type_override || "");
   const [busy, setBusy] = useState(false);
 
+  // Document-level listener (not just an onKeyDown on the select) so Escape
+  // works no matter what has focus -- same pattern as WorkspacePopover.
+  useEffect(() => {
+    function onKey(e){ if (e.key === "Escape") onClose(); }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={e => e.stopPropagation()} style={{position:"relative", maxWidth:420}}>
-        <button className="close-x" onClick={onClose}>{"\u2715"}</button>
+        <button className="close-x" aria-label="Close" onClick={onClose}>{"\u2715"}</button>
         <h2>Correct document type</h2>
         <p style={{color:"var(--text-mute)", fontSize:12, marginTop:6}}>
           <b>{doc.filename}</b> couldn't be classified from its filename alone
@@ -3696,6 +3768,14 @@ function RenameModal({doc, onClose, onSave}){
     }
   }, []);
 
+  // Document-level listener so Escape still closes the modal if focus ever
+  // leaves the input (e.g. clicking elsewhere in the modal body).
+  useEffect(() => {
+    function onKey(e){ if (e.key === "Escape") onClose(); }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   const save = async () => {
     const trimmed = name.trim();
     if (!trimmed || trimmed === doc.filename) { onClose(); return; }
@@ -3709,14 +3789,14 @@ function RenameModal({doc, onClose, onSave}){
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={e => e.stopPropagation()} style={{position:"relative", maxWidth:420}}>
-        <button className="close-x" onClick={onClose}>{"\u2715"}</button>
+        <button className="close-x" aria-label="Close" onClick={onClose}>{"\u2715"}</button>
         <h2>Rename file</h2>
         <p style={{color:"var(--text-mute)", fontSize:12, marginTop:6}}>
           Renames the actual file on disk in place — same folder, new name.
         </p>
         <input ref={inputRef} className="btn" style={{width:"100%"}} type="text" value={name}
           onChange={e => setName(e.target.value)}
-          onKeyDown={e => { if (e.key === "Enter") save(); if (e.key === "Escape") onClose(); }} />
+          onKeyDown={e => { if (e.key === "Enter") save(); }} />
         {error && <div style={{color:"#F87171", fontSize:12, marginTop:8}}>{error}</div>}
         <div style={{display:"flex", justifyContent:"flex-end", gap:8, marginTop:14}}>
           <button className="btn" onClick={onClose} disabled={busy}>Cancel</button>
@@ -3748,6 +3828,15 @@ function NewApplicationModal({onClose, onCreate, meta}){
 
   useEffect(() => { if (inputRef.current) inputRef.current.focus(); }, []);
 
+  // Document-level listener so Escape closes the modal no matter which
+  // control has focus (status dropdown, file dropzone, etc.) -- a per-field
+  // onKeyDown only catches Escape while that one field is focused.
+  useEffect(() => {
+    function onKey(e){ if (e.key === "Escape") onClose(); }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   const addFiles = (fileList) => {
     if (!fileList || !fileList.length) return;
     setSelectedFiles(prev => [...prev, ...Array.from(fileList)]);
@@ -3766,7 +3855,7 @@ function NewApplicationModal({onClose, onCreate, meta}){
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={e => e.stopPropagation()} style={{position:"relative", maxWidth:460}}>
-        <button className="close-x" onClick={onClose}>{"\u2715"}</button>
+        <button className="close-x" aria-label="Close" onClick={onClose}>{"\u2715"}</button>
         <h2>New application</h2>
         <p style={{color:"var(--text-mute)", fontSize:12, marginTop:6}}>
           Creates a real folder — <code>Applications/{company.trim() || "Company"}{role.trim() ? `/${role.trim()}` : ""}</code> —
@@ -3775,13 +3864,12 @@ function NewApplicationModal({onClose, onCreate, meta}){
 
         <div className="section-label" style={{marginTop:14}}>Company</div>
         <input ref={inputRef} className="btn" style={{width:"100%"}} type="text" value={company}
-          placeholder="e.g. Acme Corp" onChange={e => setCompany(e.target.value)}
-          onKeyDown={e => { if (e.key === "Escape") onClose(); }} />
+          placeholder="e.g. Acme Corp" onChange={e => setCompany(e.target.value)} />
 
         <div className="section-label" style={{marginTop:12}}>Role (optional)</div>
         <input className="btn" style={{width:"100%"}} type="text" value={role}
           placeholder="e.g. Software Engineer II" onChange={e => setRole(e.target.value)}
-          onKeyDown={e => { if (e.key === "Enter" && !busy) create(); if (e.key === "Escape") onClose(); }} />
+          onKeyDown={e => { if (e.key === "Enter" && !busy) create(); }} />
 
         <div className="section-label" style={{marginTop:12}}>Status</div>
         <select className="btn" style={{width:"100%"}} value={status} onChange={e => setStatus(e.target.value)}>
@@ -3844,6 +3932,14 @@ function NewCategoryModal({onClose, onCreate}){
 
   useEffect(() => { if (inputRef.current) inputRef.current.focus(); }, []);
 
+  // Document-level listener so Escape closes the modal even after clicking
+  // a quick-pick chip (which moves focus off the text input).
+  useEffect(() => {
+    function onKey(e){ if (e.key === "Escape") onClose(); }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   const create = async () => {
     const trimmed = name.trim();
     if (!trimmed) { setError("Category name is required."); return; }
@@ -3856,7 +3952,7 @@ function NewCategoryModal({onClose, onCreate}){
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={e => e.stopPropagation()} style={{position:"relative", maxWidth:420}}>
-        <button className="close-x" onClick={onClose}>{"\u2715"}</button>
+        <button className="close-x" aria-label="Close" onClick={onClose}>{"\u2715"}</button>
         <h2>New category</h2>
         <p style={{color:"var(--text-mute)", fontSize:12, marginTop:6}}>
           Creates a real top-level folder — <code>{name.trim() || "Category Name"}</code> — then
@@ -3876,7 +3972,7 @@ function NewCategoryModal({onClose, onCreate}){
         <input ref={inputRef} className="btn" style={{width:"100%"}} type="text" value={name}
           placeholder="e.g. Case Management, or type your own"
           onChange={e => setName(e.target.value)}
-          onKeyDown={e => { if (e.key === "Enter" && !busy) create(); if (e.key === "Escape") onClose(); }} />
+          onKeyDown={e => { if (e.key === "Enter" && !busy) create(); }} />
         <p style={{color:"var(--text-mute)", fontSize:11, marginTop:6}}>
           Pick a quick pick above or type any name of your own — either way it's just filling in
           this field, so you can always edit it before creating.
@@ -3983,7 +4079,7 @@ function SettingsModal({onClose, onRebuild, status, themePref, themeApplied, set
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={e => e.stopPropagation()} style={{position:"relative"}}>
-        <button className="close-x" onClick={onClose}>{"\u2715"}</button>
+        <button className="close-x" aria-label="Close" onClick={onClose}>{"\u2715"}</button>
         <h2>Settings</h2>
 
         <div className="section-label" style={{marginTop:16}}>Appearance</div>
@@ -4365,7 +4461,7 @@ function ResolveDiscoveryModal({discovery, apps, onClose, onPick, onCreate, atta
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={e => e.stopPropagation()} style={{position:"relative", maxWidth:520}}>
-        <button className="close-x" onClick={onClose}>{"\u2715"}</button>
+        <button className="close-x" aria-label="Close" onClick={onClose}>{"\u2715"}</button>
         <h2>Attach to an application</h2>
         <p style={{color:"var(--text-mute)", fontSize:12, marginTop:6, lineHeight:1.5}}>
           <strong>{discovery.subject || "(no subject)"}</strong><br/>
@@ -5077,7 +5173,7 @@ function DiscoveryReviewModal({discovery, onClose, onAccepted}){
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={e => e.stopPropagation()} style={{position:"relative", maxWidth:560}}>
-        <button className="close-x" onClick={onClose}>{"\u2715"}</button>
+        <button className="close-x" aria-label="Close" onClick={onClose}>{"\u2715"}</button>
         <h2>Review possible application</h2>
         <p style={{color:"var(--text-mute)", fontSize:12, marginTop:6, lineHeight:1.5}}>
           <strong>{discovery.subject || "(no subject)"}</strong><br/>
@@ -5525,9 +5621,11 @@ function App(){
 
   const ensureDocs = useCallback((itemId) => {
     setDocsByItemId(prev => {
-      if (prev[itemId]) return prev;
+      if (prev[itemId] !== undefined) return prev;
       apiGet(`/api/applications/${itemId}/documents`).then(docs => {
         setDocsByItemId(p => ({...p, [itemId]: docs}));
+      }).catch(() => {
+        setDocsByItemId(p => ({...p, [itemId]: null}));
       });
       return prev;
     });
