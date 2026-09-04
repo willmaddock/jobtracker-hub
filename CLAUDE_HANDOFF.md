@@ -1481,3 +1481,110 @@ The next Claude session must begin by reading `CLAUDE_HANDOFF.md` from the lates
    uncommitted, whenever convenient.
 3. Only after 1-2, with explicit approval: commit/push.
 
+
+---
+
+## Checkpoint — 2026-09-03 (icon audit round two, implemented — shared with `main` branch)
+
+### Repository
+This entry documents work also recorded in full in the `main` branch's
+`HANDOFF.md` §25 — that's the authoritative write-up of the mapping,
+methodology, and verification. This entry covers only what's specific
+to this branch.
+
+### Completed
+- Same `ICON_PATHS` additions (26 new SVG entries) and the same ~60
+  shared emoji→`<Icon/>` call-site conversions as `main`, applied to
+  this branch's `_app/frontend/index.html` (same script, same mapping
+  — the files share the large majority of this code verbatim).
+- **7 additional emailSync-only conversions**, matching
+  `icon-audit-mockup-v2.html`'s dedicated "emailSync branch only"
+  section:
+  - `AccountMatchIcon`'s envelope badge (account-match indicator)
+  - "Open Email Sync" button (settings/diagnostics area)
+  - `JobPostingCard`'s "Open job ↗" link
+  - "Sync all" button (multi-account sync)
+  - "Check inbox now" button
+  - Discoveries board's "Nothing pending review" `EmptyState`
+  - The per-discovery envelope glyph in the doc-card list row
+  All use the `mail` / `mailbox` / `refresh` / `open_ext` keys from
+  the shared `ICON_PATHS` additions — no new icon paths were needed
+  specifically for this branch.
+
+### Changed Files
+- Modified: `_app/frontend/index.html` only. No backend files
+  (`_app/api.py`, `_app/mailapp.py`, `_app/posting_extract.py`, etc.)
+  touched.
+
+### Tests
+- `pytest -q` → **308 passed, 0 failed** — this branch's normal full
+  count (per the checkpoint above this one), unchanged by this
+  frontend-only edit.
+- Real Babel (`@babel/preset-react`) `transformSync` on the full
+  `<script type="text/babel">` block: compiles cleanly, no syntax
+  errors. Brace/paren balance: braces net-zero; parens show the same
+  net +1 imbalance already present before this session's change (a
+  pre-existing, previously-noted characteristic of this file, not
+  something introduced here — confirmed by running the same balance
+  check before and after this session's edits).
+- Grep sweep for leftover emoji escape sequences: only the
+  deliberately-unconverted ones remain (labels-object default
+  section labels, the paperclip document-dropzone icon, the
+  search-box placeholder, and plain typography) — same exceptions as
+  `main`, see its §25.3 for the reasoning on each.
+
+### Manual Validation
+- **Not done.** Same as `main`: this has not been opened in a real
+  browser or the packaged app by anyone since this change. See
+  `main`'s HANDOFF.md §25.5 for the checklist — it applies here too,
+  plus the 7 emailSync-only spots listed above (Account badges, Open
+  Email Sync, Open job link, Sync all, Check inbox now, Discoveries
+  empty state, discovery-row envelope) as additional things worth a
+  look once the app is actually running.
+
+### Remaining
+- Same open item as `main`: the search-box placeholder still carries
+  its old emoji character (an HTML `placeholder` attribute can't hold
+  an SVG/JSX icon) — giving it a proper leading-icon treatment needs a
+  small `ClearableInput` structural change, not a one-line swap.
+- Everything else previously listed as Remaining in this file's prior
+  checkpoints (Indeed/ZipRecruiter/Greenhouse parsers, the Handshake
+  company-field heuristic, git status/diff reconciliation on the real
+  machine, commit approval) is unchanged by this session.
+
+### Next Action
+1. Open the app (Safari and/or the packaged build) and spot-check the
+   icon groups listed in `main`'s HANDOFF.md §25.5, plus this branch's
+   7 emailSync-only spots, in both Dark and Light theme.
+2. `git status`/`git diff` on the real checkout to reconcile before
+   anything is committed.
+3. Only after 1–2, with explicit approval: commit/push (unchanged
+   from every prior checkpoint in this file).
+
+## Follow-up checkpoint (same session, after approval) — search-box placeholder icon fixed
+
+Mirrors `main`'s HANDOFF.md §25.7: `ClearableInput` now takes an optional
+`leadingIcon` prop (renders an absolutely-positioned `<Icon/>` at the left edge
+plus a `.has-leading-icon` class that pads the input so text clears it). The
+top search bar's `ClearableInput` now passes `leadingIcon="leads"` and its
+placeholder no longer starts with the 🔍 emoji character. Applied identically
+to this branch's `_app/frontend/index.html` — confirmed the function, its CSS,
+and the call-site edit are byte-identical between `main` and `emailsync` after
+the change (same as every other shared-code edit this round).
+
+The other three `ClearableInput` sites (command palette, Search Hub's
+role/location fields) were left as-is — no emoji there, not part of what was
+flagged.
+
+### Verification
+- Brace balance on the edited function: 21/21, matched.
+- No real Babel `transformSync` this pass — no network access this session to
+  install `@babel/standalone` — so this is structural-check-plus-review only,
+  not a confirmed parse. Worth a real Babel pass next session.
+- Not touched: no backend files, no other frontend regions.
+
+### Remaining
+- The search-box-placeholder item from the prior checkpoint's Remaining list
+  is done now, not just flagged — remove it from anyone's follow-up list.
+- Manual validation (opening the app) is still outstanding, same as every
+  prior checkpoint — nothing here changes that.
