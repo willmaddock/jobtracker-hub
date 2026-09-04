@@ -38,9 +38,9 @@ from typing import Optional
 
 import html as html_lib
 
-from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from send2trash import send2trash
@@ -53,7 +53,7 @@ import labels
 import workspace as ws
 import email_pdf
 import posting_extract
-from build_index import build, create_application_folder, create_category_folder, ensure_not_empty, iso_mtime, sha256_of
+from build_index import BuildError, build, create_application_folder, create_category_folder, ensure_not_empty, iso_mtime, sha256_of
 from classify import classify_section
 from classify import classify_doc_type, is_source_file, normalize_for_search
 from db import APP_DIR
@@ -150,6 +150,21 @@ def _wrap_text_for_viewer(raw_text: str) -> str:
 </html>"""
 
 app = FastAPI(title="JobTracker Hub API")
+
+
+@app.exception_handler(BuildError)
+def _build_error_handler(request: Request, exc: BuildError):
+    """Turns any build_index.build() failure (root isn't a directory --
+    typically a tracker's folder was deleted/moved on disk after
+    workspaces.json registered it as active) into a clean 400 with a
+    readable message, no matter which of build()'s several call sites
+    (rebuild, link, import, create, etc.) raised it. Without this, it was
+    an unhandled BuildError -> bare 500 with a stack trace, exactly the
+    failure mode /api/rebuild's own docstring already promised not to
+    have (that docstring only accounted for ws.WorkspaceError, not a
+    missing root once a workspace already exists)."""
+    return JSONResponse(status_code=400, content={"detail": str(exc)})
+
 
 # Kept for flexibility (e.g. running the frontend from a separate dev
 # server) even though the normal path — serving everything from this same
@@ -679,7 +694,13 @@ def rebuild():
     empty state is meant to keep this endpoint from ever being hit in
     that situation, but if it somehow is (e.g. a stale page reloaded
     after the last tracker was deleted elsewhere), resolve_active()'s
-    WorkspaceError should surface as a clear 400, not an unhandled 500."""
+    WorkspaceError should surface as a clear 400, not an unhandled 500.
+
+    A *registered* tracker whose root folder has since been deleted or
+    moved on disk (workspaces.json still lists it active, but the path
+    is gone) resolves fine here -- the failure happens inside build()
+    instead, as a BuildError, which the app-level exception handler
+    above turns into the same kind of clean 400 rather than a 500."""
     try:
         root, db_path = current_root(), current_db_path()
     except ws.WorkspaceError:
@@ -748,6 +769,22 @@ def disconnect_account(account_id: str):
     return {"ok": True}
 
 
+@app.post("/api/accounts/reset-email-sync")
+def reset_email_sync():
+    """Deliberate full reset of this tracker's Email Sync state -- every
+    connected account, matched email, discovery, and job posting -- so the
+    user can reconnect from a clean slate after sync problems (blocked
+    accounts, stuck digests, miscounted postings) rather than disconnecting
+    accounts one at a time and hoping the rest of the state is fine.
+    Application data (items, statuses, notes) is completely untouched --
+    see overrides_store.reset_email_sync's docstring for exactly what is
+    and isn't cleared."""
+    _, ov_conn = get_conns()
+    counts = ov.reset_email_sync(ov_conn)
+    ov_conn.close()
+    return {"ok": True, "deleted": counts}
+
+
 def _extract_and_store_job_postings(
     ov_conn, account_id: str, account_name: str, message_id: str,
     subject: str | None, sender: str | None, received_at: str | None,
@@ -794,7 +831,7 @@ def _extract_and_store_job_postings(
     # fake link" per mail_app_store.guess_posting_url()'s own philosophy,
     # extended here to "no fake pairing" too. See audit finding #3 /
     # tests/test_audit_findings.py.
-    urls = mailapp.extract_posting_urls(body)
+    urls = mailapp.get_posting_urls_for_message(account_name, message_id, fallback_body=body)
     urls_for_jobs = urls if len(urls) == len(jobs) else []
 
     added = 0
@@ -1141,8 +1178,15 @@ def preview_discovery(discovery_id: int):
 
     posting_url = discovery.get("posting_url")
     posting_urls = discovery.get("posting_urls") or []
-    if not posting_urls and discovery.get("kind") == "posting" and body:
-        guessed = mailapp.extract_posting_urls(body)
+    if not posting_urls and discovery.get("kind") == "posting":
+        # Body-required check dropped: get_posting_urls_for_message() tries
+        # the raw-MIME-source path first (see its docstring), which doesn't
+        # need `body` at all -- only its fallback path does, and
+        # extract_posting_urls(None) safely returns [] there if body
+        # fetch above also failed.
+        guessed = mailapp.get_posting_urls_for_message(
+            account_name, discovery["message_id"], fallback_body=body
+        )
         if guessed:
             ov.set_discovery_posting_urls(ov_conn, discovery_id, guessed)
             posting_urls = guessed

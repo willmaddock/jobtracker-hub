@@ -126,6 +126,11 @@
   .workspace-pop{position:absolute;top:0;left:52px;z-index:70;width:280px;
     background:var(--panel-glass);-webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px);
     border:1px solid var(--border);border-radius:12px;padding:8px;box-shadow:0 12px 40px #0007;}
+  /* Anchored under a standalone trigger (e.g. Onboarding's "Switch tracker"
+     button) instead of the rail's fixed 52px column -- see WorkspacePopover's
+     `anchor` prop. Drops below and hugs the right edge of its relative
+     wrapper, which callers size/position to match their trigger button. */
+  .workspace-pop.anchor-below{top:calc(100% + 8px);left:auto;right:0;}
   .workspace-pop-title{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--text-soft);
     padding:6px 8px 2px;}
   .workspace-pop-hint{font-size:11.5px;line-height:1.4;color:var(--text-soft);padding:0 8px 8px;}
@@ -455,6 +460,11 @@
   .onboard-card{max-width:460px;background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:32px;text-align:left;box-shadow:var(--card-shadow);}
   .onboard-card h1{font-size:20px;margin:0 0 8px;color:var(--text-strong);}
   .onboard-card p{color:var(--text-soft);font-size:13px;line-height:1.6;}
+  /* Row for the "Switch tracker" escape hatch (see Onboarding) above the
+     card's heading. Stays in normal flow (unlike a corner-pinned close
+     button) so it reserves its own height instead of overlapping the
+     heading -- its popover (anchor="below") positions off this row. */
+  .onboard-switcher{position:relative;display:flex;justify-content:flex-end;margin-bottom:12px;}
   code{background:var(--bg);border:1px solid var(--border);padding:1px 6px;border-radius:4px;font-size:12px;color:var(--accent-soft);}
 
   /* ---------- glassmorphic modal / palette / drawer chrome ---------- */
@@ -1627,7 +1637,7 @@ function TrackerCreationActions({layout, packaged, onError, existingWorkspaces, 
   );
 }
 
-function WorkspacePopover({onClose, anchorRef, packaged, statusInfo}){
+function WorkspacePopover({onClose, anchorRef, packaged, statusInfo, anchor}){
   const [data, setData] = useState(null);   // {active, workspaces:[...]}
   const [err, setErr] = useState(null);
   const [busyId, setBusyId] = useState(null);
@@ -1757,7 +1767,7 @@ function WorkspacePopover({onClose, anchorRef, packaged, statusInfo}){
   }
 
   return (
-    <div ref={popRef} className="workspace-pop" role="menu">
+    <div ref={popRef} className={"workspace-pop" + (anchor === "below" ? " anchor-below" : "")} role="menu">
       <div className="workspace-pop-title">Trackers</div>
       <div className="workspace-pop-hint">
         Each tracker points at one folder on disk. Anything you add or
@@ -4679,6 +4689,30 @@ function EmailHubPage({fireToast, setPage, setSelectedKey, refreshStatus, refres
     catch (e) { setAcctError(String(e.message || e)); }
   };
 
+  const [resettingSync, setResettingSync] = useState(false);
+
+  const resetEmailSync = async () => {
+    const message =
+      `Reset Email Sync?\n\n` +
+      `This disconnects every account (${(accounts || []).length}) and clears everything ` +
+      `Email Sync has learned from mail: matched emails, the discovery queue, and the job ` +
+      `postings board. You'll reconnect accounts and resync from scratch afterward.\n\n` +
+      `Your applications, statuses, and notes are not touched — this only resets email sync.\n\n` +
+      `This can't be undone.`;
+    if (!window.confirm(message)) return;
+    setResettingSync(true);
+    setAcctError(null);
+    try {
+      await apiPost("/api/accounts/reset-email-sync", {});
+      await Promise.all([loadAccounts(), loadDiscoveries(), loadJobPostings()]);
+      if (fireToast) fireToast("Email Sync reset. Reconnect an account to start fresh.");
+    } catch (e) {
+      setAcctError(String(e.message || e));
+    } finally {
+      setResettingSync(false);
+    }
+  };
+
   // ---- discoveries queue (same calls DiscoveriesSection used to make) ----
   const [discoveries, setDiscoveries] = useState(null);
   const [discError, setDiscError] = useState(null);
@@ -4869,6 +4903,31 @@ function EmailHubPage({fireToast, setPage, setSelectedKey, refreshStatus, refres
     finally { setMarkingSender(null); }
   };
 
+  // Manual counterpart to alwaysPosting() above -- a digest-only sender
+  // (every message it ever sends looks like a bulk job-alert, e.g.
+  // "LinkedIn Job Alerts") never produces a discovery card in the first
+  // place (search_unmatched_messages excludes digest-shaped subjects
+  // unless the sender is already whitelisted), so there'd otherwise be no
+  // card to click "always treat as postings" on. This lets the user
+  // whitelist an address directly, then re-scan to pick up its mail.
+  const [manualSender, setManualSender] = useState("");
+  const [addingManualSender, setAddingManualSender] = useState(false);
+  const addManualPostingSender = async () => {
+    const sender = manualSender.trim();
+    if (!sender) return;
+    setAddingManualSender(true); setDiscError(null);
+    try {
+      const form = new FormData();
+      form.append("sender", sender);
+      const result = await uploadFormData(`${API_BASE}/api/discoveries/sender-classification`, form);
+      setDiscoveries(result.discoveries);
+      if (onCountChange) onCountChange(result.discoveries.length);
+      setManualSender("");
+      if (fireToast) fireToast(`Whitelisted "${sender}" -- click "Check inbox now" to pull in its mail.`);
+    } catch (e) { setDiscError(String(e.message || e)); }
+    finally { setAddingManualSender(false); }
+  };
+
   // Direct attach used by the board's quick-pick chips and the resolver
   // modal -- same endpoint as `attach` above, but takes the item_key as
   // an argument instead of reading it out of the list view's
@@ -5020,6 +5079,13 @@ function EmailHubPage({fireToast, setPage, setSelectedKey, refreshStatus, refres
                 {pickerLoading ? "Looking…" : "+ Connect an account"}
               </button>
             )}
+            {accounts.length > 0 && (
+              <button className="btn danger-outline" style={{fontSize:12, padding:"6px 12px", marginLeft:"auto"}}
+                disabled={resettingSync} onClick={resetEmailSync}
+                title="Disconnect every account and clear matched emails, discoveries, and job postings. Applications are untouched.">
+                {resettingSync ? "Resetting…" : "Reset Email Sync"}
+              </button>
+            )}
           </div>
           {picker && (
             <div style={{marginTop:10, display:"flex", flexDirection:"column", gap:6, maxWidth:520}}>
@@ -5070,6 +5136,22 @@ function EmailHubPage({fireToast, setPage, setSelectedKey, refreshStatus, refres
         review and accept a match, individually or in bulk below.
       </p>
       {discError && <div className="warning-banner" style={{marginTop:8}}>{discError}</div>}
+
+      <div style={{display:"flex", gap:8, flexWrap:"wrap", alignItems:"center", marginTop:14}}>
+        <input type="text" placeholder="jobalerts-noreply@linkedin.com" value={manualSender}
+          onChange={e => setManualSender(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter" && !addingManualSender) addManualPostingSender(); }}
+          style={{fontSize:12.5, padding:"6px 10px", borderRadius:8, border:"1px solid var(--border)", background:"var(--panel)", color:"var(--text)", minWidth:260}} />
+        <button className="btn" style={{fontSize:12, padding:"6px 12px"}}
+          disabled={!manualSender.trim() || addingManualSender} onClick={addManualPostingSender}
+          title="For a sender whose mail always looks like a job-alert digest (LinkedIn Job Alerts, Handshake, Built In, etc.) -- these never produce a review card on their own, since digest-shaped subjects are excluded from scanning by default. Whitelist the address here, then Check inbox now.">
+          {addingManualSender ? "Adding…" : "Always treat this sender as postings"}
+        </button>
+      </div>
+      <p style={{color:"var(--text-soft)", fontSize:11.5, lineHeight:1.4, marginTop:4, maxWidth:760}}>
+        For recurring job-alert senders (LinkedIn Job Alerts, Handshake, Built In, Indeed, etc.) that never show up
+        below on their own -- type the sender's email address, then click "Check inbox now" to pull in their mail.
+      </p>
 
       <div style={{display:"flex", gap:8, flexWrap:"wrap", alignItems:"center", marginTop:12, marginBottom:10, position:"sticky", top:0, zIndex:2, background:"var(--bg-page, var(--bg))", paddingBottom:8}}>
         <div style={{display:"flex", background:"var(--panel)", border:"1px solid var(--border)", borderRadius:8, overflow:"hidden"}}>
@@ -5544,9 +5626,19 @@ function NoTrackerOnboarding({packaged}){
   );
 }
 
-function Onboarding({root, onRebuild}){
+function Onboarding({root, onRebuild, statusInfo, packaged}){
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
+  // Escape hatch for when THIS tracker's own root has gone missing or
+  // otherwise can't be indexed (e.g. its folder was deleted on disk but
+  // workspaces.json still lists it as active -- see build_index.build's
+  // BuildError). Without this, there was previously no way back to the
+  // tracker switcher at all: the app shell (and its "J" rail button) only
+  // renders once index_built is true, so a rebuild failure stranded the
+  // user on this screen with zero navigation. Self-contained popover here
+  // mirrors Rail's own anchor+WorkspacePopover wiring (see Rail below).
+  const [switcherOpen, setSwitcherOpen] = useState(false);
+  const switcherAnchorRef = useRef(null);
   const submit = async () => {
     setBusy(true); setError(null);
     try { await onRebuild(); }
@@ -5556,6 +5648,17 @@ function Onboarding({root, onRebuild}){
   return (
     <div className="center-screen">
       <div className="onboard-card">
+        <div className="onboard-switcher">
+          <button ref={switcherAnchorRef} className="btn subtle" style={{fontSize:12}}
+            title="Switch to a different tracker" aria-label="Switch trackers"
+            onClick={() => setSwitcherOpen(o => !o)}>
+            <Icon name="folder_open" size={12} style={{marginRight:4, verticalAlign:"-1px"}}/>Switch tracker
+          </button>
+          {switcherOpen && (
+            <WorkspacePopover onClose={() => setSwitcherOpen(false)} anchorRef={switcherAnchorRef}
+              packaged={packaged} statusInfo={statusInfo} anchor="below" />
+          )}
+        </div>
         <h1><Icon name="folder_plus" size={20} style={{marginRight:6, verticalAlign:"-3px"}}/> Welcome to your JobTracker Hub</h1>
         <p>
           <code>_app/</code> is nested inside your JobTracker folder, so it already knows what to
@@ -5978,7 +6081,7 @@ function App(){
   if (connError) return <ConnectionError />;
   if (!statusInfo) return <div className="center-screen"><div style={{color:"var(--text-soft)"}}>Loading…</div></div>;
   if (!statusInfo.workspace) return <NoTrackerOnboarding packaged={statusInfo.packaged} />;
-  if (!statusInfo.index_built) return <Onboarding root={statusInfo.root} onRebuild={doRebuild} />;
+  if (!statusInfo.index_built) return <Onboarding root={statusInfo.root} onRebuild={doRebuild} statusInfo={statusInfo} packaged={!!(statusInfo && statusInfo.packaged)} />;
 
   const attentionCount = apps.filter(a => !a.archived && !a.is_snoozed && (a.is_stale || a.next_action_due)).length;
 

@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import sqlite3
 
+import pytest
+
 import build_index
 
 
@@ -59,3 +61,25 @@ def test_build_still_works_when_db_directory_already_exists(tmp_path):
     build_index.build(root, db_path)  # rebuild, same path -- must not raise
 
     assert db_path.exists()
+
+
+def test_build_raises_catchable_build_error_when_root_is_missing(tmp_path):
+    # Companion fix to the two tests above: a *registered* tracker whose
+    # root folder was since deleted or moved on disk (workspaces.json
+    # still lists it active) used to raise SystemExit here, which killed
+    # the whole uvicorn worker process instead of surfacing as an
+    # ordinary 500 -- and even a caught SystemExit would've been the
+    # wrong shape for api.py to turn into a clean HTTP error. BuildError
+    # is a plain Exception, catchable like any other, and message-
+    # compatible with the old SystemExit(str) so nothing downstream that
+    # displays str(exc) needs to change.
+    missing_root = tmp_path / "does-not-exist"
+    db_path = tmp_path / "workspaces" / "some-id" / "jobtracker.db"
+    assert not missing_root.exists()
+
+    with pytest.raises(build_index.BuildError, match="Not a directory"):
+        build_index.build(missing_root, db_path)
+
+    # Must fail before creating anything -- a bad root is a hard stop,
+    # not a partial/corrupt rebuild.
+    assert not db_path.parent.exists()

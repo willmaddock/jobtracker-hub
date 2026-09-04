@@ -27,12 +27,22 @@ logic.
 
 from __future__ import annotations
 
+import html as _html
 import re
 import subprocess
 import uuid
+from email import message_from_string
 from email.parser import HeaderParser
 
 import extract
+
+# Matches an href attribute's value inside decoded HTML markup. Applied to
+# text already run through email.message.Message.get_payload(decode=True),
+# which handles Content-Transfer-Encoding (quoted-printable/base64) for us
+# -- so by the time this regex runs, "=3D" has already become "=" and this
+# is looking at ordinary (if messy, real-world) HTML. See
+# extract_html_source_urls().
+_HREF_RE = re.compile(r'href\s*=\s*"([^"]*)"', re.IGNORECASE)
 
 # Hit records are joined with the ASCII Record Separator (0x1E) instead of
 # "\n" -- unlike the other fields, a message's raw headers legitimately
@@ -675,9 +685,32 @@ _JOB_POSTING_URL_DOMAINS = [
 # if its domain matched above (e.g. a Greenhouse "unsubscribe" link is
 # still on greenhouse.io). Checked case-insensitively against the whole
 # URL, not just the domain.
+#
+# AUDIT_FINDINGS.md Finding 4: "utm_" used to be in this list. That's
+# wrong -- LinkedIn (and most ATSs) attach utm_*/trk= tracking params to
+# their REAL per-job listing links in every alert email, so that entry
+# was excluding essentially every genuine posting link a digest could
+# ever contain, not just tracking pixels/unsubscribe links. Confirmed
+# against the real testing DB: 100% of stored job_postings had
+# posting_url = NULL. Tracking parameters don't stop a URL from opening
+# the right job page, so they're not a reason to reject it.
 _NON_POSTING_URL_HINTS = [
     "unsubscribe", "optout", "opt-out", "preferences", "privacy",
-    "terms-of-service", "/track", "utm_",
+    "terms-of-service", "/track",
+]
+
+# Path fragments that mean a URL points at a job-board's generic
+# collection/search/"view all" landing page rather than one specific
+# listing (AUDIT_FINDINGS.md Finding 4). These are filtered out before
+# the URL-to-job positional count comparison in
+# api.py's _extract_and_store_job_postings, so a digest's one "view all
+# N jobs" header link no longer inflates the URL count and silently
+# zeroes out every job's link via the count-mismatch safety net (see
+# tests/test_audit_findings.py's Finding 3 fix, which that safety net
+# still preserves for genuine mismatches).
+_GENERIC_COLLECTION_URL_HINTS = [
+    "/jobs/search", "/jobs/collections", "/jobs?", "/jobs/view-all",
+    "see-all-jobs", "viewalljobs", "/alerts/", "/digest/",
 ]
 
 
@@ -699,6 +732,8 @@ def extract_posting_urls(body: str | None) -> list[str]:
         low = url.lower()
         if any(hint in low for hint in _NON_POSTING_URL_HINTS):
             continue
+        if any(hint in low for hint in _GENERIC_COLLECTION_URL_HINTS):
+            continue
         if any(domain in low for domain in _JOB_POSTING_URL_DOMAINS):
             out.append(url)
     return out
@@ -719,6 +754,193 @@ def guess_posting_url(body: str | None) -> str | None:
     directly."""
     urls = extract_posting_urls(body)
     return urls[0] if urls else None
+
+
+def _normalize_linkedin_comm_url(url: str) -> str:
+    """LinkedIn's email links route through a "/comm/" redirector wrapped
+    in a huge per-recipient tracking query string (midToken, otpToken,
+    lipi, trk, eid, ...) that we don't want persisted to job_postings.
+    posting_url. For a linkedin.com URL, drops the query string entirely
+    and collapses the "/comm/" segment, e.g.
+    "https://www.linkedin.com/comm/jobs/view/123?trk=..." becomes
+    "https://www.linkedin.com/jobs/view/123" -- which also happens to be
+    what makes the link match _JOB_POSTING_URL_DOMAINS's "linkedin.com/jobs"
+    entry at all (see AUDIT_FINDINGS.md's later "/comm/" note). Non-LinkedIn
+    URLs are returned unchanged -- this app has no evidence other ATSs need
+    the same cleanup, and some (e.g. a query-param-only listing id) would
+    break if their query string were stripped."""
+    if "linkedin.com" not in url.lower():
+        return url
+    return url.split("?", 1)[0].replace("/comm/", "/", 1)
+
+
+def extract_html_source_urls(raw_source: str | None) -> list[str]:
+    """Every plausible job-posting URL recoverable from a message's raw
+    MIME source (see get_message_source()) -- the fix for the deeper bug
+    behind AUDIT_FINDINGS.md Finding 4: even after that finding's utm_
+    filter fix, extract_posting_urls() operates on Mail.app's own
+    plain-text rendering of a message (`content of msg`), and for an
+    HTML email that rendering keeps visible link text ("View job") but
+    throws away the underlying <a href="..."> URL entirely -- there was
+    nothing for the utm_ filter (or any body-text filter) to act on in
+    the first place for a real HTML digest. This function instead parses
+    the actual MIME structure, decodes each text/html part's
+    Content-Transfer-Encoding (quoted-printable/base64, via Python's
+    email library rather than hand-rolled decoding), pulls every
+    href="..." value out of the decoded markup, HTML-unescapes it
+    (&amp; -> &), and runs it through the same domain/exclusion filters
+    as extract_posting_urls() (plus LinkedIn's "/comm/" + tracking-query
+    cleanup -- see _normalize_linkedin_comm_url()).
+
+    Returns [] (never raises) for a None/empty source, a source that
+    isn't parseable as a MIME message, or one with no text/html part --
+    "no links recoverable this way" is a normal, expected outcome (a
+    plain-text-only email, for instance), not an error; callers should
+    fall back to extract_posting_urls() on the plain-text body in that
+    case -- see get_posting_urls_for_message()."""
+    if not raw_source:
+        return []
+    try:
+        msg = message_from_string(raw_source)
+    except Exception:
+        return []
+
+    html_parts = list(msg.walk()) if msg.is_multipart() else [msg]
+
+    hrefs: list[str] = []
+    seen_hrefs = set()
+    for part in html_parts:
+        try:
+            if part.get_content_type() != "text/html":
+                continue
+            payload = part.get_payload(decode=True)
+        except Exception:
+            continue
+        if not payload:
+            continue
+        charset = part.get_content_charset() or "utf-8"
+        try:
+            text = payload.decode(charset, errors="replace")
+        except (LookupError, UnicodeDecodeError):
+            text = payload.decode("utf-8", errors="replace")
+        for m in _HREF_RE.finditer(text):
+            href = _html.unescape(m.group(1))
+            if href and href not in seen_hrefs:
+                seen_hrefs.add(href)
+                hrefs.append(href)
+
+    out = []
+    for href in hrefs:
+        normalized = _normalize_linkedin_comm_url(href)
+        low = normalized.lower()
+        if any(hint in low for hint in _NON_POSTING_URL_HINTS):
+            continue
+        if any(hint in low for hint in _GENERIC_COLLECTION_URL_HINTS):
+            continue
+        if any(domain in low for domain in _JOB_POSTING_URL_DOMAINS):
+            out.append(normalized)
+    return out
+
+
+def get_message_source(
+    account_name: str, message_id: str, mailbox: str = "INBOX"
+) -> str | None:
+    """Fetches the raw MIME source of one message -- AppleScript's
+    `source of msg`, deliberately NOT `content of msg` (see
+    get_message_preview()'s docstring: for an HTML email, `content of
+    msg` is Mail.app's own plain-text rendering, which keeps visible
+    link text but discards every <a href="..."> URL, since the URL only
+    ever existed in markup that rendering strips). This is the only way
+    to recover a job-alert digest's real per-job listing links -- see
+    extract_html_source_urls(), which is what callers should decode this
+    with rather than reading it directly.
+
+    Same "search broadly, don't assume Inbox is still where it landed"
+    mailbox fallback as get_message_preview() (tries `mailbox` first,
+    then scans every other mailbox on the account before giving up), and
+    the same lazy/on-demand-only call discipline: called once per
+    job-alert-classified message during sync (_extract_and_store_job_
+    postings) and once per posting-kind discovery preview -- never
+    eagerly for every message in a mailbox scan.
+
+    Returns the full raw MIME text (headers + body, still
+    Content-Transfer-Encoding-encoded -- see extract_html_source_urls()
+    for decoding), or None if the message can no longer be found
+    anywhere in the account (e.g. deleted since the scan that discovered
+    it)."""
+    resolve_box = _resolve_mailbox_script(mailbox)
+    escaped_id = _escape_applescript_string(message_id)
+    escaped_account = _escape_applescript_string(account_name)
+
+    script = f"""
+    tell application "Mail"
+        set acct to account "{escaped_account}"
+        set msg to missing value
+        try
+            {resolve_box}
+            set matchedMsgs to (messages of targetBox whose message id is "{escaped_id}")
+            if (count of matchedMsgs) > 0 then set msg to item 1 of matchedMsgs
+        end try
+        if msg is missing value then
+            repeat with mb in (every mailbox of acct)
+                try
+                    set otherMsgs to (messages of mb whose message id is "{escaped_id}")
+                    if (count of otherMsgs) > 0 then
+                        set msg to item 1 of otherMsgs
+                        exit repeat
+                    end if
+                end try
+            end repeat
+        end if
+        if msg is missing value then return "JOBTRACKER_NOT_FOUND"
+        set msgSource to ""
+        try
+            set msgSource to source of msg
+        end try
+        return msgSource
+    end tell
+    """
+    raw = _run_applescript(script, timeout=30)
+    if not raw or raw == "JOBTRACKER_NOT_FOUND":
+        return None
+    return raw
+
+
+def get_posting_urls_for_message(
+    account_name: str,
+    message_id: str,
+    mailbox: str = "INBOX",
+    fallback_body: str | None = None,
+) -> list[str]:
+    """The function callers should use to get real per-job listing links
+    out of a message -- tries the raw-MIME-source path first
+    (get_message_source() + extract_html_source_urls(), which recovers
+    links an HTML email's markup carries that Mail.app's plain-text
+    `content of msg` rendering throws away entirely), and only falls
+    back to extract_posting_urls(fallback_body) (the plain-text URL
+    regex) when the source fetch fails outright (MailAppError -- a
+    permission/timeout hiccup shouldn't block the fallback) or the HTML
+    source genuinely contains no matching links (a plain-text-only
+    email, or an ATS that emails a bare URL instead of an <a> tag).
+
+    `fallback_body` should be the plain-text body the caller already has
+    on hand from get_message_preview() -- passed in rather than
+    refetched here, since re-fetching it would double the Apple Events
+    per message for no benefit.
+
+    Returns [] if neither path finds anything, or the message is gone
+    from the account entirely."""
+    try:
+        raw_source = get_message_source(account_name, message_id, mailbox)
+    except MailAppError:
+        raw_source = None
+
+    if raw_source:
+        urls = extract_html_source_urls(raw_source)
+        if urls:
+            return urls
+
+    return extract_posting_urls(fallback_body)
 
 
 def guess_company_from_email(subject: str | None, sender: str | None) -> str | None:
@@ -793,17 +1015,22 @@ def search_unmatched_messages(
 
     `always_posting_senders` (see overrides_store.list_job_posting_senders,
     discoveries-sender-classification-and-digests-spec.md Part 5.5a) adds
-    a fourth `whose`-branch -- exact `sender is "..."` per entry, OR'd in
+    a fourth `whose`-branch -- `sender contains "..."` per entry, OR'd in
     -- so a message from a whitelisted sender is captured in this same
     single Apple Event, and bypasses BOTH the ATS-subject-phrase gate and
     the digest-subject exclusion entirely. That's the whole point of the
     whitelist: a sender the user has confirmed always sends postings
     (e.g. LinkedIn Job Alerts, whose digest renames the subject to
     whatever listing ranks first) would otherwise never contain an ATS
-    phrase and would otherwise always look like a digest. Each returned
-    hit reports whether it matched via this whitelist as \"force_posting\",
-    so the caller can classify it kind=\"posting\" unconditionally instead
-    of consulting is_job_posting_style_subject().
+    phrase and would otherwise always look like a digest -- meaning a
+    digest sender could never reach this queue at all on a first sync, so
+    there'd be no card to whitelist it from in the first place. The Email
+    Sync page's manual "add sender" field (see api.add_job_posting_
+    sender_classification) closes that gap: typing the sender's address
+    directly whitelists it before any of its mail has ever matched.  Each
+    returned hit reports whether it matched via this whitelist as
+    \"force_posting\", so the caller can classify it kind=\"posting\"
+    unconditionally instead of consulting is_job_posting_style_subject().
 
     Returns [{\"message_id\", \"subject\", \"sender\", \"received_at\",
     \"guessed_company\", \"force_posting\"}, ...], newest-unfiltered order
@@ -830,13 +1057,22 @@ def search_unmatched_messages(
 
     positive_condition = " or ".join(subject_conds + ats_only_sender_conds + mixed_sender_conds)
 
-    # Fourth branch: user-whitelisted exact senders (see docstring above).
-    # Exact-match, not `contains`, so this only ever captures the specific
-    # address the user clicked "always treat as postings" on -- never a
-    # different address that happens to share its domain.
+    # Fourth branch: user-whitelisted senders (see docstring above).
+    # `contains`, not exact `is` -- entries reach this list two ways: (a)
+    # clicking "always treat as postings" on an existing discovery card,
+    # which stores that message's exact raw `sender` field (e.g. "LinkedIn
+    # Job Alerts <jobalerts-noreply@linkedin.com>"), where `contains` still
+    # matches it as a full-string substring of itself; and (b) a user
+    # manually typing just the address (e.g. "jobalerts-noreply@
+    # linkedin.com") via the Email Sync "add sender" field, which has no
+    # way to know Mail.app's exact display-name formatting and would never
+    # match under exact `is`. Still address-scoped, not domain-scoped, so
+    # a human recruiter at the same domain (e.g. a real person
+    # @linkedin.com) is never accidentally swept in -- see
+    # overrides_store.add_job_posting_sender's docstring.
     clean_posting_senders = {s.strip() for s in (always_posting_senders or []) if s and s.strip()}
     escaped_posting_senders = [_escape_applescript_string(s) for s in clean_posting_senders]
-    whitelist_sender_conds = [f'sender is "{s}"' for s in escaped_posting_senders]
+    whitelist_sender_conds = [f'sender contains "{s}"' for s in escaped_posting_senders]
     whitelist_condition = "(" + " or ".join(whitelist_sender_conds) + ")" if whitelist_sender_conds else None
 
     # Even a message that matched the above can still be a bulk digest
@@ -924,7 +1160,12 @@ def search_unmatched_messages(
             "sender": sender or None,
             "received_at": received_at.strip() or None,
             "guessed_company": guess_company_from_email(subject, sender),
-            "force_posting": sender in clean_posting_senders,
+            # Mirrors the AppleScript `contains` check above, not an exact
+            # membership test -- a manually-typed whitelist entry (a bare
+            # address) is a substring of the real `sender` field here
+            # (e.g. "jobalerts-noreply@linkedin.com" in "LinkedIn Job
+            # Alerts <jobalerts-noreply@linkedin.com>"), never equal to it.
+            "force_posting": any(s in sender for s in clean_posting_senders),
         })
         if len(results) >= limit:
             break
@@ -947,18 +1188,46 @@ def get_message_preview(
 
     Returns the body text (truncated to `max_chars`, Mail.app's own
     plain-text extraction of the message -- not raw HTML), or None if no
-    message with this id is found in the mailbox anymore (e.g. it was
-    moved or deleted since the scan that discovered it)."""
+    message with this id is found in the account at all anymore (e.g. it
+    was deleted since the scan that discovered it).
+
+    AUDIT_FINDINGS.md Finding 5: this used to search `mailbox` (default
+    "INBOX") only, and return None the moment it wasn't there --
+    permanently, since discoveries can sit unreviewed for months and
+    Mail.app (or an IMAP provider's own auto-archiving, e.g. Gmail
+    marking a thread read/all-mail-only) very plausibly files a message
+    out of Inbox well before the user gets to it. Confirmed against real
+    usage: some senders' previews load fine, others ("Couldn't load the
+    original email") never do, which tracks with per-message mailbox
+    drift rather than any error in the fetch itself. Now falls back to
+    scanning every other mailbox of the account before giving up, same
+    "search broadly, don't assume Inbox is still where it landed"
+    principle already used by search_messages()/search_unmatched_messages()."""
     resolve_box = _resolve_mailbox_script(mailbox)
     escaped_id = _escape_applescript_string(message_id)
+    escaped_account = _escape_applescript_string(account_name)
 
     script = f"""
     tell application "Mail"
-        set acct to account "{_escape_applescript_string(account_name)}"
-        {resolve_box}
-        set matchedMsgs to (messages of targetBox whose message id is "{escaped_id}")
-        if (count of matchedMsgs) = 0 then return "JOBTRACKER_NOT_FOUND"
-        set msg to item 1 of matchedMsgs
+        set acct to account "{escaped_account}"
+        set msg to missing value
+        try
+            {resolve_box}
+            set matchedMsgs to (messages of targetBox whose message id is "{escaped_id}")
+            if (count of matchedMsgs) > 0 then set msg to item 1 of matchedMsgs
+        end try
+        if msg is missing value then
+            repeat with mb in (every mailbox of acct)
+                try
+                    set otherMsgs to (messages of mb whose message id is "{escaped_id}")
+                    if (count of otherMsgs) > 0 then
+                        set msg to item 1 of otherMsgs
+                        exit repeat
+                    end if
+                end try
+            end repeat
+        end if
+        if msg is missing value then return "JOBTRACKER_NOT_FOUND"
         set msgContent to ""
         try
             set msgContent to content of msg

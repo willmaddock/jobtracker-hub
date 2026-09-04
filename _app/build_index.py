@@ -51,6 +51,19 @@ from classify import (
 APP_DIR = Path(__file__).resolve().parent
 DEFAULT_ROOT = APP_DIR.parent
 
+
+class BuildError(Exception):
+    """Raised by build() when the requested root can't be indexed (e.g. it
+    isn't a directory -- most commonly a tracker's root folder was deleted
+    or moved on disk after workspaces.json registered it as active). A
+    plain Exception, not SystemExit, so callers running as a library --
+    api.py's /api/rebuild and every other build() call site -- get a
+    catchable error instead of a process-killing exit; api.py's global
+    exception handler turns this into a clean HTTP 400 instead of an
+    unhandled 500. main() below still converts it back to SystemExit so
+    the standalone CLI keeps its original one-line-message, no-traceback
+    behavior."""
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -295,7 +308,7 @@ def group_applications(
 
 def build(root: Path, db_path: Path) -> None:
     if not root.is_dir():
-        raise SystemExit(f"Not a directory: {root}")
+        raise BuildError(f"Not a directory: {root}")
 
     # A linked/owned workspace's db directory (_app/workspaces/<id>/) is
     # created once, at link/create time (see workspace.py's ws_dir.mkdir
@@ -446,7 +459,14 @@ def main() -> None:
     parser.add_argument("--db", type=Path, default=APP_DIR / "jobtracker.db")
     args = parser.parse_args()
     root = (args.root or DEFAULT_ROOT).expanduser().resolve()
-    build(root, args.db)
+    try:
+        build(root, args.db)
+    except BuildError as e:
+        # Preserve the CLI's original clean one-liner + exit code, even
+        # though build() now raises a catchable BuildError instead of
+        # SystemExit for library callers (api.py) -- see BuildError's
+        # docstring above.
+        raise SystemExit(str(e))
 
 
 if __name__ == "__main__":

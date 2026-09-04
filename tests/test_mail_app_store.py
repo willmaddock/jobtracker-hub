@@ -319,25 +319,53 @@ def test_search_unmatched_messages_excludes_digest_style_subjects():
 # --- Part 5.5a: job-posting sender whitelist --------------------------------
 
 def test_search_unmatched_messages_adds_a_whitelist_whose_branch_for_posting_senders():
-    """A whitelisted sender's exact-match condition should be OR'd into
-    the same single `whose` clause -- one Apple Event, not a second
-    pass -- and the AppleScript should also gate the digest exclusion so
-    that sender bypasses it entirely."""
+    """A whitelisted sender's condition should be OR'd into the same
+    single `whose` clause -- one Apple Event, not a second pass -- and
+    the AppleScript should also gate the digest exclusion so that sender
+    bypasses it entirely. `contains`, not exact `is` -- see
+    search_unmatched_messages()'s docstring for why (a manually-typed
+    address, added before any card exists, can't know Mail.app's exact
+    display-name formatting)."""
     sender = "LinkedIn Job Alerts <jobalerts-noreply@linkedin.com>"
     with patch("subprocess.run", return_value=_completed(stdout="")) as run:
         mailapp.search_unmatched_messages("hotmail", known_terms=[], always_posting_senders=[sender])
     script = run.call_args[0][0][2]
-    assert f'sender is "{sender}"' in script
+    assert f'sender contains "{sender}"' in script
     assert "messages of targetBox whose" in script
     # Only one whose-clause construction -- no separate second scan.
     assert script.count("messages of targetBox whose") == 1
 
 
-def test_search_unmatched_messages_with_no_whitelist_omits_the_sender_is_branch():
+def test_search_unmatched_messages_with_no_whitelist_omits_the_sender_contains_branch():
+    """Mixed-signal sender-domain conditions (LinkedIn, Indeed,
+    ZipRecruiter) also use `sender contains`, so this can't just assert
+    that substring's absence. The whitelist branch's compound structure
+    -- `((positive_condition) or whitelist) and (whitelist or digest_
+    exclusion)` -- is the one place a double open-paren follows `whose`;
+    with no whitelist it's just `(positive_condition) and digest_
+    exclusion`, a single paren. Assert that marker's absence instead."""
     with patch("subprocess.run", return_value=_completed(stdout="")) as run:
         mailapp.search_unmatched_messages("hotmail", known_terms=[])
     script = run.call_args[0][0][2]
-    assert "sender is " not in script
+    assert "whose ((" not in script
+
+
+def test_search_unmatched_messages_matches_a_manually_typed_address_via_contains():
+    """The Email Sync page's manual "add sender" field only ever supplies
+    a bare address (e.g. "jobalerts-noreply@linkedin.com"), never
+    Mail.app's full "Display Name <address>" sender format -- since a
+    digest-only sender has no existing card to copy that exact string
+    from. `contains` matching means the whitelist entry still hits real
+    messages whose `sender` field is the fuller "Name <address>" form."""
+    address_only = "jobalerts-noreply@linkedin.com"
+    full_sender = f"LinkedIn Job Alerts <{address_only}>"
+    raw = f"<haystack-2>|||Software Engineer at Haystack|||{full_sender}|||Sep 3, 2026"
+    with patch("subprocess.run", return_value=_completed(stdout=raw)):
+        candidates = mailapp.search_unmatched_messages(
+            "hotmail", known_terms=[], always_posting_senders=[address_only],
+        )
+    assert len(candidates) == 1
+    assert candidates[0]["force_posting"] is True
 
 
 def test_search_unmatched_messages_reports_force_posting_for_a_whitelisted_sender_hit():

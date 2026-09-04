@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -232,9 +233,14 @@ CREATE INDEX IF NOT EXISTS idx_discovered_matches_status ON discovered_matches(s
 -- heuristics don't recognize (e.g. LinkedIn renaming the subject to
 -- whatever listing ranks first, so it never contains an ATS phrase). See
 -- discoveries-sender-classification-and-digests-spec.md Part 5.5a. Keyed
--- on the exact sender string (mirrors dismiss_pending_discoveries_by_
--- sender's keying), not domain, so a human recruiter at the same domain
--- (e.g. a real person @linkedin.com) is never accidentally swept in.
+-- on a sender string (mirrors dismiss_pending_discoveries_by_sender's
+-- keying), matched with `contains` at read time (see mail_app_store.
+-- search_unmatched_messages) rather than domain, so a human recruiter at
+-- the same domain (e.g. a real person @linkedin.com) is never
+-- accidentally swept in. A row here can be either a full raw `sender`
+-- string captured from an existing discovery card, or just an address a
+-- user typed manually via the Email Sync page -- both work identically
+-- against the `contains` check.
 CREATE TABLE IF NOT EXISTS job_posting_senders (
     sender TEXT PRIMARY KEY,
     added_at TEXT
@@ -346,11 +352,51 @@ def get_conn(db_path: Path) -> sqlite3.Connection:
     # under load than the default rollback journal.
     conn = sqlite3.connect(db_path, timeout=30)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=30000")
+    _ensure_wal_mode(conn)
     conn.executescript(SCHEMA)
     _migrate(conn)
     return conn
+
+
+def _ensure_wal_mode(conn: sqlite3.Connection, attempts: int = 5) -> None:
+    """Switches the database to WAL mode if it isn't already -- see
+    get_conn()'s docstring for why WAL matters here.
+
+    AUDIT_FINDINGS.md Finding 6: get_conns() (api.py) opens a brand-new
+    sqlite3 connection per request rather than reusing one, and this app's
+    SPA frontend fires several requests in a burst on page load and on
+    every workspace create/switch/rebuild (see the timestamps in a real
+    server log: /api/discoveries, /api/job-postings, /api/applications,
+    /api/accounts, /api/status all within the same few ms). The one-time
+    switch from the default rollback journal to WAL needs SQLite to
+    briefly get exclusive access to the file -- if two of those
+    almost-simultaneous connections both hit a database that hasn't been
+    switched to WAL yet, one of them can get "database is locked" on this
+    PRAGMA specifically (confirmed against a real traceback pointing at
+    this exact line), even though normal row-level writes elsewhere in
+    this module use the same busy_timeout and don't have this problem.
+
+    Fixed two ways: (1) skip the PRAGMA entirely once the file already
+    reports "wal" -- true for every request after the very first, so the
+    race window only exists once per fresh database; (2) for the one-time
+    switch itself, retry on "database is locked" with a short backoff
+    instead of letting it kill the request -- the fix (the other
+    connection finishing its own switch) is normally milliseconds away."""
+    try:
+        current = conn.execute("PRAGMA journal_mode").fetchone()[0]
+    except sqlite3.OperationalError:
+        current = None
+    if current == "wal":
+        return
+    for attempt in range(attempts):
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            return
+        except sqlite3.OperationalError as e:
+            if "locked" not in str(e).lower() or attempt == attempts - 1:
+                raise
+            time.sleep(0.1 * (attempt + 1))
 
 
 def now_iso() -> str:
@@ -720,6 +766,41 @@ def delete_account(conn: sqlite3.Connection, account_id: str) -> None:
     conn.execute("DELETE FROM account_matches WHERE account_id = ?", (account_id,))
     conn.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
     conn.commit()
+
+
+def reset_email_sync(conn: sqlite3.Connection) -> dict:
+    """Wipes every connected account and everything Email Sync has learned
+    from mail, on purpose -- the deliberate counterpart to losing this data
+    by accident (e.g. switching trackers). For when the sync state itself
+    is what's suspect (blocked accounts, a stuck/miscounted digest, stale
+    discoveries) and the fix is a clean slate: disconnect-all, then
+    reconnect and resync from scratch.
+
+    Clears: accounts, account_matches (email-to-application links),
+    discovered_matches (the triage queue), job_postings (the job board).
+
+    Deliberately NOT cleared, because neither is sync state tied to a
+    connected account -- both are safe to keep across a reset and useful
+    to have already in place the moment accounts are reconnected:
+      - job_posting_senders: the "always treat as job-posting mail" list
+        the user explicitly taught this app, keyed on sender string, not
+        account_id.
+      - thread_identifiers: keyed on (item_key, message_id) -- these are
+        Mail.app's own message ids, not this app's account_id scheme, so
+        they stay meaningful for reply-matching once mail is reconnected.
+
+    Never touches application data itself: item_overrides, status_history,
+    company_aliases, documents, etc. are all untouched -- this resets
+    email sync, not the tracker.
+
+    Returns counts of what was deleted, for the confirming UI/toast.
+    """
+    counts = {}
+    for table in ("accounts", "account_matches", "discovered_matches", "job_postings"):
+        counts[table] = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        conn.execute(f"DELETE FROM {table}")
+    conn.commit()
+    return counts
 
 
 def add_account_match(
