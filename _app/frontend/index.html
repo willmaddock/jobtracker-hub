@@ -604,6 +604,7 @@ const ICON_PATHS = {
   // misc actions
   close:     `<path ${ICON_STROKE} d="M6 6l12 12M18 6 6 18"/>`,
   edit:      `<path ${ICON_STROKE} d="M4 20h4L18.5 9.5a2.1 2.1 0 0 0-3-3L5 17v3Z"/>`,
+  tag:       `<path ${ICON_STROKE} d="M20.5 13.1 12.9 20.7a1.6 1.6 0 0 1-2.3 0l-7-7a1.6 1.6 0 0 1 0-2.3L11.2 3.8a1.6 1.6 0 0 1 1.1-.5l6.4-.4a1 1 0 0 1 1.06 1.06l-.4 6.4a1.6 1.6 0 0 1-.46 1.14Z"/><circle cx="15.5" cy="8.5" r="1.1" fill="currentColor" stroke="none"/>`,
   celebrate: `<path ${ICON_STROKE} d="M4 20 14 10"/><path ${ICON_STROKE} d="M13 4.5 14.5 3M18 8l1.8-1M8.5 3.5l1 1.8M19.5 12.5l1.7.9"/>`,
   // theme toggle (system/light/dark weren't in the mockup -- matched to its
   // stroke width/cap style/24px grid so they read as part of the same set)
@@ -1922,7 +1923,7 @@ function DocGrid({docs, docTypeLabels, onOpen, onView, query, onFixType, onRenam
                 )}
                 <button className="doc-open" title="Open in OS" aria-label="Open in OS" onClick={() => onOpen(d.relpath)}>{<Icon name="open_ext"/>}</button>
                 {onFixType && d.doc_type === "other" && (
-                  <button className="doc-open" title="Correct the document type (doesn't rename the file)" aria-label="Correct document type" onClick={() => onFixType(d)}>{<Icon name="edit"/>}</button>
+                  <button className="doc-open" title="Correct the document type (doesn't rename the file)" aria-label="Correct document type" onClick={() => onFixType(d)}>{<Icon name="tag"/>}</button>
                 )}
                 {onRename && (
                   <button className="doc-open" title="Rename file" aria-label="Rename file" onClick={() => onRename(d)}>{<Icon name="edit"/>}</button>
