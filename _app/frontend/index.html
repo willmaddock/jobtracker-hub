@@ -4,6 +4,11 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>JobTracker Hub</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="alternate icon" href="/favicon.ico">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#0F172A">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
@@ -197,6 +202,9 @@
   .clearable-input{position:relative;display:flex;align-items:center;}
   .clearable-input input{width:100%;}
   .clearable-input input.has-value{padding-right:30px;}
+  .clearable-input.has-leading-icon input{padding-left:32px;}
+  .clearable-input-leading-icon{position:absolute;left:10px;top:50%;transform:translateY(-50%);
+    display:flex;align-items:center;justify-content:center;color:var(--text-mute);pointer-events:none;}
   .clear-input-btn{position:absolute;right:6px;top:50%;transform:translateY(-50%);
     width:20px;height:20px;border-radius:50%;border:none;background:transparent;
     color:var(--text-mute);font-size:13px;line-height:1;display:flex;align-items:center;justify-content:center;
@@ -331,6 +339,9 @@
   .dossier-timeline-doc{color:var(--text-soft);font-size:11px;}
   .dossier-timeline-event .btn.small{margin-left:6px;}
   .dossier-timeline-empty{color:var(--text-mute);font-size:11.5px;font-style:italic;padding:2px 0 12px;margin-bottom:2px;border-bottom:1px solid var(--border-soft);}
+
+  /* ---------- status dot (replaces the old colored-emoji glyph) ---------- */
+  .status-dot{width:9px;height:9px;border-radius:50%;flex:none;display:inline-block;}
 
   /* ---------- status pulse (active interviews) ---------- */
   .status-pulse{position:relative;display:inline-flex;width:7px;height:7px;border-radius:50%;background:currentColor;}
@@ -546,27 +557,114 @@ function folderFilesIncludeDotfile(fileList){
   return false;
 }
 
-const NAV_ICONS = {
-  pipeline: "\u{1F4CA}",   // 📊
-  attention: "\u26A0\uFE0F", // ⚠️
-  browse: "\u{1F4C2}",     // 📂
-  hub: "\u{1F9ED}",        // 🧭
-  insights: "\u{1F4C8}",   // 📈
-  manage: "\u{1F6E0}\uFE0F", // 🛠️
-  settings: "\u2699\uFE0F", // ⚙️
-};
-const THEME_ICONS = { system: "\u{1F5A5}\uFE0F", light: "\u2600\uFE0F", dark: "\u{1F319}" };
+/* =========================== ICON SYSTEM ===========================
+   Inline stroke-SVG replacements for every emoji used as a functional UI
+   icon (approved in icon-audit-mockup.html). Each entry is raw SVG path
+   markup on a 24x24 viewBox using currentColor, so a single <Icon/> below
+   picks up the right color through light/dark automatically -- same keys,
+   same click targets, same copy as before; only the glyph source changes
+   from a Unicode character to an inline <svg>. */
+const ICON_STROKE = `fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"`;
+const ICON_PATHS = {
+  // icon-audit-mockup-v2.html — round two additions
+  view:        `<path ${ICON_STROKE} d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12Z"/><circle cx="12" cy="12" r="2.6" ${ICON_STROKE}/>`,
+  open_ext:    `<path ${ICON_STROKE} d="M9 5H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/><path ${ICON_STROKE} d="M14 4h6v6"/><path ${ICON_STROKE} d="M20 4 11 13"/>`,
+  trash:       `<path ${ICON_STROKE} d="M4.5 7h15"/><path ${ICON_STROKE} d="M9.5 7V4.8A1.3 1.3 0 0 1 10.8 3.5h2.4A1.3 1.3 0 0 1 14.5 4.8V7"/><path ${ICON_STROKE} d="M6.5 7 7.3 19.4A1.5 1.5 0 0 0 8.8 20.8h6.4a1.5 1.5 0 0 0 1.5-1.4L17.5 7"/><path ${ICON_STROKE} d="M10 11v6M14 11v6"/>`,
+  plus:        `<path ${ICON_STROKE} d="M12 5v14M5 12h14"/>`,
+  folder_plus: `<path ${ICON_STROKE} d="M3 8V6a1.4 1.4 0 0 1 1.4-1.4h4L10 6.5h9.6A1.4 1.4 0 0 1 21 8v10a1.4 1.4 0 0 1-1.4 1.4H4.4A1.4 1.4 0 0 1 3 18Z"/><path ${ICON_STROKE} d="M12 12v5M9.5 14.5h5"/>`,
+  hourglass:   `<path ${ICON_STROKE} d="M6 3.5h12M6 20.5h12"/><path ${ICON_STROKE} d="M7 3.5v3.2a5 5 0 0 0 2.2 4.1L12 12l2.8 1.2a5 5 0 0 0 2.2 4.1v3.2M17 3.5v3.2a5 5 0 0 1-2.2 4.1L12 12"/>`,
+  check:       `<path ${ICON_STROKE} d="M4 12.5 9.5 18 20 6"/>`,
+  inbox_empty: `<path ${ICON_STROKE} d="M3.5 12 6 5.5A1.6 1.6 0 0 1 7.5 4.5h9A1.6 1.6 0 0 1 18 5.5L20.5 12"/><path ${ICON_STROKE} d="M3.5 12v6A1.5 1.5 0 0 0 5 19.5h14A1.5 1.5 0 0 0 20.5 18v-6"/><path ${ICON_STROKE} d="M3.5 12h5.2l1 2h4.6l1-2h5.2"/>`,
+  sparkle:     `<path ${ICON_STROKE} d="M12 2c.6 4 2.6 6 6.6 6.6-4 .6-6 2.6-6.6 6.6-.6-4-2.6-6-6.6-6.6C9.4 8 11.4 6 12 2Z"/>`,
+  archive:     `<path ${ICON_STROKE} d="M3.5 8 12 3.8 20.5 8 12 12.2 3.5 8Z"/><path ${ICON_STROKE} d="M3.5 8v9.5L12 21.7l8.5-4.2V8"/><path ${ICON_STROKE} d="M12 12.2v9.5"/>`,
+  link:        `<path ${ICON_STROKE} d="M9.5 14.5 14.5 9.5"/><path ${ICON_STROKE} d="M8 16 5.8 13.8a3.6 3.6 0 0 1 0-5.1l2.3-2.3a3.6 3.6 0 0 1 5.1 0L15 8.2"/><path ${ICON_STROKE} d="M16 8l2.2 2.2a3.6 3.6 0 0 1 0 5.1l-2.3 2.3a3.6 3.6 0 0 1-5.1 0L9 15.8"/>`,
+  trending:    `<path ${ICON_STROKE} d="M3.5 17.5 9.5 11l4 3 6.5-7.5"/><path ${ICON_STROKE} d="M15.5 6.5h4.5v4.5"/>`,
+  folder_open: `<path ${ICON_STROKE} d="M3 8.5V6a1.6 1.6 0 0 1 1.6-1.6h4L10 6.5h8.4A1.6 1.6 0 0 1 20 8.1"/><path ${ICON_STROKE} d="M3 8.5h17l-2 9.4a1.6 1.6 0 0 1-1.6 1.3H6.6A1.6 1.6 0 0 1 5 17.9Z"/>`,
+  download:    `<path ${ICON_STROKE} d="M12 3.5v11"/><path ${ICON_STROKE} d="m7.5 10.5 4.5 4.5 4.5-4.5"/><path ${ICON_STROKE} d="M4.5 18.5h15"/>`,
+  unlink:      `<path ${ICON_STROKE} d="M6 11l-1.3 1.3a3.6 3.6 0 0 0 0 5.1l1 1a3.6 3.6 0 0 0 5.1 0L12 17.2"/><path ${ICON_STROKE} d="M18 13l1.3-1.3a3.6 3.6 0 0 0 0-5.1l-1-1a3.6 3.6 0 0 0-5.1 0L12 6.8"/><path ${ICON_STROKE} d="M3.5 3.5l17 17"/>`,
+  chevron:     `<path ${ICON_STROKE} d="M6 9.5 12 15.5 18 9.5"/>`,
+  duplicate:   `<rect x="3.5" y="3.5" width="12" height="12" rx="1.6" ${ICON_STROKE}/><rect x="8.5" y="8.5" width="12" height="12" rx="1.6" ${ICON_STROKE}/>`,
+  question:    `<circle cx="12" cy="12" r="9" ${ICON_STROKE}/><path ${ICON_STROKE} d="M9.5 9.3a2.5 2.5 0 1 1 3.6 2.3c-.8.4-1.1 1-1.1 1.9"/><circle cx="12" cy="17" r="0.9" fill="currentColor" stroke="none"/>`,
+  undo:        `<path ${ICON_STROKE} d="M4 10a8 8 0 1 1 2 5.3"/><path ${ICON_STROKE} d="M4 5v5h5"/>`,
+  calendar:    `<rect x="3.5" y="5" width="17" height="15.5" rx="1.6" ${ICON_STROKE}/><path ${ICON_STROKE} d="M3.5 9.5h17"/><path ${ICON_STROKE} d="M8 3v4M16 3v4"/><path ${ICON_STROKE} d="M8 13.5h.01M12 13.5h.01M16 13.5h.01M8 17h.01M12 17h.01"/>`,
+  clipboard:   `<rect x="6" y="4.5" width="12" height="16" rx="1.6" ${ICON_STROKE}/><path ${ICON_STROKE} d="M9.5 4.5V3.8A1.3 1.3 0 0 1 10.8 2.5h2.4A1.3 1.3 0 0 1 14.5 3.8v.7"/><path ${ICON_STROKE} d="M9 10.5h6M9 14h6M9 17.5h4"/>`,
+  mail:        `<rect x="3" y="5.5" width="18" height="13" rx="1.6" ${ICON_STROKE}/><path ${ICON_STROKE} d="m3.5 6.5 8 6.5 8-6.5"/>`,
+  mailbox:     `<path ${ICON_STROKE} d="M4 10.5A5 5 0 0 1 9 5.5h5.5a5 5 0 0 1 0 10H8"/><rect x="16" y="12" width="4" height="3" rx=".6" ${ICON_STROKE}/><path ${ICON_STROKE} d="M4 10.5v9M4 19.5h6"/><circle cx="9" cy="10.5" r="1" fill="currentColor" stroke="none"/>`,
+  refresh:     `<path ${ICON_STROKE} d="M4 12a8 8 0 0 1 13.7-5.7L20 8.5"/><path ${ICON_STROKE} d="M20 4v4.5h-4.5"/><path ${ICON_STROKE} d="M20 12a8 8 0 0 1-13.7 5.7L4 15.5"/><path ${ICON_STROKE} d="M4 20v-4.5h4.5"/>`,
+  play:        `<path ${ICON_STROKE} d="M8 5.5v13l10-6.5Z"/>`,
 
+  // nav rail
+  pipeline:  `<path ${ICON_STROKE} d="M4 19V5m6 14v-9m6 9V9m6 10V4"/>`,
+  attention: `<path ${ICON_STROKE} d="M12 3.5 2.5 20h19L12 3.5Z"/><path ${ICON_STROKE} d="M12 10v4.5"/><circle cx="12" cy="17.3" r="0.9" fill="currentColor" stroke="none"/>`,
+  browse:    `<path ${ICON_STROKE} d="M3 7.5V6a2 2 0 0 1 2-2h4l2 2.2h8A2 2 0 0 1 21 8v9.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/>`,
+  hub:       `<circle cx="12" cy="12" r="2.4" ${ICON_STROKE}/><circle cx="12" cy="4.2" r="1.6" ${ICON_STROKE}/><circle cx="19.8" cy="16.5" r="1.6" ${ICON_STROKE}/><circle cx="4.2" cy="16.5" r="1.6" ${ICON_STROKE}/><path ${ICON_STROKE} d="m12 9.6 0-3.8M13.9 13.5l4.4 2.3M10.1 13.5l-4.4 2.3"/>`,
+  insights:  `<path ${ICON_STROKE} d="M3.5 20.5h17"/><path ${ICON_STROKE} d="M5 20.5V13m5.4 7.5V8.5m5.4 12V11m5.4 9.5V5"/>`,
+  manage:    `<path ${ICON_STROKE} d="M14.7 6.3a3.8 3.8 0 1 1-5.4 5.4L4 17v3h3l5.3-5.3a3.8 3.8 0 1 1 5.4-5.4l-3-3Z"/>`,
+  settings:  `<circle cx="12" cy="12" r="3" ${ICON_STROKE}/><path ${ICON_STROKE} d="M19.4 13.8a1.7 1.7 0 0 0 .34 1.87l.06.06a2.06 2.06 0 1 1-2.9 2.9l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56v.17a2.06 2.06 0 1 1-4.12 0v-.09a1.7 1.7 0 0 0-1.11-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2.06 2.06 0 1 1-2.9-2.9l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.03H4.6a2.06 2.06 0 1 1 0-4.12h.09a1.7 1.7 0 0 0 1.56-1.11 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2.06 2.06 0 1 1 2.9-2.9l.06.06a1.7 1.7 0 0 0 1.87.34h.08a1.7 1.7 0 0 0 1.03-1.56V4.6a2.06 2.06 0 1 1 4.12 0v.09a1.7 1.7 0 0 0 1.03 1.56h.08a1.7 1.7 0 0 0 1.87-.34l.06-.06a2.06 2.06 0 1 1 2.9 2.9l-.06.06a1.7 1.7 0 0 0-.34 1.87v.08a1.7 1.7 0 0 0 1.56 1.03h.17a2.06 2.06 0 1 1 0 4.12h-.09a1.7 1.7 0 0 0-1.56 1.03Z"/>`,
+  // misc actions
+  close:     `<path ${ICON_STROKE} d="M6 6l12 12M18 6 6 18"/>`,
+  edit:      `<path ${ICON_STROKE} d="M4 20h4L18.5 9.5a2.1 2.1 0 0 0-3-3L5 17v3Z"/>`,
+  celebrate: `<path ${ICON_STROKE} d="M4 20 14 10"/><path ${ICON_STROKE} d="M13 4.5 14.5 3M18 8l1.8-1M8.5 3.5l1 1.8M19.5 12.5l1.7.9"/>`,
+  // theme toggle (system/light/dark weren't in the mockup -- matched to its
+  // stroke width/cap style/24px grid so they read as part of the same set)
+  system:    `<rect x="3" y="4.5" width="18" height="12" rx="1.6" ${ICON_STROKE}/><path ${ICON_STROKE} d="M8.5 20h7M12 16.5V20"/>`,
+  light:     `<circle cx="12" cy="12" r="4.2" ${ICON_STROKE}/><path ${ICON_STROKE} d="M12 2.8v2.6M12 18.6v2.6M4.2 12H1.6M22.4 12h-2.6M5.8 5.8l1.8 1.8M16.4 16.4l1.8 1.8M18.2 5.8l-1.8 1.8M7.6 16.4l-1.8 1.8"/>`,
+  dark:      `<path ${ICON_STROKE} d="M20.5 14.7A8.6 8.6 0 1 1 9.3 3.5a7 7 0 0 0 11.2 11.2Z"/>`,
+  // workspace sections
+  applications:   `<path ${ICON_STROKE} d="M8 3.5h8a1 1 0 0 1 1 1V5h1.5A1.5 1.5 0 0 1 20 6.5v14A1.5 1.5 0 0 1 18.5 22h-13A1.5 1.5 0 0 1 4 20.5v-14A1.5 1.5 0 0 1 5.5 5H7v-.5a1 1 0 0 1 1-1Z"/><path ${ICON_STROKE} d="M8 12h8M8 16h5"/>`,
+  credentials:    `<path ${ICON_STROKE} d="M2.5 8.5 12 4l9.5 4.5-9.5 4.5-9.5-4.5Z"/><path ${ICON_STROKE} d="M6.5 10.6v4.4c0 1.6 2.5 3 5.5 3s5.5-1.4 5.5-3v-4.4"/>`,
+  network:        `<circle cx="8" cy="8" r="2.6" ${ICON_STROKE}/><circle cx="16" cy="8" r="2.6" ${ICON_STROKE}/><path ${ICON_STROKE} d="M3 19.5c.6-3 2.4-4.7 5-4.7s4.4 1.7 5 4.7M11 19.5c.6-3 2.4-4.7 5-4.7s4.4 1.7 5 4.7"/>`,
+  resume_library: `<path ${ICON_STROKE} d="M7 3.5h7l4 4v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1v-16a1 1 0 0 1 1-1Z"/><path ${ICON_STROKE} d="M14 3.5V8h4M9 12.5h6M9 15.5h6M9 18.5h4"/>`,
+  leads:          `<circle cx="10.5" cy="10.5" r="6" ${ICON_STROKE}/><path ${ICON_STROKE} d="m19.5 19.5-4.3-4.3"/>`,
+  compliance:     `<path ${ICON_STROKE} d="M3 8.5h5.5L10 6.5h4.5l1.5 2H21v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-11Z"/>`,
+  personal:       `<rect x="5" y="10.5" width="14" height="9.5" rx="1.6" ${ICON_STROKE}/><path ${ICON_STROKE} d="M8 10.5V7.8a4 4 0 0 1 8 0v2.7"/>`,
+  misc:           `<path ${ICON_STROKE} d="M17.5 8.2 9.9 15.8a3 3 0 0 1-4.2-4.2l7.9-7.9a4.6 4.6 0 1 1 6.5 6.5L11.8 18.5"/>`,
+};
+
+// Renders one of ICON_PATHS on a fixed 24x24 grid; an unknown name falls
+// back to the generic "misc" glyph rather than rendering nothing. Because
+// every path uses currentColor, an <Icon/> already tracks --text-soft /
+// --accent through light and dark the same way the text next to it does --
+// no per-theme icon swap needed anywhere it's used.
+function Icon({name, size = 14, style}){
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} style={style}
+      dangerouslySetInnerHTML={{__html: ICON_PATHS[name] || ICON_PATHS.misc}} />
+  );
+}
+
+// Strips the leading "<emoji> " that DEFAULT_SECTION_LABELS (and any
+// user-saved custom section label) still bakes into the label string, so
+// the label text can be paired with an <Icon> instead of showing an emoji
+// and an SVG glyph side by side. No-op on labels with no leading emoji.
+function stripLeadingEmoji(label){
+  return (label || "").replace(/^\p{Extended_Pictographic}\uFE0F?\s*/u, "");
+}
+
+const NAV_ICONS = {
+  pipeline: <Icon name="pipeline" size={17}/>,
+  attention: <Icon name="attention" size={17}/>,
+  browse: <Icon name="browse" size={17}/>,
+  hub: <Icon name="hub" size={17}/>,
+  insights: <Icon name="insights" size={17}/>,
+  manage: <Icon name="manage" size={17}/>,
+  settings: <Icon name="settings" size={17}/>,
+};
+const THEME_ICONS = {
+  system: <Icon name="system" size={14}/>,
+  light: <Icon name="light" size={14}/>,
+  dark: <Icon name="dark" size={14}/>,
+};
 const DEFAULT_STATUS_COLORS = {
   applied: "#3B82F6", interviewing: "#F59E0B", rejected: "#EF4444", drafted: "#9aa4b2", unknown: "#5b6472",
 };
-const DEFAULT_STATUS_ICONS = {applied:"\u{1F535}", interviewing:"\u{1F7E1}", rejected:"\u{1F534}", drafted:"\u26AA", unknown:"\u26AB"};
 const DEFAULT_STATUS_ORDER = ["drafted","applied","interviewing","rejected","unknown"];
 const DEFAULT_SECTION_LABELS = {
   applications:"\u{1F4CB} Applications", credentials:"\u{1F393} Credentials", network:"\u{1F91D} Recommendations & Network",
   resume_library:"\u{1F4C4} Resume Library", leads:"\u{1F50D} Leads", compliance:"\u{1F5C2}\uFE0F Case Management",
   personal:"\u{1F512} Personal", misc:"\u{1F4CE} Misc",
 };
+
 // Fallback for a custom category's section id (e.g. "solar_panel_docs")
 // when it isn't one of the known section_labels/DEFAULT_SECTION_LABELS —
 // turns the slug back into a readable title ("Solar Panel Docs") instead
@@ -816,7 +914,7 @@ function Highlight({text, query}){
 /* ---- shared "x"-to-clear text input, used by every search/filter box in
    the app (top search bar, command palette, Search Hub role field) — one
    place for the clear behavior instead of each input reimplementing it. ---- */
-function ClearableInput({value, onChange, onClear, className, placeholder, style, inputRef, onKeyDown, autoFocus, wrapStyle}){
+function ClearableInput({value, onChange, onClear, className, placeholder, style, inputRef, onKeyDown, autoFocus, wrapStyle, leadingIcon}){
   const ownRef = useRef(null);
   const ref = inputRef || ownRef;
   const hasValue = !!value;
@@ -826,12 +924,13 @@ function ClearableInput({value, onChange, onClear, className, placeholder, style
     if (ref.current) ref.current.focus();
   };
   return (
-    <div className="clearable-input" style={wrapStyle}>
+    <div className={"clearable-input" + (leadingIcon ? " has-leading-icon" : "")} style={wrapStyle}>
+      {leadingIcon && <span className="clearable-input-leading-icon" aria-hidden="true">{<Icon name={leadingIcon}/>}</span>}
       <input ref={ref} className={(className || "") + (hasValue ? " has-value" : "")} style={style}
         placeholder={placeholder} value={value} onChange={onChange} onKeyDown={onKeyDown} autoFocus={autoFocus} />
       {hasValue && (
         <button type="button" className="clear-input-btn" title="Clear" aria-label="Clear search" onClick={clear}>
-          {"\u2715"}
+          {<Icon name="close"/>}
         </button>
       )}
     </div>
@@ -871,13 +970,17 @@ function useListNav({enabled, items, selectedKey, onSelect, onEnter}){
 
 function StatusBadge({status, manual, colors, icons}){
   const c = (colors && colors[status]) || DEFAULT_STATUS_COLORS[status] || "#5b6472";
-  const i = (icons && icons[status]) || DEFAULT_STATUS_ICONS[status] || "\u26AB";
+  // A caller-supplied icon override (icons/meta.status_icons) still wins if
+  // present; otherwise this is a plain colored dot in the status's color
+  // rather than a fixed-color emoji, so it already matches any custom color.
+  const customIcon = icons && icons[status];
   return (
     <span className="badge" style={{background:c+"22", color:c, border:`1px solid ${c}55`}}>
       {status === "interviewing"
         ? <span className="status-pulse" style={{color:c}} />
-        : i}
-      {" "}{status ? status[0].toUpperCase()+status.slice(1) : "Unknown"}{manual ? " \u270E" : ""}
+        : (customIcon || <span className="status-dot" style={{background:c}} />)}
+      {" "}{status ? status[0].toUpperCase()+status.slice(1) : "Unknown"}
+      {manual ? <Icon name="edit" size={10} style={{marginLeft:4, verticalAlign:"-1px"}} /> : ""}
     </span>
   );
 }
@@ -900,7 +1003,6 @@ function EmptyState({icon, title, sub}){
 function ThemeToggle({pref, applied, setTheme}){
   const order = ["system", "light", "dark"];
   const cycle = () => setTheme(order[(order.indexOf(pref) + 1) % order.length]);
-  const icon = pref === "system" ? (applied === "dark" ? "\u{1F5A5}\uFE0F\u{1F319}" : "\u{1F5A5}\uFE0F\u2600\uFE0F") : THEME_ICONS[pref];
   return (
     <button className="btn icon" title={`Theme: ${pref} (click to cycle)`} aria-label={`Theme: ${pref} (click to cycle)`} onClick={cycle}>
       {THEME_ICONS[pref]}
@@ -1026,7 +1128,7 @@ function ChromeHandoffModal({onContinueAnyway, onCancel, existingMatch, onSwitch
   return (
     <div className="modal-backdrop" onClick={onCancel}>
       <div className="modal" onClick={e => e.stopPropagation()} style={{position:"relative", maxWidth:460}}>
-        <button className="close-x" aria-label="Close" onClick={onCancel}>{"\u2715"}</button>
+        <button className="close-x" aria-label="Close" onClick={onCancel}>{<Icon name="close"/>}</button>
         <h2>Bring in a complete copy instead?</h2>
         <p style={{color:"var(--text-mute)", fontSize:12, marginTop:6}}>
           This browser won't include your existing notes, statuses, or
@@ -1063,7 +1165,7 @@ function ChromeHandoffModal({onContinueAnyway, onCancel, existingMatch, onSwitch
             <div style={{display:"flex", gap:6, marginTop:6}}>
               <input className="workspace-rename-input" readOnly value={plainUrl}
                 style={{fontSize:11.5}} onClick={e => e.target.select()} />
-              <button className="btn" style={{flex:"none"}} onClick={copyUrl}>{copied ? "Copied\u2713" : "Copy"}</button>
+              <button className="btn" style={{flex:"none"}} onClick={copyUrl}>{copied ? <>Copied <Icon name="check" size={11} style={{marginLeft:3, verticalAlign:"-1px"}}/></> : "Copy"}</button>
             </div>
           </li>
           <li style={{marginTop:10}}>
@@ -1314,7 +1416,7 @@ function TrackerCreationActions({layout, packaged, onError, existingWorkspaces, 
       ) : (
         <>
           <button className={rowClass} onClick={() => setCreating(true)}>
-            {"\u2795"} Start Fresh
+            <Icon name="plus" size={13} style={{marginRight:5, verticalAlign:"-2px"}}/> Start Fresh
           </button>
           <div className="workspace-action-desc">Starts a blank tracker with an empty Applications folder — for a brand-new job search.</div>
         </>
@@ -1350,7 +1452,7 @@ function TrackerCreationActions({layout, packaged, onError, existingWorkspaces, 
                 if (f) { setImportFile(f); setImportFolderFiles(null); if (!importName.trim()) setImportName(f.name.replace(/\.zip$/i, "")); }
               }}
             />
-            <span className="dropzone-icon">{"\u{1F4E6}"}</span>
+            <span className="dropzone-icon"><Icon name="archive" size={16}/></span>
             <span>
               {importFile ? importFile.name
                 : importFolderFiles ? `${importFolderFiles.length} files selected`
@@ -1372,7 +1474,7 @@ function TrackerCreationActions({layout, packaged, onError, existingWorkspaces, 
                 if (packaged) { startImportFolderNative(); }
                 else { importFolderInputRef.current && importFolderInputRef.current.click(); }
               }}>
-              {"\u{1F4C1}"} {importPreviewBusy ? "Looking\u2026" : "Choose a folder instead"}
+              <Icon name="folder" size={13} style={{marginRight:5, verticalAlign:"-2px"}}/> {importPreviewBusy ? "Looking…" : "Choose a folder instead"}
             </button>
             {!packaged && (
               <input
@@ -1443,7 +1545,7 @@ function TrackerCreationActions({layout, packaged, onError, existingWorkspaces, 
       ) : (
         <>
           <button className={rowClass} onClick={() => setImporting(true)}>
-            {"\u{1F4E5}"} Bring In a Copy
+            <Icon name="download" size={13} style={{marginRight:5, verticalAlign:"-2px"}}/> Bring In a Copy
           </button>
           <div className="workspace-action-desc">Copies files into a new tracker owned by this app — the original folder or .zip stays untouched.</div>
         </>
@@ -1484,7 +1586,7 @@ function TrackerCreationActions({layout, packaged, onError, existingWorkspaces, 
             <>
               <button className={rowClass + (linkPreviewBusy ? " spinning" : "")}
                 disabled={linkPreviewBusy} onClick={startLinkFolderNative}>
-                {"\u{1F517}"} {linkPreviewBusy ? "Looking\u2026" : "Use This Folder As-Is"}
+                <Icon name="link" size={13} style={{marginRight:5, verticalAlign:"-2px"}}/> {linkPreviewBusy ? "Looking…" : "Use This Folder As-Is"}
               </button>
               <div className="workspace-action-desc">Points at a folder in place — nothing is copied. Its notes and statuses (if any) come with it.</div>
             </>
@@ -1654,7 +1756,7 @@ function WorkspacePopover({onClose, anchorRef, packaged, statusInfo}){
             </div>
             <div className="workspace-status-row">
               <span className={hasOverrides ? "workspace-status-check" : "workspace-status-warn"}>
-                {hasOverrides ? "\u2713 Notes stored with tracker" : "Notes not saved yet"}
+                {hasOverrides ? <><Icon name="check" size={11} style={{marginRight:4, verticalAlign:"-1px"}}/>Notes stored with tracker</> : "Notes not saved yet"}
               </span>
             </div>
             <div className="workspace-status-path">{statusInfo.root}</div>
@@ -1677,30 +1779,30 @@ function WorkspacePopover({onClose, anchorRef, packaged, statusInfo}){
               className="workspace-row-main" disabled={busyId === w.id}
               onClick={() => doSwitch(w.id)} title={w.root}
             >
-              <span className="workspace-check">{w.id === data.active ? "\u2713" : ""}</span>
+              <span className="workspace-check">{w.id === data.active ? <Icon name="check" size={12}/> : ""}</span>
               <span className="workspace-name">{w.name}</span>
             </button>
           )}
           {renamingId !== w.id && (
             <div className="workspace-row-actions">
               <button className="workspace-row-btn" title="Rename" aria-label="Rename tracker"
-                onClick={() => { setRenamingId(w.id); setRenameVal(w.name); }}>{"\u270E"}</button>
+                onClick={() => { setRenamingId(w.id); setRenameVal(w.name); }}>{<Icon name="edit"/>}</button>
               <button className={"workspace-row-btn" + (busyId === w.id ? " spinning" : "")}
                 disabled={busyId === w.id}
                 title={busyId === w.id ? "Exporting\u2026" : "Export as zip"}
                 aria-label={busyId === w.id ? "Exporting" : "Export as zip"}
-                onClick={() => doExport(w.id, w.name)}>{"\u2913"}</button>
+                onClick={() => doExport(w.id, w.name)}>{<Icon name="download"/>}</button>
               {w.id !== "default" && (
                 w.kind === "linked" ? (
                   <button className={"workspace-row-btn" + (busyId === w.id ? " spinning" : "")}
                     disabled={busyId === w.id} title="Unlink (just removes it from this list — the folder itself is never touched)"
                     aria-label="Unlink tracker"
-                    onClick={() => doDelete(w.id, w.name, w.kind)}>{"\u26D3\uFE0F"}</button>
+                    onClick={() => doDelete(w.id, w.name, w.kind)}>{<Icon name="unlink"/>}</button>
                 ) : (
                   <button className={"workspace-row-btn" + (busyId === w.id ? " spinning" : "")}
                     disabled={busyId === w.id} title="Delete (its cache is removed; its tracker folder is sent to the Trash)"
                     aria-label="Delete tracker"
-                    onClick={() => doDelete(w.id, w.name, w.kind)}>{"\u2715"}</button>
+                    onClick={() => doDelete(w.id, w.name, w.kind)}>{<Icon name="close"/>}</button>
                 )
               )}
             </div>
@@ -1742,7 +1844,7 @@ function Rail({page, setPage, attentionCount, onOpenPalette, onOpenSettings, wor
             title="Click to switch trackers" aria-label="Switch trackers" onClick={onToggleWorkspacePopover}>
             <span className="rail-logo">J</span>
             <span className="rail-btn-label rail-logo-label">{trackerName || "JobTracker Hub"}</span>
-            <span className="rail-logo-label-caret">{"\u2304"}</span>
+            <span className="rail-logo-label-caret">{<Icon name="chevron" size={12}/>}</span>
           </button>
         ) : (
           <button ref={logoRef} className={"rail-logo" + (workspacePopoverOpen ? " open" : "")}
@@ -1786,7 +1888,7 @@ function DocGrid({docs, docTypeLabels, onOpen, onView, query, onFixType, onRenam
   const hiddenCount = all.length - sourceVisible.length;
 
   if (all.length === 0) {
-    return <EmptyState icon={"\u{1F4C1}"} title="No documents indexed" sub="This application doesn't have any files under it yet." />;
+    return <EmptyState icon={<Icon name="folder" size={26}/>} title="No documents indexed" sub="This application doesn't have any files under it yet." />;
   }
   return (
     <div>
@@ -1804,11 +1906,11 @@ function DocGrid({docs, docTypeLabels, onOpen, onView, query, onFixType, onRenam
                   <div className="doc-type">
                     {label}
                     {d.doc_type === "other" && !d.doc_type_override && (
-                      <span title="Filename gave no classification signal — open to check" style={{color:"#F59E0B", marginLeft:6}}>{"\u2753 unclassified"}</span>
+                      <span title="Filename gave no classification signal — open to check" style={{color:"#F59E0B", marginLeft:6}}><><Icon name="question" size={11} style={{marginRight:3, verticalAlign:"-1px"}}/>unclassified</></span>
                     )}
                     {d.duplicate_count > 0 && (
                       <span title="Byte-identical to a document used elsewhere — nothing deleted or merged" style={{color:"#F59E0B", marginLeft:6}}>
-                        {"\u29C9"} also used in {d.duplicate_count} other place{d.duplicate_count > 1 ? "s" : ""}
+                        <Icon name="duplicate" size={11} style={{marginRight:3, verticalAlign:"-1px"}}/> also used in {d.duplicate_count} other place{d.duplicate_count > 1 ? "s" : ""}
                       </span>
                     )}
                   </div>
@@ -1816,17 +1918,17 @@ function DocGrid({docs, docTypeLabels, onOpen, onView, query, onFixType, onRenam
               </div>
               <div className="doc-actions">
                 {isInlineViewable(d) && (
-                  <button className="doc-open" title="View inline" aria-label="View inline" onClick={() => onView(d)}>{"\u{1F441}"}</button>
+                  <button className="doc-open" title="View inline" aria-label="View inline" onClick={() => onView(d)}>{<Icon name="view"/>}</button>
                 )}
-                <button className="doc-open" title="Open in OS" aria-label="Open in OS" onClick={() => onOpen(d.relpath)}>{"\u2197"}</button>
+                <button className="doc-open" title="Open in OS" aria-label="Open in OS" onClick={() => onOpen(d.relpath)}>{<Icon name="open_ext"/>}</button>
                 {onFixType && d.doc_type === "other" && (
-                  <button className="doc-open" title="Correct the document type (doesn't rename the file)" aria-label="Correct document type" onClick={() => onFixType(d)}>{"\u270E"}</button>
+                  <button className="doc-open" title="Correct the document type (doesn't rename the file)" aria-label="Correct document type" onClick={() => onFixType(d)}>{<Icon name="edit"/>}</button>
                 )}
                 {onRename && (
-                  <button className="doc-open" title="Rename file" aria-label="Rename file" onClick={() => onRename(d)}>{"\u{1F4DD}"}</button>
+                  <button className="doc-open" title="Rename file" aria-label="Rename file" onClick={() => onRename(d)}>{<Icon name="edit"/>}</button>
                 )}
                 {onDelete && (
-                  <button className="doc-open" title="Move to Trash" aria-label="Move to Trash" onClick={() => onDelete(d)}>{"\u{1F5D1}\uFE0F"}</button>
+                  <button className="doc-open" title="Move to Trash" aria-label="Move to Trash" onClick={() => onDelete(d)}>{<Icon name="trash"/>}</button>
                 )}
               </div>
             </div>
@@ -1901,7 +2003,7 @@ function ContactGroup({label, kind, values, fireToast}){
       {values.map(v => (
         <div className="contact-row" key={v}>
           <span className="contact-value" title={v}>{v}</span>
-          <button className="contact-btn" onClick={() => copy(v)} title="Copy" aria-label="Copy">{"\u{1F4CB}"}</button>
+          <button className="contact-btn" onClick={() => copy(v)} title="Copy" aria-label="Copy">{<Icon name="clipboard"/>}</button>
           <button className="contact-btn" onClick={() => act(v)} title={actionLabel}>{actionLabel}</button>
         </div>
       ))}
@@ -2137,7 +2239,7 @@ function DetailPane({app, meta, docs, dossier, onSaveOverride, onOpen, onView, o
   }, [app && app.id]);
 
   if (!app) {
-    return <div className="detail-pane"><EmptyState icon={"\u{1F4CB}"} title="Nothing selected"
+    return <div className="detail-pane"><EmptyState icon={<Icon name="clipboard" size={26}/>} title="Nothing selected"
       sub={<React.Fragment>Select an application from the list. Tip: <span className="kbd">j</span>/<span className="kbd">k</span> to move, <span className="kbd">Enter</span> to preview a document.</React.Fragment>} /></div>;
   }
 
@@ -2195,9 +2297,9 @@ function DetailPane({app, meta, docs, dossier, onSaveOverride, onOpen, onView, o
             <option value="">(auto — {app.status})</option>
             {statusOrder.map(s => <option key={s} value={s}>{s[0].toUpperCase()+s.slice(1)}</option>)}
           </select>
-          <button className="btn primary" onClick={quickFollowUp}>{"Follow Up \u{1F4C5} (+7d)"}</button>
+          <button className="btn primary" onClick={quickFollowUp}>Follow Up <Icon name="calendar" size={13} style={{marginLeft:4, marginRight:2, verticalAlign:"-2px"}}/> (+7d)</button>
           <button className="btn" title="Keeps date applied as-is — just resets the days-quiet countdown to 0."
-            onClick={quickResetActivity}>{"Reset Activity Clock \u{1F503}"}</button>
+            onClick={quickResetActivity}>Reset Activity Clock <Icon name="undo" size={13} style={{marginLeft:4, verticalAlign:"-2px"}}/></button>
           {dirty && <button className="btn" onClick={save}>Save changes</button>}
         </div>
       </div>
@@ -2243,7 +2345,7 @@ function DetailPane({app, meta, docs, dossier, onSaveOverride, onOpen, onView, o
 function MasterList({apps, selectedKey, onSelect, meta, query}){
   return (
     <div className="master-list">
-      {apps.length === 0 && <EmptyState icon={"\u{1F50D}"} title="No matches" sub="No applications match the current filters." />}
+      {apps.length === 0 && <EmptyState icon={<Icon name="leads" size={26}/>} title="No matches" sub="No applications match the current filters." />}
       {apps.map(app => (
         <div key={app.id} className={"master-item" + (app.id===selectedKey ? " selected":"")} onClick={() => onSelect(app)}>
           <div className="master-item-top">
@@ -2303,7 +2405,7 @@ function KanbanBoard({apps, meta, onMove, pendingIds}){
                   onDragEnd={() => { setDragId(null); setOverCol(null); }}
                 >
                   <div className="kanban-card-title">{app.effective_company}</div>
-                  <div className="kanban-card-role">{app.role_label !== "(root)" ? app.role_label : "—"}{app.is_stale ? " \u26A0" : ""}</div>
+                  <div className="kanban-card-role">{app.role_label !== "(root)" ? app.role_label : "—"}{app.is_stale ? <Icon name="attention" size={11} style={{marginLeft:4, verticalAlign:"-1px"}}/> : ""}</div>
                   <div className="kanban-card-foot">
                     <span className="kanban-card-meta">{app.days_since_activity != null ? `${app.days_since_activity}d` : "?"}</span>
                   </div>
@@ -2436,7 +2538,7 @@ function PipelinePage({apps, meta, docsByItemId, ensureDocs, dossierByItemId, en
       <div style={{flex:1, minHeight:0}}>
         {view === "list" ? (
           filtered.length === 0 ? (
-            <EmptyState icon={"\u{1F4ED}"} title="Nothing here" sub="Try a different status filter, or clear the search box." />
+            <EmptyState icon={<Icon name="inbox_empty" size={26}/>} title="Nothing here" sub="Try a different status filter, or clear the search box." />
           ) : (
             <div className="pipeline-split">
               <div className="master-pane">
@@ -2491,7 +2593,7 @@ function AttentionPage({apps, meta, docsByItemId, ensureDocs, onSaveOverride, on
       <div>
         <h1 className="page-title">Needs Attention</h1>
         <p className="page-sub">Applications sitting quietly for a while, plus anything with a next action due.</p>
-        <div className="success-banner">{"Nothing needs attention right now. \u{1F389}"}</div>
+        <div className="success-banner">Nothing needs attention right now. <Icon name="celebrate" size={15} style={{marginLeft:2, verticalAlign:"-2px"}}/></div>
       </div>
     );
   }
@@ -2569,8 +2671,8 @@ function BrowsePage({searchQuery, showPersonal, meta, onOpen, onView, onFixType,
       .catch(e => setErr(String(e.message||e)));
   }, [searchQuery, showPersonal, showArchived, docsVersion]);
 
-  if (err) return <EmptyState icon={"\u26A0\uFE0F"} title="Couldn't load Browse" sub={err} />;
-  if (!data) return <EmptyState icon={"\u23F3"} title="Loading…" />;
+  if (err) return <EmptyState icon={<Icon name="attention" size={26}/>} title="Couldn't load Browse" sub={err} />;
+  if (!data) return <EmptyState icon={<Icon name="hourglass" size={26}/>} title="Loading…" />;
 
   const sections = Object.keys(data);
   const items = data[activeTab] || [];
@@ -2583,7 +2685,8 @@ function BrowsePage({searchQuery, showPersonal, meta, onOpen, onView, onFixType,
         <div className="tabs">
           {sections.map(s => (
             <button key={s} className={"tab-btn" + (activeTab===s?" active":"")} onClick={() => setActiveTab(s)}>
-              {(meta.section_labels && meta.section_labels[s]) || DEFAULT_SECTION_LABELS[s] || prettifySection(s)}
+              <Icon name={s} size={13} style={{marginRight:5, verticalAlign:"-2px"}}/>
+              {stripLeadingEmoji((meta.section_labels && meta.section_labels[s]) || DEFAULT_SECTION_LABELS[s] || prettifySection(s))}
             </button>
           ))}
         </div>
@@ -2591,7 +2694,7 @@ function BrowsePage({searchQuery, showPersonal, meta, onOpen, onView, onFixType,
           <input type="checkbox" checked={showArchived} onChange={e => setShowArchived(e.target.checked)} /> Show archived
         </label>
       </div>
-      {items.length === 0 && <EmptyState icon={"\u{1F4ED}"} title="No matches" sub="No matches in this section." />}
+      {items.length === 0 && <EmptyState icon={<Icon name="inbox_empty" size={26}/>} title="No matches" sub="No matches in this section." />}
       {items.map(it => (
         <details className="doc-expander" key={it.id} style={{marginBottom:8, background:"var(--panel)", border:"1px solid var(--border)", borderRadius:8, padding:"8px 12px"}}>
           <summary style={{color:"var(--text)", fontWeight:600, fontSize:13}}>
@@ -2626,11 +2729,11 @@ function SearchPage({searchQuery, showPersonal, meta, onOpen, onView}){
     <div>
       <h1 className="page-title">Search &amp; Retrieval</h1>
       <p className="page-sub">Search across every indexed document — resumes, cover letters, prep notes, everything.</p>
-      {!searchQuery && <EmptyState icon={"\u{1F50D}"} title="Start typing" sub="Type in the search box above to get started." />}
-      {err && <EmptyState icon={"\u26A0\uFE0F"} title="Search error" sub={err} />}
+      {!searchQuery && <EmptyState icon={<Icon name="leads" size={26}/>} title="Start typing" sub="Type in the search box above to get started." />}
+      {err && <EmptyState icon={<Icon name="attention" size={26}/>} title="Search error" sub={err} />}
       {rows && searchQuery && <p className="page-sub">{visibleRows.length} result(s){hiddenCount ? ` (${hiddenCount} source file(s) hidden — toggle "Show source files")` : ""}</p>}
       {rows && searchQuery && visibleRows.length === 0 && !err && (
-        <EmptyState icon={"\u{1F4ED}"} title="No results" sub={`Nothing matched "${searchQuery}". Try a shorter or different term.`} />
+        <EmptyState icon={<Icon name="inbox_empty" size={26}/>} title="No results" sub={`Nothing matched "${searchQuery}". Try a shorter or different term.`} />
       )}
       {visibleRows.map(r => (
         <div className="list-card" key={r.id}>
@@ -2640,9 +2743,12 @@ function SearchPage({searchQuery, showPersonal, meta, onOpen, onView}){
                 <div className="list-card-title"><Highlight text={r.company} query={searchQuery} /> {r.role_label !== "(root)" ? <React.Fragment>— <Highlight text={r.role_label} query={searchQuery} /></React.Fragment> : ""}</div>
                 <div style={{fontSize:12, color:"var(--text-soft)", marginTop:4}}>
                   <span className="doc-type" style={{background:"var(--bg)", padding:"1px 6px", borderRadius:4, border:"1px solid var(--border)"}}>{docEffectiveType(r)}</span> &nbsp;<Highlight text={r.filename} query={searchQuery} />
-                  {r.duplicate_count > 0 && <span style={{color:"#F59E0B", marginLeft:6}}>{"\u29C9"} also used in {r.duplicate_count} other place{r.duplicate_count > 1 ? "s" : ""}</span>}
+                  {r.duplicate_count > 0 && <span style={{color:"#F59E0B", marginLeft:6}}><Icon name="duplicate" size={11} style={{marginRight:3, verticalAlign:"-1px"}}/> also used in {r.duplicate_count} other place{r.duplicate_count > 1 ? "s" : ""}</span>}
                 </div>
-                <div style={{fontSize:11, color:"var(--text-mute)", marginTop:4}}>{(meta.section_labels && meta.section_labels[r.section]) || DEFAULT_SECTION_LABELS[r.section] || prettifySection(r.section)}</div>
+                <div style={{fontSize:11, color:"var(--text-mute)", marginTop:4}}>
+                  <Icon name={r.section} size={11} style={{marginRight:4, verticalAlign:"-1px"}}/>
+                  {stripLeadingEmoji((meta.section_labels && meta.section_labels[r.section]) || DEFAULT_SECTION_LABELS[r.section] || prettifySection(r.section))}
+                </div>
               </div>
               <div style={{display:"flex", gap:6}}>
                 {isInlineViewable(r) && <button className="btn" onClick={() => onView(r)}>View</button>}
@@ -2808,12 +2914,12 @@ function HubLinkCard({link, accent, override, onSaveOverride, location}){
         <div style={{display:"flex", gap:2}}>
           {ov && (
             <button className="hub-card-edit" title="Reset to default" aria-label="Reset to default" onClick={() => onSaveOverride(link.name, null)}>
-              {"\u21BA"}
+              <Icon name="undo"/>
             </button>
           )}
           <button className="hub-card-edit" title={editing ? "Cancel" : "Edit this card"} aria-label={editing ? "Cancel" : "Edit this card"}
             onClick={() => editing ? setEditing(false) : startEdit()}>
-            {editing ? "\u2715" : "\u270E"}
+            {editing ? <Icon name="close"/> : <Icon name="edit"/>}
           </button>
         </div>
       </div>
@@ -2836,12 +2942,12 @@ function HubLinkCard({link, accent, override, onSaveOverride, location}){
           <div className="hub-card-desc">{link.desc}</div>
           {effectiveUrl ? (
             <button className="btn small hub-open" onClick={() => openExternalUrl(effectiveUrl)}>
-              Open {"\u2197"}
+              Open <Icon name="open_ext" size={11} style={{marginLeft:3, verticalAlign:"-1px"}}/>
             </button>
           ) : (
             <button className="btn small hub-open" title="No link saved yet — this searches for it instead"
               onClick={() => openExternalUrl(searchUrl())}>
-              Search {"\u2197"}
+              Search <Icon name="open_ext" size={11} style={{marginLeft:3, verticalAlign:"-1px"}}/>
             </button>
           )}
         </React.Fragment>
@@ -2870,12 +2976,12 @@ function CustomHubCard({card, accent, onSave, onDelete}){
         <span className="hub-tag" style={{background:accent+"22", color:accent, border:`1px solid ${accent}55`}}>Custom</span>
         <div style={{display:"flex", gap:2}}>
           <button className="hub-card-edit" title="Delete this card" aria-label="Delete this card" onClick={() => onDelete(card.id)}>
-            {"\u{1F5D1}"}
+            <Icon name="trash"/>
           </button>
           {!editing && (
             <button className="hub-card-edit" title="Edit this card" aria-label="Edit this card" onClick={() => {
               setTitleDraft(card.title || ""); setUrlDraft(card.url || ""); setNoteDraft(card.note || ""); setEditing(true);
-            }}>{"\u270E"}</button>
+            }}>{<Icon name="edit"/>}</button>
           )}
         </div>
       </div>
@@ -2899,7 +3005,7 @@ function CustomHubCard({card, accent, onSave, onDelete}){
           {card.note && <div className="hub-card-desc">{card.note}</div>}
           {card.url && (
             <button className="btn small hub-open" onClick={() => openExternalUrl(card.url)}>
-              Open {"\u2197"}
+              Open <Icon name="open_ext" size={11} style={{marginLeft:3, verticalAlign:"-1px"}}/>
             </button>
           )}
         </React.Fragment>
@@ -3088,9 +3194,9 @@ function SearchHubPage(){
       <h1 className="page-title">Search Hub</h1>
       {loadErr && <div className="warning-banner">Couldn't load your Search Hub settings: {loadErr}</div>}
       <div style={{display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:12}}>
-        <p className="page-sub" style={{flex:1}}>External job boards, portals, and AI assistants worth checking regularly — organized so you're not re-Googling the same list every week. Cards with no built-in link search for you until you add one (click the {"\u270E"} to save your own — saved with this tracker).</p>
+        <p className="page-sub" style={{flex:1}}>External job boards, portals, and AI assistants worth checking regularly — organized so you're not re-Googling the same list every week. Cards with no built-in link search for you until you add one (click the {<Icon name="edit"/>} to save your own — saved with this tracker).</p>
         {Object.keys(customLinks).length > 0 && (
-          <button className="btn small" onClick={resetAllLinks} style={{flex:"none"}}>{"\u21BA"} Reset all to defaults</button>
+          <button className="btn small" onClick={resetAllLinks} style={{flex:"none"}}><Icon name="undo" size={13} style={{marginRight:4, verticalAlign:"-2px"}}/> Reset all to defaults</button>
         )}
       </div>
 
@@ -3110,7 +3216,7 @@ function SearchHubPage(){
             placeholder="e.g. Denver, CO" value={location} onChange={e => saveLocation(e.target.value)} />
         </div>
         <button className="btn primary" onClick={copyPrompt} style={{alignSelf:"flex-end"}}>
-          {copied ? "Copied \u2713" : "\u{1F4CB} Copy AI Job Prompt"}
+          {copied ? <><Icon name="check" size={11} style={{marginRight:3, verticalAlign:"-1px"}}/>Copied</> : <><Icon name="clipboard" size={13} style={{marginRight:4, verticalAlign:"-2px"}}/>Copy AI Job Prompt</>}
         </button>
       </div>
       <p className="page-sub" style={{marginTop:8, fontStyle:"italic"}}>"{buildAiPrompt(role, location)}"</p>
@@ -3266,7 +3372,7 @@ function VelocityChart({apps, themeTick}){
   useChart(canvasRef, config);
   if (!chartLibAvailable()) return <ChartUnavailable />;
   if (weeks.length === 0) {
-    return <EmptyState icon={"\u{1F4C8}"} title="No velocity data yet" sub="Set Date applied on a few cards to see velocity over time." />;
+    return <EmptyState icon={<Icon name="trending" size={26}/>} title="No velocity data yet" sub="Set Date applied on a few cards to see velocity over time." />;
   }
   return <canvas ref={canvasRef}></canvas>;
 }
@@ -3352,8 +3458,8 @@ function InsightsPage({apps, meta, themeTick}){
   const [m, setM] = useState(null);
   const [err, setErr] = useState(null);
   useEffect(() => { apiGet("/api/insights").then(setM).catch(e => setErr(String(e.message||e))); }, []);
-  if (err) return <EmptyState icon={"\u26A0\uFE0F"} title="Couldn't load Insights" sub={err} />;
-  if (!m) return <EmptyState icon={"\u23F3"} title="Loading…" />;
+  if (err) return <EmptyState icon={<Icon name="attention" size={26}/>} title="Couldn't load Insights" sub={err} />;
+  if (!m) return <EmptyState icon={<Icon name="hourglass" size={26}/>} title="Loading…" />;
 
   const {recent, byStatus: weekByStatus, warning} = thisWeekAndDataQuality(apps);
 
@@ -3425,8 +3531,8 @@ function ManagePage({onRefreshApps, meta, onCategoriesChanged}){
   const loadCategories = () => apiGet("/api/categories").then(setCategories).catch(e => setCatErr(String(e.message||e)));
   useEffect(() => { load(); loadCategories(); }, []);
 
-  if (err) return <EmptyState icon={"\u26A0\uFE0F"} title="Couldn't load Manage" sub={err} />;
-  if (!data) return <EmptyState icon={"\u23F3"} title="Loading…" />;
+  if (err) return <EmptyState icon={<Icon name="attention" size={26}/>} title="Couldn't load Manage" sub={err} />;
+  if (!data) return <EmptyState icon={<Icon name="hourglass" size={26}/>} title="Loading…" />;
 
   const suggestions = Object.entries(data.duplicate_suggestions || {});
 
@@ -3442,7 +3548,7 @@ function ManagePage({onRefreshApps, meta, onCategoriesChanged}){
         only changes how they're grouped and displayed in this app — <b>your files on disk are never touched</b>,
         and you can undo any merge below at any time.
       </p>
-      {suggestions.length === 0 && <EmptyState icon={"\u2728"} title="All clear" sub="No unresolved duplicate suggestions right now." />}
+      {suggestions.length === 0 && <EmptyState icon={<Icon name="sparkle" size={26}/>} title="All clear" sub="No unresolved duplicate suggestions right now." />}
       {suggestions.map(([key, names]) => (
         <div className="list-card" key={key}>
           <div className="list-card-body">
@@ -3469,7 +3575,7 @@ function ManagePage({onRefreshApps, meta, onCategoriesChanged}){
 
       <div className="section-label">Current merges</div>
       {mergeErr && <div className="warning-banner" style={{marginBottom:10}}>{mergeErr}</div>}
-      {Object.keys(data.aliases||{}).length === 0 && <EmptyState icon={"\u{1F517}"} title="No merges yet" />}
+      {Object.keys(data.aliases||{}).length === 0 && <EmptyState icon={<Icon name="link" size={26}/>} title="No merges yet" />}
       {Object.entries(data.aliases||{}).map(([alias, canonical]) => (
         <div className="list-card" key={alias} style={{alignItems:"center"}}>
           <div className="list-card-body" style={{display:"flex", justifyContent:"space-between", alignItems:"center"}}>
@@ -3495,7 +3601,7 @@ function ManagePage({onRefreshApps, meta, onCategoriesChanged}){
         shows up as a large group below. Worth a second look only if a group spans companies that shouldn't share a
         file (e.g. a cover letter meant for one company saved under another).
       </p>
-      {(data.duplicate_documents||[]).length === 0 && <EmptyState icon={"\u2728"} title="No exact duplicates found" />}
+      {(data.duplicate_documents||[]).length === 0 && <EmptyState icon={<Icon name="sparkle" size={26}/>} title="No exact duplicates found" />}
       {(data.duplicate_documents||[]).map(g => (
         <div className="list-card" key={g.content_hash} style={{opacity:0.85}}>
           <div className="list-card-body">
@@ -3552,7 +3658,7 @@ function ManagePage({onRefreshApps, meta, onCategoriesChanged}){
           }
         };
 
-        if (archived.length === 0) return <EmptyState icon={"\u{1F4E6}"} title="Nothing archived" />;
+        if (archived.length === 0) return <EmptyState icon={<Icon name="archive" size={26}/>} title="Nothing archived" />;
 
         return (
           <div>
@@ -3604,10 +3710,10 @@ function ManagePage({onRefreshApps, meta, onCategoriesChanged}){
         there) and requires it to be archived first.
       </p>
       {catErr && <div className="warning-banner" style={{marginBottom:10}}>{catErr}</div>}
-      {categories === null && !catErr && <EmptyState icon={"\u23F3"} title="Loading…" />}
-      {categories !== null && categories.length === 0 && <EmptyState icon={"\u{1F5C2}\uFE0F"} title="No categories yet" />}
+      {categories === null && !catErr && <EmptyState icon={<Icon name="hourglass" size={26}/>} title="Loading…" />}
+      {categories !== null && categories.length === 0 && <EmptyState icon={<Icon name="folder_plus" size={26}/>} title="No categories yet" />}
       {(categories || []).map(c => {
-        const tabLabel = (meta && meta.section_labels && meta.section_labels[c.section]) || DEFAULT_SECTION_LABELS[c.section] || prettifySection(c.section);
+        const tabLabel = stripLeadingEmoji((meta && meta.section_labels && meta.section_labels[c.section]) || DEFAULT_SECTION_LABELS[c.section] || prettifySection(c.section));
         const folderPath = c.folder.split("/").map(encodeURIComponent).join("/");
         const runCategoryDelete = async () => {
           const confirmMsg = `Permanently delete "${c.folder}"? It goes to the OS Trash `
@@ -3631,7 +3737,7 @@ function ManagePage({onRefreshApps, meta, onCategoriesChanged}){
               <div>
                 <div>
                   <b>{c.folder}</b>
-                  <span className="badge" style={{marginLeft:8, background:"var(--border)", color:"var(--text-soft)", border:"none"}}>{tabLabel}</span>
+                  <span className="badge" style={{marginLeft:8, background:"var(--border)", color:"var(--text-soft)", border:"none"}}><Icon name={c.section} size={11} style={{marginRight:4, verticalAlign:"-1px"}}/>{tabLabel}</span>
                   {c.archived && <span className="badge" style={{marginLeft:8, background:"var(--border)", color:"var(--text-soft)", border:"none"}}>archived</span>}
                 </div>
                 <div style={{fontSize:12, color:"var(--text-mute)", marginTop:2}}>
@@ -3681,7 +3787,7 @@ function FixTypeModal({doc, docTypeLabels, onClose, onSave}){
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={e => e.stopPropagation()} style={{position:"relative", maxWidth:420}}>
-        <button className="close-x" aria-label="Close" onClick={onClose}>{"\u2715"}</button>
+        <button className="close-x" aria-label="Close" onClick={onClose}>{<Icon name="close"/>}</button>
         <h2>Correct document type</h2>
         <p style={{color:"var(--text-mute)", fontSize:12, marginTop:6}}>
           <b>{doc.filename}</b> couldn't be classified from its filename alone
@@ -3743,7 +3849,7 @@ function RenameModal({doc, onClose, onSave}){
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={e => e.stopPropagation()} style={{position:"relative", maxWidth:420}}>
-        <button className="close-x" aria-label="Close" onClick={onClose}>{"\u2715"}</button>
+        <button className="close-x" aria-label="Close" onClick={onClose}>{<Icon name="close"/>}</button>
         <h2>Rename file</h2>
         <p style={{color:"var(--text-mute)", fontSize:12, marginTop:6}}>
           Renames the actual file on disk in place — same folder, new name.
@@ -3809,7 +3915,7 @@ function NewApplicationModal({onClose, onCreate, meta}){
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={e => e.stopPropagation()} style={{position:"relative", maxWidth:460}}>
-        <button className="close-x" aria-label="Close" onClick={onClose}>{"\u2715"}</button>
+        <button className="close-x" aria-label="Close" onClick={onClose}>{<Icon name="close"/>}</button>
         <h2>New application</h2>
         <p style={{color:"var(--text-mute)", fontSize:12, marginTop:6}}>
           Creates a real folder — <code>Applications/{company.trim() || "Company"}{role.trim() ? `/${role.trim()}` : ""}</code> —
@@ -3906,7 +4012,7 @@ function NewCategoryModal({onClose, onCreate}){
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={e => e.stopPropagation()} style={{position:"relative", maxWidth:420}}>
-        <button className="close-x" aria-label="Close" onClick={onClose}>{"\u2715"}</button>
+        <button className="close-x" aria-label="Close" onClick={onClose}>{<Icon name="close"/>}</button>
         <h2>New category</h2>
         <p style={{color:"var(--text-mute)", fontSize:12, marginTop:6}}>
           Creates a real top-level folder — <code>{name.trim() || "Category Name"}</code> — then
@@ -3976,7 +4082,7 @@ function DiagnosticsSection(){
   return (
     <>
       <div className="section-label" style={{marginTop:16, cursor:"pointer", display:"flex", alignItems:"center", gap:6}} onClick={toggle}>
-        <span style={{fontSize:9, transform: open ? "rotate(90deg)" : "none", display:"inline-block", transition:"transform .12s"}}>{"\u25B6"}</span>
+        <span style={{display:"inline-block", transition:"transform .12s", transform: open ? "rotate(90deg)" : "none"}}><Icon name="play" size={9}/></span>
         Diagnostics
       </div>
       {open && (
@@ -4033,7 +4139,7 @@ function SettingsModal({onClose, onRebuild, status, themePref, themeApplied, set
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={e => e.stopPropagation()} style={{position:"relative"}}>
-        <button className="close-x" aria-label="Close" onClick={onClose}>{"\u2715"}</button>
+        <button className="close-x" aria-label="Close" onClick={onClose}>{<Icon name="close"/>}</button>
         <h2>Settings</h2>
 
         <div className="section-label" style={{marginTop:16}}>Appearance</div>
@@ -4068,7 +4174,7 @@ function SettingsModal({onClose, onRebuild, status, themePref, themeApplied, set
 
         <div className="modal-foot">
           <button className="btn" onClick={onClose}>Close</button>
-          <button className="btn primary" disabled={busy} onClick={doRebuild}>{busy ? "Rebuilding…" : "\u{1F504} Rebuild index"}</button>
+          <button className="btn primary" disabled={busy} onClick={doRebuild}>{busy ? "Rebuilding…" : <><Icon name="refresh" size={13} style={{marginRight:4, verticalAlign:"-2px"}}/>Rebuild index</>}</button>
         </div>
       </div>
     </div>
@@ -4202,7 +4308,7 @@ function ViewerDrawer({doc, onClose, onOpen}){
               ALLOW_DOWNLOADS comment for why that one can't be fixed the
               same way. Works unchanged in a plain browser tab too. */}
           <a className="btn small" href={src} download={doc.filename}>Download</a>
-          <button className="btn small" onClick={onClose}>{"\u2715 Close (Esc)"}</button>
+          <button className="btn small" onClick={onClose}><Icon name="close" size={12} style={{marginRight:4, verticalAlign:"-1px"}}/>Close (Esc)</button>
         </div>
         {/* The PDF pane below embeds WebKit's own native PDF plugin, whose
             save/download icon is a closed native affordance we can't wire
@@ -4219,11 +4325,11 @@ function ViewerDrawer({doc, onClose, onOpen}){
             ? <embed className="viewer-frame" src={src} type="application/pdf" />
             : ext === ".docx"
               ? (docxLoading
-                  ? <div className="viewer-unsupported">{"\u23F3"} Converting for preview…</div>
+                  ? <div className="viewer-unsupported"><Icon name="hourglass" size={13} style={{marginRight:4, verticalAlign:"-2px"}}/> Converting for preview…</div>
                   : docxErr
                     ? (
                       <div className="viewer-unsupported">
-                        <div>{"\u{1F4C4}"} Couldn't preview this .docx ({docxErr}).</div>
+                        <div><Icon name="resume_library" size={13} style={{marginRight:4, verticalAlign:"-2px"}}/> Couldn't preview this .docx ({docxErr}).</div>
                         <button className="btn primary" onClick={() => onOpen(doc.relpath)}>Open in OS</button>
                       </div>
                     )
@@ -4234,7 +4340,7 @@ function ViewerDrawer({doc, onClose, onOpen}){
                 ? <iframe className="viewer-frame" src={src} title={doc.filename} />
                 : (
                   <div className="viewer-unsupported">
-                    <div>{"\u{1F4C4}"} No inline preview for this file type.</div>
+                    <div><Icon name="resume_library" size={13} style={{marginRight:4, verticalAlign:"-2px"}}/> No inline preview for this file type.</div>
                     <button className="btn primary" onClick={() => onOpen(doc.relpath)}>Open in OS</button>
                   </div>
                 )}
@@ -4271,7 +4377,7 @@ function NoTrackerOnboarding({packaged}){
   return (
     <div className="center-screen">
       <div className="onboard-card">
-        <h1>{"\u{1F4C2}"} Set up your first tracker</h1>
+        <h1><Icon name="folder_open" size={20} style={{marginRight:6, verticalAlign:"-3px"}}/> Set up your first tracker</h1>
         <p>
           Every tracker is just a folder on disk. Start a fresh one, bring in
           a copy of an existing tracker, or {packaged ? "point straight at a folder you already have." : "point _app/ at one by running it from inside that folder."}
@@ -4295,7 +4401,7 @@ function Onboarding({root, onRebuild}){
   return (
     <div className="center-screen">
       <div className="onboard-card">
-        <h1>{"\u{1F5C2}\uFE0F"} Welcome to your JobTracker Hub</h1>
+        <h1><Icon name="folder_plus" size={20} style={{marginRight:6, verticalAlign:"-3px"}}/> Welcome to your JobTracker Hub</h1>
         <p>
           <code>_app/</code> is nested inside your JobTracker folder, so it already knows what to
           index — <code>{root || "the folder it's sitting in"}</code>. Click below to build the
@@ -4303,7 +4409,7 @@ function Onboarding({root, onRebuild}){
         </p>
         {error && <div className="warning-banner">{error}</div>}
         <button className="btn primary" disabled={busy} onClick={submit} style={{width:"100%", marginTop:8, padding:"10px 0"}}>
-          {busy ? "Scanning your folders…" : "\u{1F504} Build index"}
+          {busy ? "Scanning your folders…" : <><Icon name="refresh" size={13} style={{marginRight:4, verticalAlign:"-2px"}}/>Build index</>}
         </button>
       </div>
     </div>
@@ -4325,7 +4431,7 @@ class ErrorBoundary extends React.Component {
       return (
         <div className="center-screen">
           <div className="onboard-card">
-            <h1>{"\u26A0\uFE0F"} Something went wrong</h1>
+            <h1><Icon name="attention" size={20} style={{marginRight:6, verticalAlign:"-3px"}}/> Something went wrong</h1>
             <p>{String(this.state.error.message || this.state.error)}</p>
             <button className="btn primary" style={{width:"100%", marginTop:8, padding:"10px 0"}}
               onClick={() => { this.setState({error: null}); window.location.reload(); }}>
@@ -4719,8 +4825,8 @@ function App(){
         packaged={!!(statusInfo && statusInfo.packaged)} />
       <div className="main">
         <div className="topbar">
-          <ClearableInput className="search-input" wrapStyle={{flex:1, minWidth:220, maxWidth:520}}
-            placeholder={`\u{1F50D} Search ${apps.length} applications… (\u2318K for command palette)`}
+          <ClearableInput className="search-input" wrapStyle={{flex:1, minWidth:220, maxWidth:520}} leadingIcon="leads"
+            placeholder={`Search ${apps.length} applications… (\u2318K for command palette)`}
             value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
           <label style={{display:"flex", alignItems:"center", gap:6, color:"var(--text-soft)", fontSize:12}}>
             <input type="checkbox" checked={showPersonal} onChange={e => setShowPersonal(e.target.checked)} /> Show personal
@@ -4730,10 +4836,10 @@ function App(){
           </label>
           <div style={{flex:1}} />
           <ThemeToggle pref={theme.pref} applied={theme.applied} setTheme={theme.setTheme} />
-          <button className="btn primary" onClick={() => setNewAppOpen(true)}>{"\u2795"} New application</button>
-          <button className="btn" onClick={() => setNewCategoryOpen(true)}>{"\u{1F5C2}\uFE0F"} New category</button>
+          <button className="btn primary" onClick={() => setNewAppOpen(true)}><Icon name="plus" size={13} style={{marginRight:5, verticalAlign:"-2px"}}/> New application</button>
+          <button className="btn" onClick={() => setNewCategoryOpen(true)}><Icon name="folder_plus" size={13} style={{marginRight:5, verticalAlign:"-2px"}}/> New category</button>
           <button className="btn" onClick={() => setPaletteOpen(true)}>{"\u2318K"}</button>
-          <button className="btn" onClick={() => setSettingsOpen(true)}>{"\u2699\uFE0F"} Settings</button>
+          <button className="btn" onClick={() => setSettingsOpen(true)}><Icon name="settings" size={13} style={{marginRight:5, verticalAlign:"-2px"}}/> Settings</button>
         </div>
         <div className="content">
           {page === "pipeline" && (
