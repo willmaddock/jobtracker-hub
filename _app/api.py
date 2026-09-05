@@ -38,7 +38,7 @@ from typing import Optional
 
 import html as html_lib
 
-from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import BackgroundTasks, Body, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -1134,6 +1134,24 @@ def dismiss_discovery(discovery_id: int):
     return {"ok": True}
 
 
+@app.post("/api/discoveries/{discovery_id}/restore")
+def restore_discovery(discovery_id: int):
+    """Undoes a dismiss -- puts a discovery back to 'pending' so it
+    reappears in the review queue. Symmetric counterpart to /dismiss (see
+    EMAIL_SYNC_REDESIGN_HANDOFF.md section 4): backs the frontend's
+    undo-on-dismiss toast. Only meaningful from 'dismissed'; restoring an
+    'accepted' discovery isn't offered by the UI, but is harmless here
+    since it only ever flips the status column back to 'pending'."""
+    _, ov_conn = get_conns()
+    d = ov.get_discovery(ov_conn, discovery_id)
+    if d is None:
+        ov_conn.close()
+        raise HTTPException(status_code=404, detail="No such discovery.")
+    ov.set_discovery_status(ov_conn, discovery_id, "pending")
+    ov_conn.close()
+    return {"ok": True}
+
+
 @app.get("/api/discoveries/{discovery_id}/preview")
 def preview_discovery(discovery_id: int):
     """Lazily fetches the source email's body for the review modal, so
@@ -1515,6 +1533,121 @@ def dismiss_job_posting(job_id: int):
     jt_conn.close()
     ov_conn.close()
     return {"ok": True}
+
+
+@app.post("/api/job-postings/{job_id}/restore")
+def restore_job_posting(job_id: int):
+    """Undo counterpart to /dismiss above -- puts a job posting back to
+    'new' so it reappears on the board. Backs the frontend's
+    undo-on-dismiss toast (EMAIL_SYNC_REDESIGN_HANDOFF.md section 4)."""
+    jt_conn, ov_conn = get_conns()
+    job = ov.get_job_posting(ov_conn, job_id)
+    if job is None:
+        jt_conn.close()
+        ov_conn.close()
+        raise HTTPException(status_code=404, detail="No such job posting.")
+    ov.set_job_posting_status(ov_conn, job_id, "new")
+    jt_conn.close()
+    ov_conn.close()
+    return {"ok": True}
+
+
+@app.post("/api/job-postings/{job_id}/save")
+def save_job_posting(job_id: int, saved: bool = Body(True, embed=True)):
+    """Toggles the starred/saved flag on one job posting
+    (EMAIL_SYNC_REDESIGN_HANDOFF.md section 3). Returns the refreshed
+    postings list, same response shape as /dismiss and /mark-posting."""
+    jt_conn, ov_conn = get_conns()
+    job = ov.get_job_posting(ov_conn, job_id)
+    if job is None:
+        jt_conn.close()
+        ov_conn.close()
+        raise HTTPException(status_code=404, detail="No such job posting.")
+    ov.set_job_posting_saved(ov_conn, job_id, saved)
+    postings = ov.list_job_postings(ov_conn, status="new")
+    jt_conn.close()
+    ov_conn.close()
+    return postings
+
+
+@app.post("/api/job-postings/{job_id}/apply")
+async def apply_to_job_posting(
+    job_id: int,
+    company: str = Form(...),
+    role_label: str = Form(""),
+    status: str = Form("applied"),
+):
+    """Turns a job posting into a real tracked application -- the
+    "Apply" button counterpart to accept_discovery() above, reusing the
+    same create_application_folder()/build() pipeline as both that
+    endpoint and POST /api/applications/new (EMAIL_SYNC_REDESIGN_HANDOFF.md
+    section on postings gap #2). `company`/`role_label` default to the
+    posting's own company/title in the frontend's pre-filled form but are
+    freely editable there first, same as accept_discovery.
+
+    Also saves the original digest email as PDF evidence into the new
+    folder (job_postings rows carry the same account_id/message_id/
+    sender/received_at as a discovery, so _save_email_evidence_pdf works
+    unchanged) and links it as an account_match, so the new application
+    starts with real evidence and shows up as "from this email" exactly
+    like an accepted discovery would.
+
+    Records the link back on the job_postings row via
+    set_job_posting_applied() so the board can show "In pipeline" instead
+    of "Apply" afterward -- see that column's comment for why this isn't
+    enforced as a hard foreign key (the created application can later be
+    deleted or moved independent of this row)."""
+    if status and status not in db.STATUS_ORDER:
+        raise HTTPException(status_code=400, detail=f"Unknown status '{status}'. Must be one of {db.STATUS_ORDER}.")
+
+    jt_conn, ov_conn = get_conns()
+    job = ov.get_job_posting(ov_conn, job_id)
+    if job is None:
+        jt_conn.close()
+        ov_conn.close()
+        raise HTTPException(status_code=404, detail="No such job posting.")
+    if job["applied_item_key"]:
+        jt_conn.close()
+        ov_conn.close()
+        raise HTTPException(status_code=409, detail="Already applied to this posting.")
+
+    try:
+        dest_folder = create_application_folder(current_root(), company, role_label)
+    except ValueError as e:
+        jt_conn.close()
+        ov_conn.close()
+        raise HTTPException(status_code=400, detail=str(e))
+    except FileExistsError as e:
+        jt_conn.close()
+        ov_conn.close()
+        raise HTTPException(status_code=409, detail=str(e))
+
+    account = ov.get_account(ov_conn, job["account_id"])
+    _save_email_evidence_pdf(
+        dest_folder, account, job["message_id"],
+        job["email_subject"], job["sender"], job["received_at"],
+    )
+
+    ensure_not_empty(dest_folder)
+    build(current_root(), current_db_path())
+
+    root = current_root().resolve()
+    relpath = str(dest_folder.relative_to(root))
+    row = jt_conn.execute("SELECT id, item_key FROM items WHERE source_relpath = ?", (relpath,)).fetchone()
+    jt_conn.close()
+
+    if row is not None:
+        if status:
+            ov.upsert_override(ov_conn, row["item_key"], manual_status=status)
+        ov.add_account_match(
+            ov_conn, job["account_id"], row["item_key"],
+            job["message_id"], job["email_subject"], job["received_at"],
+        )
+        ov.set_job_posting_applied(ov_conn, job_id, row["item_key"])
+
+    ov_conn.close()
+    return {"ok": True, "relpath": relpath, "item_id": row["id"] if row is not None else None,
+            "item_key": row["item_key"] if row is not None else None}
 
 
 # --- applications / pipeline -------------------------------------------------

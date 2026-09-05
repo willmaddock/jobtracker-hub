@@ -1864,3 +1864,121 @@ placement should be eyeballed on the real machine before relying on it.
 4. Everything from the two checkpoints above (LinkedIn digest MIME
    extraction root cause, `debug_raw_source.py` not yet run for real) is
    unchanged and still pending — unrelated to this session's work.
+
+## Checkpoint — 2026-09-05 (consolidated): EMAIL_SYNC_REDESIGN_HANDOFF.md complete, all sections click-tested
+
+### Context
+This entry replaces the four partial-session entries that previously
+sat here ("Follow-up checkpoint — 2026-09-04/05", "§3 frontend
+finished, §5 verified", the drop-columns work done in a separate chat
+whose transcript was carried into a later session, and "Postings gaps
+#1/#2 built") — reconciled into one now that every piece has been
+confirmed working on the real machine, per this doc's own note that
+the chain shouldn't grow unbounded. The individual per-session
+implementation narration (which file/line each change touched, why
+each design choice was made) has been trimmed; what follows is the
+final state and what's been verified. If a future session needs the
+blow-by-blow reasoning, it's in this conversation's history.
+
+`EMAIL_SYNC_REDESIGN_HANDOFF.md` (the doc mapping an interactive
+prototype's features onto this app's Needs-Triage/Job-Postings kanban
+board) is now **fully implemented**, including two gaps found during a
+mockup-vs-real-app comparison that weren't in the original doc.
+
+### What's built (all confirmed via real click-testing on the actual machine)
+
+**§1 — Board drag-and-drop, multi-select, bulk actions:**
+Needs-Triage cards support checkboxes + a bulk bar (Mark as postings /
+Dismiss selected) in Board view, matching what List view already had.
+Group drag: dragging a card that's part of the current multi-select
+applies the drop action to the whole selection (`bulkMarkPosting`,
+sequential calls like the existing `bulkDismiss`).
+
+Beyond the original doc's scope: the "Applications" drop zone was
+split into three literal columns — **Interviews** / **Rejections** /
+**Updates** (`STATUS_DROP_COLUMNS`) — each carrying an `intent`
+(`interviewing` / `rejected` / `null` for Updates, which is attach-only
+since assessment invites don't map to a real pipeline status).
+`quickAttach(discoveryId, itemKey, intent)` attaches the email and, if
+an intent is set, also fires the existing application-status-override
+endpoint — same one the Pipeline board's own drag-and-drop uses.
+`resolvingIntent`/`reviewingIntent` thread the intent through both the
+quick-pick resolver and the "create new application" path, with the
+resolver/review modals showing a "Will also mark the application
+Interviewing/Rejected" line when relevant.
+
+**§2 — "Sort all from this sender":** already existed end to end
+before this work began (backend + frontend) — confirmed, no changes
+needed.
+
+**§3 — Job Postings polish:** star/save toggle (persisted to backend
+via `job_postings.saved`, better than the mockup's in-memory-only
+version); sort by newest/oldest/company/pay (pay parses the free-text
+`salary` field, degrades gracefully on blanks/unparseable values);
+grid/list view toggle (persisted to `localStorage` under
+`jth_postings_view`). Saved items are a pre-sort partition, not part of
+the sort comparator, per the doc's instruction.
+
+**§4 — Undo-on-dismiss toast:** symmetric `POST .../{id}/restore`
+endpoints (chosen over client-side-only undo, consistent with this
+app's existing `status_history` pattern) back a 5-second toast with an
+Undo button; dismissed items grey out immediately and are only really
+removed once the undo window expires.
+
+**§5 — Accessibility pass:** real `<button>` elements throughout this
+redesign's scope (not the unrelated `MasterList`/pipeline-list
+`<div onClick>` patterns elsewhere in the app, which were deliberately
+left alone as out of scope); `:focus-visible` outline rules;
+`aria-live="polite"` + `role="status"` on the undo toast;
+`prefers-reduced-motion` override for kanban/toast transitions.
+
+**Postings gap #1 (found via mockup comparison, not in the original
+doc):** `JobPostingCard` now always has a click-through even when
+`posting_url` extraction failed — "Search for it ↗" (a Google search
+on title+company) instead of a dead end.
+
+**Postings gap #2 (also found via mockup comparison):** an "Apply"
+button opens a confirm modal (company/role/status, pre-filled) backed
+by a new `POST /api/job-postings/{job_id}/apply` endpoint — reuses the
+same `create_application_folder()`/`build()` pipeline as
+`accept_discovery()`, saves the original digest email as PDF evidence,
+links the account_match, and records `job_postings.applied_item_key`
+so the card flips to a green "✓ In pipeline" pill (re-checked live
+against the current applications list, so it correctly reverts to
+"Apply" if that application is later deleted). Guards against
+double-apply with a 409.
+
+### Tests
+**343/343 passing on the real machine** (confirmed by the user running
+the actual suite, not just this sandbox's syntax/manual checks) — 333
+original + 10 added across this arc (`test_discoveries.py`:
+restore/save endpoints; `test_job_postings_store.py`: `saved` and
+`applied_item_key` column/behavior tests).
+
+### Manually verified on the real machine (not just sandboxed)
+- Dragging a Needs-Triage card onto Interviews/Rejections/Updates:
+  resolver shows the right "will also mark..." line, picking an
+  application both attaches the email and flips its status (or just
+  attaches, for Updates) — confirmed via Pipeline afterward.
+- A posting with no `posting_url` shows "Search for it ↗" and opens a
+  working search.
+- "Apply" on a posting creates the application with evidence PDF,
+  flips the card to "✓ In pipeline", and the pill correctly jumps to
+  that Pipeline item.
+- Screenshot-confirmed: Job Postings board renders correctly (star
+  icons, sort dropdown, grid/list toggle, Search-for-it/Apply/Dismiss
+  buttons all present and laid out as intended).
+
+### Remaining / not part of this arc
+- `MasterList`/pipeline-list accessibility pass — explicitly out of
+  `EMAIL_SYNC_REDESIGN_HANDOFF.md`'s scope, noted here only in case
+  it's wanted as separate future work.
+- Everything from checkpoints above this one (LinkedIn digest MIME
+  extraction root cause, `debug_raw_source.py` investigation) is
+  unchanged and still pending — unrelated to this arc.
+
+### Latest Returned ZIP
+- Filename: `jobtracker-hub-checkpoint-20260905d.zip`
+- Returned/attached to user: confirmed — user ran the real test suite
+  and clicked through all three postings verification steps against
+  this build.

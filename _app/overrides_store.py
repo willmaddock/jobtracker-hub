@@ -286,6 +286,20 @@ CREATE TABLE IF NOT EXISTS job_postings (
     -- 'new' (default) | 'dismissed' -- dismissing hides a job from the
     -- board without deleting it, same UX shape as discovered_matches.
     status TEXT NOT NULL DEFAULT 'new',
+    -- 0/1 -- starred/saved by the user (EMAIL_SYNC_REDESIGN_HANDOFF.md
+    -- section 3). Independent of status: a saved job can still be
+    -- dismissed, at which point it drops off the board like any other
+    -- dismissed posting despite being saved.
+    saved INTEGER NOT NULL DEFAULT 0,
+    -- item_key of the application this posting was turned into via
+    -- POST /api/job-postings/{id}/apply (EMAIL_SYNC_REDESIGN_HANDOFF.md
+    -- section 3, "Apply" button / "In pipeline" indicator), NULL until
+    -- that happens. Not a foreign key -- item_keys are derived from
+    -- folder paths and can outlive or vanish independent of this table
+    -- (see item_key_for's docstring in api.py) -- so callers re-check
+    -- this against the live applications list before trusting it's
+    -- still valid, the same way discovery attach/quickAttach already do.
+    applied_item_key TEXT,
     created_at TEXT NOT NULL,
     -- See posting_extract.compute_dedupe_key(): account_id + normalized
     -- posting URL when available, else account_id + message_id +
@@ -332,6 +346,14 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.commit()
     if "posting_urls" not in disc_cols:
         conn.execute("ALTER TABLE discovered_matches ADD COLUMN posting_urls TEXT")
+        conn.commit()
+
+    jp_cols = {r["name"] for r in conn.execute("PRAGMA table_info(job_postings)")}
+    if "saved" not in jp_cols:
+        conn.execute("ALTER TABLE job_postings ADD COLUMN saved INTEGER NOT NULL DEFAULT 0")
+        conn.commit()
+    if "applied_item_key" not in jp_cols:
+        conn.execute("ALTER TABLE job_postings ADD COLUMN applied_item_key TEXT")
         conn.commit()
 
 
@@ -1126,6 +1148,22 @@ def get_job_posting(conn: sqlite3.Connection, job_id: int) -> dict | None:
 def set_job_posting_status(conn: sqlite3.Connection, job_id: int, status: str) -> None:
     """status in {'new', 'dismissed'}."""
     conn.execute("UPDATE job_postings SET status = ? WHERE id = ?", (status, job_id))
+    conn.commit()
+
+
+def set_job_posting_applied(conn: sqlite3.Connection, job_id: int, item_key: str) -> None:
+    """Links a job posting to the application it became, via POST
+    /api/job-postings/{id}/apply. See the applied_item_key column comment
+    on the job_postings table for why this isn't a foreign key."""
+    conn.execute("UPDATE job_postings SET applied_item_key = ? WHERE id = ?", (item_key, job_id))
+    conn.commit()
+
+
+def set_job_posting_saved(conn: sqlite3.Connection, job_id: int, saved: bool) -> None:
+    """Toggles the starred/saved flag (EMAIL_SYNC_REDESIGN_HANDOFF.md
+    section 3) -- independent of status, so a dismissed job keeps
+    whatever saved value it had."""
+    conn.execute("UPDATE job_postings SET saved = ? WHERE id = ?", (1 if saved else 0, job_id))
     conn.commit()
 
 

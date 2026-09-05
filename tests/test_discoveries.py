@@ -348,6 +348,75 @@ def test_mark_posting_already_decided_discovery_is_409(client, api_module, conne
     assert resp.status_code == 409
 
 
+# --- restore endpoint (undo-on-dismiss toast, EMAIL_SYNC_REDESIGN_HANDOFF.md section 4) ---
+
+def test_restore_discovery_undoes_dismiss(client, api_module, connected_account):
+    discovery = _discover_one(client, api_module, connected_account)
+    dismiss = client.post(f"/api/discoveries/{discovery['id']}/dismiss")
+    assert dismiss.status_code == 200
+    assert client.get("/api/discoveries").json() == []
+
+    restore = client.post(f"/api/discoveries/{discovery['id']}/restore")
+    assert restore.status_code == 200
+    restored = client.get("/api/discoveries").json()
+    assert len(restored) == 1
+    assert restored[0]["id"] == discovery["id"]
+
+
+def test_restore_unknown_discovery_is_404(client, linked):
+    resp = client.post("/api/discoveries/999999/restore")
+    assert resp.status_code == 404
+
+
+def test_restore_job_posting_undoes_dismiss(client, api_module, connected_account):
+    discovery = _discover_one(client, api_module, connected_account)
+    with patch.object(
+        api_module.mailapp, "get_message_preview", return_value=_linkedin_fixture_body()
+    ):
+        client.post(f"/api/discoveries/{discovery['id']}/mark-posting")
+    job_id = client.get("/api/job-postings").json()[0]["id"]
+
+    dismiss = client.post(f"/api/job-postings/{job_id}/dismiss")
+    assert dismiss.status_code == 200
+    remaining_ids = {p["id"] for p in client.get("/api/job-postings").json()}
+    assert job_id not in remaining_ids
+
+    restore = client.post(f"/api/job-postings/{job_id}/restore")
+    assert restore.status_code == 200
+    restored_ids = {p["id"] for p in client.get("/api/job-postings").json()}
+    assert job_id in restored_ids
+
+
+def test_restore_unknown_job_posting_is_404(client, linked):
+    resp = client.post("/api/job-postings/999999/restore")
+    assert resp.status_code == 404
+
+
+def test_save_job_posting_toggles_flag_and_returns_postings_list(client, api_module, connected_account):
+    discovery = _discover_one(client, api_module, connected_account)
+    with patch.object(
+        api_module.mailapp, "get_message_preview", return_value=_linkedin_fixture_body()
+    ):
+        client.post(f"/api/discoveries/{discovery['id']}/mark-posting")
+    job_id = client.get("/api/job-postings").json()[0]["id"]
+
+    resp = client.post(f"/api/job-postings/{job_id}/save", json={"saved": True})
+    assert resp.status_code == 200
+    postings = resp.json()
+    assert isinstance(postings, list)
+    saved_job = next(p for p in postings if p["id"] == job_id)
+    assert saved_job["saved"] is True or saved_job["saved"] == 1
+
+    resp2 = client.post(f"/api/job-postings/{job_id}/save", json={"saved": False})
+    unsaved_job = next(p for p in resp2.json() if p["id"] == job_id)
+    assert unsaved_job["saved"] is False or unsaved_job["saved"] == 0
+
+
+def test_save_unknown_job_posting_is_404(client, linked):
+    resp = client.post("/api/job-postings/999999/save", json={"saved": True})
+    assert resp.status_code == 404
+
+
 # --- attach endpoint (ambiguous company-only sync hits) --------------------
 # Distinct from /accept above: /accept creates a brand-new item from an
 # 'unmatched' discovery, while /attach links an 'ambiguous' discovery

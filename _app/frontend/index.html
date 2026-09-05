@@ -361,10 +361,29 @@
   .kanban-col.drag-over{background:#3B82F61c;border-color:var(--accent-soft);}
   .kanban-col-head{font-weight:700;font-size:12.5px;padding-bottom:8px;border-bottom:2px solid var(--border);margin-bottom:10px;display:flex;align-items:center;gap:6px;}
   .kanban-cards{overflow-y:auto;display:flex;flex-direction:column;gap:10px;flex:1;}
+  .kanban-cards-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;overflow-y:auto;flex:1;}
+  .posting-card-grid{display:flex;flex-direction:column;}
+  .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;}
+  /* Accessibility pass (EMAIL_SYNC_REDESIGN_HANDOFF.md section 5): a
+     visible focus ring for keyboard users on interactive elements that
+     don't already get a clear one from the browser default. */
+  a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible,
+  [tabindex]:focus-visible {
+    outline:2px solid var(--accent, #3B82F6);
+    outline-offset:2px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .kanban-card, .kanban-col, .toast, .toast-stack * {
+      transition:none !important;
+      animation:none !important;
+    }
+  }
   .kanban-card{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:10px 12px;cursor:grab;box-shadow:var(--card-shadow);transition:opacity .15s ease,transform .15s ease,border-color .15s ease;}
   .kanban-card:hover{border-color:var(--accent-soft);}
   .kanban-card:active{cursor:grabbing;}
   .kanban-card.dragging{opacity:.35;transform:scale(.98);}
+  .kanban-card.selected{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent);}
+  .kanban-card.pending-dismiss{opacity:.4;}
   .kanban-card.optimistic{opacity:.6;}
   .kanban-card.stale{border-color:#EF444488;}
   .kanban-card-title{font-size:13px;font-weight:600;color:var(--text-strong);}
@@ -692,6 +711,25 @@ const DEFAULT_STATUS_COLORS = {
   applied: "#3B82F6", interviewing: "#F59E0B", rejected: "#EF4444", drafted: "#9aa4b2", unknown: "#5b6472",
 };
 const DEFAULT_STATUS_ORDER = ["drafted","applied","interviewing","rejected","unknown"];
+// The three literal drop columns on the Email Sync board
+// (EMAIL_SYNC_REDESIGN_HANDOFF.md's "Applications" column, split out per
+// the mockup's Interviews/Rejections/Updates kanban). `intent` is the
+// manual_status applied once the email is actually attached to a picked
+// application -- "update" has no real status in db.STATUS_ORDER (it
+// covers assessment invites, portal notices, etc. per the mockup's own
+// "Other updates" description), so its intent is null: attach only, no
+// status change. Colors reuse the app's own status palette rather than
+// the mockup's light-theme ones, except "update" which has no existing
+// status color -- picked a distinct violet that doesn't collide with
+// applied/interviewing/rejected.
+const STATUS_DROP_COLUMNS = [
+  {key:"interviewing", intent:"interviewing", label:"Interviews", color: DEFAULT_STATUS_COLORS.interviewing,
+    landingCopy:"an existing application and mark it Interviewing."},
+  {key:"rejected", intent:"rejected", label:"Rejections", color: DEFAULT_STATUS_COLORS.rejected,
+    landingCopy:"an existing application and mark it Rejected."},
+  {key:"updates", intent:null, label:"Updates", color:"#8B5CF6",
+    landingCopy:"an existing application \u2014 assessment invites, portal notices, and other updates don\u2019t change its status."},
+];
 const DEFAULT_SECTION_LABELS = {
   applications:"\u{1F4CB} Applications", credentials:"\u{1F393} Credentials", network:"\u{1F91D} Recommendations & Network",
   resume_library:"\u{1F4C4} Resume Library", leads:"\u{1F50D} Leads", compliance:"\u{1F5C2}\uFE0F Case Management",
@@ -1638,12 +1676,63 @@ function TrackerCreationActions({layout, packaged, onError, existingWorkspaces, 
   );
 }
 
+// Generic in-app stand-in for window.confirm(). Browsers (Safari in
+// particular) will silently suppress repeated confirm()/alert() dialogs
+// within a session once enough have fired — no visible dialog, and
+// window.confirm() just returns false immediately. That makes a
+// destructive action look like it did nothing at all. This modal can't be
+// suppressed that way since it's just DOM/React state, not a native
+// dialog call.
+//
+// Rendered via createPortal straight to document.body rather than in
+// place: callers like WorkspacePopover live inside an element with
+// backdrop-filter (the glassy popover panels), and per spec any element
+// with `filter`/`backdrop-filter` set establishes a containing block for
+// its position:fixed descendants. Without the portal, this modal's
+// fixed-position backdrop would be confined to that small popover's box
+// instead of covering the viewport — rendering it clipped to almost
+// nothing, which looks exactly like "nothing happens" when you click
+// confirm/cancel even though the click is registering fine.
+function ConfirmModal({title, message, confirmLabel, danger, onConfirm, onCancel}){
+  useEffect(() => {
+    function onKey(e){ if (e.key === "Escape") onCancel(); }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onCancel]);
+
+  return ReactDOM.createPortal((
+    // Explicit z-index override here, not on the shared .modal-backdrop
+    // class: this modal can be opened from *inside* an already-open
+    // popover (e.g. the workspace switcher, z-index 70), and since it now
+    // portals to document.body it's stacked by raw z-index rather than
+    // DOM nesting. The shared class's z-index:60 sat below that popover,
+    // so the popover visually covered the modal — clicking a hidden
+    // Confirm/Cancel button worked, but you couldn't see what you were
+    // clicking. 95 sits above every other z-index in this app (highest
+    // otherwise is the command palette at 80).
+    <div className="modal-backdrop" onClick={onCancel} style={{zIndex:95}}>
+      <div className="modal" onClick={e => e.stopPropagation()} style={{position:"relative", maxWidth:420}}>
+        <button className="close-x" aria-label="Close" onClick={onCancel}>{<Icon name="close"/>}</button>
+        <h2>{title}</h2>
+        <p style={{color:"var(--text-mute)", fontSize:12, marginTop:6, whiteSpace:"pre-wrap"}}>{message}</p>
+        <div style={{display:"flex", justifyContent:"flex-end", gap:8, marginTop:18}}>
+          <button className="btn" onClick={onCancel}>Cancel</button>
+          <button className={"btn" + (danger ? " danger-outline" : " primary")} onClick={onConfirm} autoFocus>
+            {confirmLabel || "Confirm"}
+          </button>
+        </div>
+      </div>
+    </div>
+  ), document.body);
+}
+
 function WorkspacePopover({onClose, anchorRef, packaged, statusInfo, anchor}){
   const [data, setData] = useState(null);   // {active, workspaces:[...]}
   const [err, setErr] = useState(null);
   const [busyId, setBusyId] = useState(null);
   const [renamingId, setRenamingId] = useState(null);
   const [renameVal, setRenameVal] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState(null); // {id, name, kind}
   const popRef = useRef(null);
   // Create/Import/Link are handled by the shared TrackerCreationActions
   // component below (§3j.4) -- this component only owns the tracker LIST
@@ -1659,18 +1748,26 @@ function WorkspacePopover({onClose, anchorRef, packaged, statusInfo, anchor}){
   // immediately undone by its own mousedown bubbling to document.
   useEffect(() => {
     function onDocMouseDown(e){
+      // ConfirmModal is rendered via createPortal straight to
+      // document.body (see its comment for why), so while it's open it's
+      // no longer a DOM descendant of popRef — a mousedown anywhere in it,
+      // including on its own Confirm/Cancel buttons, would otherwise look
+      // like an "outside click" here and slam this whole popover shut out
+      // from under the modal. Skip this handler entirely while it's open;
+      // the modal's own backdrop-click and buttons handle its dismissal.
+      if (confirmDelete) return;
       if (popRef.current && popRef.current.contains(e.target)) return;
       if (anchorRef.current && anchorRef.current.contains(e.target)) return;
       onClose();
     }
-    function onKey(e){ if (e.key === "Escape") onClose(); }
+    function onKey(e){ if (e.key === "Escape" && !confirmDelete) onClose(); }
     document.addEventListener("mousedown", onDocMouseDown);
     document.addEventListener("keydown", onKey);
     return () => {
       document.removeEventListener("mousedown", onDocMouseDown);
       document.removeEventListener("keydown", onKey);
     };
-  }, [onClose, anchorRef]);
+  }, [onClose, anchorRef, confirmDelete]);
 
   async function doSwitch(id){
     if (!data || id === data.active) { onClose(); return; }
@@ -1753,12 +1850,18 @@ function WorkspacePopover({onClose, anchorRef, packaged, statusInfo, anchor}){
     }
   }
 
-  async function doDelete(id, name, kind){
-    const isLinked = kind === "linked";
-    const message = isLinked
-      ? `Unlink "${name}"?\n\nThis only removes it from your tracker list and deletes this app's own index/notes cache for it. The folder itself — and everything in it — stays exactly where it is on disk; nothing is moved or deleted.`
-      : `Delete "${name}"?\n\nIts index/notes cache is deleted, and its tracker folder is sent to the Trash (recoverable there — this never permanently deletes anything).`;
-    if (!window.confirm(message)) return;
+  function doDelete(id, name, kind){
+    // Ask for confirmation via in-app modal rather than window.confirm --
+    // see ConfirmModal's comment: native confirm() dialogs get silently
+    // auto-suppressed by the browser after enough fire in a session, which
+    // made this action look like a dead button with no feedback at all.
+    setConfirmDelete({id, name, kind});
+  }
+
+  async function confirmDoDelete(){
+    if (!confirmDelete) return;
+    const {id} = confirmDelete;
+    setConfirmDelete(null);
     setBusyId(id);
     try {
       await apiDelete(`/api/workspaces/${encodeURIComponent(id)}`);
@@ -1845,6 +1948,21 @@ function WorkspacePopover({onClose, anchorRef, packaged, statusInfo, anchor}){
       <div className="workspace-pop-divider" />
       <TrackerCreationActions layout="popover" packaged={packaged} onError={setErr}
         existingWorkspaces={data ? data.workspaces : null} onSwitchWorkspace={doSwitch} />
+      {confirmDelete && (() => {
+        const isLinked = confirmDelete.kind === "linked";
+        return (
+          <ConfirmModal
+            title={isLinked ? `Unlink "${confirmDelete.name}"?` : `Delete "${confirmDelete.name}"?`}
+            message={isLinked
+              ? "This only removes it from your tracker list and deletes this app's own index/notes cache for it. The folder itself — and everything in it — stays exactly where it is on disk; nothing is moved or deleted."
+              : "Its index/notes cache is deleted, and its tracker folder is sent to the Trash (recoverable there — this never permanently deletes anything)."}
+            confirmLabel={isLinked ? "Unlink" : "Delete"}
+            danger={!isLinked}
+            onConfirm={confirmDoDelete}
+            onCancel={() => setConfirmDelete(null)}
+          />
+        );
+      })()}
     </div>
   );
 }
@@ -4293,16 +4411,23 @@ function timeAgo(raw){
 // section 15.
 function DiscoveryCard({d, dragId, setDragId, onDragEnd, expanded, onToggleExpand, bodyLoading, body,
   senderCount, onDismiss, onDismissSender, dismissing, onMarkPosting, marking, onQuickPick, attaching, onOpenResolver,
-  onAlwaysPosting, markingSender}){
+  onAlwaysPosting, markingSender, selected, onToggleSelected, pendingDismiss}){
   const candidates = d.candidates || [];
+  const isSelected = !!(selected && selected.has(d.id));
   return (
     <div
-      className={"kanban-card disc-card" + (dragId===d.id ? " dragging":"")}
-      draggable
-      onDragStart={e => { e.dataTransfer.setData("text/plain", String(d.id)); e.dataTransfer.effectAllowed = "move"; setDragId(d.id); }}
+      className={"kanban-card disc-card" + (dragId===d.id ? " dragging":"") + (isSelected ? " selected":"") + (pendingDismiss ? " pending-dismiss":"")}
+      draggable={!pendingDismiss}
+      aria-busy={pendingDismiss ? "true" : undefined}
+      onDragStart={e => { if (pendingDismiss) { e.preventDefault(); return; } e.dataTransfer.setData("text/plain", String(d.id)); e.dataTransfer.effectAllowed = "move"; setDragId(d.id); }}
       onDragEnd={onDragEnd}
     >
       <div className="kanban-card-title" style={{display:"flex", alignItems:"center", gap:6}}>
+        {onToggleSelected && (
+          <input type="checkbox" checked={isSelected} onClick={e => e.stopPropagation()}
+            onChange={() => onToggleSelected(d.id)} style={{flex:"none", cursor:"pointer"}}
+            aria-label={`Select ${d.guessed_company || "this discovery"} for bulk actions`} />
+        )}
         <span style={{flex:1, minWidth:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>
           {d.guessed_company || "Unknown company"}
         </span>
@@ -4337,15 +4462,15 @@ function DiscoveryCard({d, dragId, setDragId, onDragEnd, expanded, onToggleExpan
           {expanded ? "Hide email" : "View email"}
         </button>
         {candidates.length === 0 && (
-          <button className="btn primary" style={{fontSize:10.5, padding:"4px 8px"}} disabled={attaching === d.id} onClick={() => onOpenResolver(d)}>
+          <button className="btn primary" style={{fontSize:10.5, padding:"4px 8px"}} disabled={pendingDismiss || attaching === d.id} onClick={() => onOpenResolver(d)}>
             {"Pick application\u2026"}
           </button>
         )}
-        <button className="btn" style={{fontSize:10.5, padding:"4px 8px"}} disabled={marking === d.id} onClick={() => onMarkPosting(d.id)}>
+        <button className="btn" style={{fontSize:10.5, padding:"4px 8px"}} disabled={pendingDismiss || marking === d.id} onClick={() => onMarkPosting(d.id)}>
           {marking === d.id ? "Marking\u2026" : "Mark as posting"}
         </button>
-        <button className="btn" style={{fontSize:10.5, padding:"4px 8px"}} disabled={dismissing === d.id} onClick={() => onDismiss(d.id)}>
-          {dismissing === d.id ? "\u2026" : "Dismiss"}
+        <button className="btn" style={{fontSize:10.5, padding:"4px 8px"}} disabled={pendingDismiss || dismissing === d.id} onClick={() => onDismiss(d.id)}>
+          {pendingDismiss ? "Dismissed" : (dismissing === d.id ? "\u2026" : "Dismiss")}
         </button>
       </div>
       {d.sender && senderCount > 1 && (
@@ -4392,6 +4517,43 @@ function jobSourceDisplayName(source){
   return JOB_SOURCE_DISPLAY_NAMES[source.toLowerCase()] || source;
 }
 
+// job.salary is a free-text field produced by posting_extract.py (e.g.
+// "$120,000 - $150,000", "$45/hr", "Competitive"), so sort-by-pay has to
+// degrade gracefully rather than assume a clean number is always there.
+// Pulls the first dollar figure out and normalizes hourly rates to a
+// rough annual equivalent (2080 hrs/yr) purely so mixed hourly/salary
+// listings compare sanely -- this is a sort heuristic, not a source of
+// truth, and is never shown to the user.
+function parseSalaryForSort(salary) {
+  if (!salary) return null;
+  const s = String(salary);
+  const m = s.match(/([\d][\d,]*)(?:\.\d+)?/);
+  if (!m) return null;
+  const n = parseFloat(m[1].replace(/,/g, ""));
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return /\/\s*hr|hour/i.test(s) ? n * 2080 : n;
+}
+
+function postingComparator(postingSort) {
+  return (a, b) => {
+    if (postingSort === "company") {
+      const av = (a.company || "").toLowerCase(), bv = (b.company || "").toLowerCase();
+      if (!av && bv) return 1;
+      if (av && !bv) return -1;
+      return av.localeCompare(bv);
+    }
+    if (postingSort === "pay") {
+      const av = parseSalaryForSort(a.salary), bv = parseSalaryForSort(b.salary);
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1;   // blank/unparseable salaries sort last
+      if (bv == null) return -1;
+      return bv - av;             // highest pay first
+    }
+    const av = a.received_at || "", bv = b.received_at || "";
+    return postingSort === "oldest" ? av.localeCompare(bv) : bv.localeCompare(av);
+  };
+}
+
 // One card per individually-extracted job (title/company/location/
 // salary/employment_type/source/age + "Open job") -- NOT one card per
 // raw digest email. See posting_extract.py + the job_postings table in
@@ -4399,13 +4561,35 @@ function jobSourceDisplayName(source){
 // LinkedIn or Handshake digest commonly contains several distinct jobs,
 // each of which gets its own row/card here so a person can act on (or
 // dismiss) one listing without losing the others from the same email.
-function JobPostingCard({job, dismissing, onDismiss}){
+function JobPostingCard({job, dismissing, onDismiss, pendingDismiss, saving, onToggleSave, view,
+  appliedApp, onApply, applying, onOpenApplied}){
   const meta = [job.company, job.location].filter(Boolean).join(" \u2022 ");
   const age = timeAgo(job.received_at);
+  const isSaved = !!job.saved;
+  // Fallback link when posting_url extraction failed (best-effort, from
+  // posting_extract.py -- happens often on digest emails): give the user
+  // *something* clickable instead of a dead end besides Dismiss, a
+  // pre-filled Google search for the title+company (EMAIL_SYNC_REDESIGN_
+  // HANDOFF.md postings gap #1).
+  const searchUrl = job.posting_url ? null :
+    `https://www.google.com/search?q=${encodeURIComponent([job.title, job.company, "job posting"].filter(Boolean).join(" "))}`;
   return (
-    <div className="kanban-card disc-card">
-      <div className="kanban-card-title" style={{overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>
-        {job.title || "(untitled role)"}
+    <div className={"kanban-card disc-card" + (pendingDismiss ? " pending-dismiss":"") + (view === "grid" ? " posting-card-grid":"")} aria-busy={pendingDismiss ? "true" : undefined}>
+      <div className="kanban-card-top" style={{display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:6}}>
+        <div className="kanban-card-title" style={{overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>
+          {job.title || "(untitled role)"}
+        </div>
+        {onToggleSave && (
+          <button type="button" className="btn subtle posting-star-btn"
+            aria-label={isSaved ? "Unsave this job posting" : "Save this job posting"}
+            aria-pressed={isSaved}
+            title={isSaved ? "Saved" : "Save"}
+            disabled={saving === job.id}
+            style={{padding:"2px 4px", fontSize:14, lineHeight:1, flexShrink:0, color: isSaved ? "var(--accent, #F59700)" : "var(--text-soft)"}}
+            onClick={() => onToggleSave(job.id, !isSaved)}>
+            {isSaved ? "\u2605" : "\u2606"}
+          </button>
+        )}
       </div>
       {meta && (
         <div style={{fontSize:11, color:"var(--text-soft)", marginTop:2, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}} title={meta}>
@@ -4419,15 +4603,34 @@ function JobPostingCard({job, dismissing, onDismiss}){
         <span>{age ? `posted ${age}` : (job.received_at || "")}</span>
       </div>
       <div style={{display:"flex", flexWrap:"wrap", gap:6, marginTop:8, alignItems:"center"}}>
-        {job.posting_url && (
+        {job.posting_url ? (
           <a href={job.posting_url}
-            className="btn primary" style={{fontSize:10.5, padding:"4px 8px", textDecoration:"none"}}
+            className="btn" style={{fontSize:10.5, padding:"4px 8px", textDecoration:"none"}}
             onClick={e => { e.preventDefault(); openExternalUrl(job.posting_url); }}>
-            Open job <Icon name="open_ext" size={11} style={{marginLeft:3, verticalAlign:"-1px"}}/>
+            View posting <Icon name="open_ext" size={11} style={{marginLeft:3, verticalAlign:"-1px"}}/>
+          </a>
+        ) : (
+          <a href={searchUrl}
+            className="btn" style={{fontSize:10.5, padding:"4px 8px", textDecoration:"none"}}
+            title="No link was captured for this listing -- search for it instead."
+            onClick={e => { e.preventDefault(); openExternalUrl(searchUrl); }}>
+            Search for it <Icon name="open_ext" size={11} style={{marginLeft:3, verticalAlign:"-1px"}}/>
           </a>
         )}
-        <button className="btn" style={{fontSize:10.5, padding:"4px 8px"}} disabled={dismissing === job.id} onClick={() => onDismiss(job.id)}>
-          {dismissing === job.id ? "\u2026" : "Dismiss"}
+        {appliedApp ? (
+          <button type="button" className="btn" style={{fontSize:10.5, padding:"4px 8px", color:"#34D399", borderColor:"#34D399"}}
+            title="Already turned into an application -- click to open it"
+            onClick={() => onOpenApplied && onOpenApplied(appliedApp)}>
+            {"\u2713"} In pipeline
+          </button>
+        ) : onApply && (
+          <button type="button" className="btn primary" style={{fontSize:10.5, padding:"4px 8px"}}
+            disabled={applying === job.id} onClick={() => onApply(job)}>
+            {applying === job.id ? "\u2026" : "Apply"}
+          </button>
+        )}
+        <button className="btn" style={{fontSize:10.5, padding:"4px 8px"}} disabled={pendingDismiss || dismissing === job.id} onClick={() => onDismiss(job.id)}>
+          {pendingDismiss ? "Dismissed" : (dismissing === job.id ? "\u2026" : "Dismiss")}
         </button>
       </div>
     </div>
@@ -4435,9 +4638,13 @@ function JobPostingCard({job, dismissing, onDismiss}){
 }
 
 function DiscoveriesBoard({discoveries, jobPostings, dismissingJobId, onDismissJobPosting,
+  savingJobId, onToggleSaveJob, apps, applyingJobId, onApplyJob, onOpenApplied,
   expandedId, onToggleExpand, bodies, bodyLoadingId, dismissing, onDismiss,
   onDismissSender, marking, onMarkPosting, attaching, onQuickPick, onOpenResolver, senderCounts, postingSort, setPostingSort,
-  onAlwaysPosting, markingSender, postingFilter, setPostingFilter}){
+  postingsView, setPostingsView,
+  onAlwaysPosting, markingSender, postingFilter, setPostingFilter,
+  selected, onToggleSelected, bulkBusy, onBulkDismiss, onBulkMarkPosting,
+  pendingDismissIds, pendingDismissJobIds}){
   const [dragId, setDragId] = useState(null);
   const [overCol, setOverCol] = useState(null);
 
@@ -4453,30 +4660,61 @@ function DiscoveriesBoard({discoveries, jobPostings, dismissingJobId, onDismissJ
         (p.company || "").toLowerCase().includes(q)
       );
     }
-    list = [...list].sort((a,b) => {
-      const av = a.received_at || "", bv = b.received_at || "";
-      return postingSort === "oldest" ? av.localeCompare(bv) : bv.localeCompare(av);
-    });
-    return list;
+    // "Saved" is a pre-sort partition (saved items always float to the
+    // top), not part of the comparator itself -- see
+    // EMAIL_SYNC_REDESIGN_HANDOFF.md section 3.
+    const saved = list.filter(p => p.saved);
+    const rest = list.filter(p => !p.saved);
+    const cmp = postingComparator(postingSort);
+    return [...saved].sort(cmp).concat([...rest].sort(cmp));
   }, [jobPostings, postingSort, postingFilter]);
 
   const needsTriage = useMemo(() => discoveries.filter(d => d.kind !== "posting"), [discoveries]);
+  const needsTriageIds = useMemo(() => new Set(needsTriage.map(d => d.id)), [needsTriage]);
+
+  // Group drag: if the card being dragged is part of the current
+  // multi-select, the drop should act on every selected (still
+  // Needs-Triage) id, not just the one the pointer happened to land on --
+  // see EMAIL_SYNC_REDESIGN_HANDOFF.md section 1's "group drag" note.
+  const dragGroupIds = (draggedId) => {
+    if (selected && selected.has(draggedId) && selected.size > 1) {
+      return Array.from(selected).filter(id => needsTriageIds.has(id));
+    }
+    return [draggedId];
+  };
 
   const dragEnd = () => { setDragId(null); setOverCol(null); };
 
   const dropOnPostings = (e) => {
     e.preventDefault(); setOverCol(null);
     const id = Number(e.dataTransfer.getData("text/plain") || dragId);
-    const d = byId[id];
-    if (d && d.kind !== "posting") onMarkPosting(id);
+    const ids = dragGroupIds(id);
+    if (ids.length > 1 && onBulkMarkPosting) {
+      onBulkMarkPosting(ids);
+    } else {
+      const d = byId[id];
+      if (d && d.kind !== "posting") onMarkPosting(id);
+    }
     setDragId(null);
   };
 
-  const dropOnApplications = (e) => {
+  // Interviews / Rejections / Updates all funnel through the same
+  // resolve/attach flow as the old single "Applications" column did --
+  // an email can't just become "an interview," it has to attach to one
+  // specific application record, so a multi-card drop here still can't
+  // be resolved in bulk (only the single dragged card opens the
+  // resolver, even inside a selection). What's new is `intent`: the
+  // column the card was dropped on travels along as the status to apply
+  // once an application is actually picked (see EmailHubPage's
+  // quickAttach/openCreateFromResolver). Updates carries `null` --
+  // "other updates" (assessment invites, portal notices, etc., per the
+  // mockup) don't imply any particular status, so dropping there is a
+  // plain attach with no status change.
+  const dropOnStatusColumn = (intent) => (e) => {
     e.preventDefault(); setOverCol(null);
     const id = Number(e.dataTransfer.getData("text/plain") || dragId);
     const d = byId[id];
-    if (d && d.kind !== "posting") onOpenResolver(d);
+    if (d && d.kind !== "posting") onOpenResolver(d, intent);
     setDragId(null);
   };
 
@@ -4487,8 +4725,13 @@ function DiscoveriesBoard({discoveries, jobPostings, dismissingJobId, onDismissJ
   const cardProps = {
     dragId, setDragId, onDragEnd: dragEnd, onToggleExpand, bodyLoadingId, bodies,
     onDismiss, onDismissSender, dismissing, onMarkPosting, marking, onQuickPick, attaching, onOpenResolver,
-    onAlwaysPosting, markingSender,
+    onAlwaysPosting, markingSender, selected, onToggleSelected,
   };
+
+  const selectedTriageIds = useMemo(
+    () => (selected ? Array.from(selected).filter(id => needsTriageIds.has(id)) : []),
+    [selected, needsTriageIds]
+  );
 
   return (
     <div className="kanban disc-board">
@@ -4496,13 +4739,31 @@ function DiscoveriesBoard({discoveries, jobPostings, dismissingJobId, onDismissJ
         onDragOver={e => { e.preventDefault(); setOverCol("postings"); }}
         onDragLeave={() => setOverCol(c => c === "postings" ? null : c)}
         onDrop={dropOnPostings}>
-        <div className="kanban-col-head" style={{justifyContent:"space-between"}}>
+        <div className="kanban-col-head" style={{justifyContent:"space-between", gap:6}}>
           <span>Job Postings &middot; {postings.length}</span>
-          <button className="btn subtle" style={{fontSize:10, padding:"2px 6px", fontWeight:600}}
-            onClick={() => setPostingSort(s => s === "newest" ? "oldest" : "newest")}
-            title="Toggle sort order">
-            {postingSort === "newest" ? "Newest" : "Oldest"}
-          </button>
+          <div style={{display:"flex", alignItems:"center", gap:6}}>
+            {setPostingSort && (
+              <label style={{display:"flex", alignItems:"center", gap:0}}>
+                <span className="sr-only">Sort job postings by</span>
+                <select value={postingSort} onChange={e => setPostingSort(e.target.value)}
+                  className="btn subtle" style={{fontSize:10, padding:"2px 4px", fontWeight:600}}
+                  title="Sort job postings">
+                  <option value="newest">Newest</option>
+                  <option value="oldest">Oldest</option>
+                  <option value="company">Company</option>
+                  <option value="pay">Pay</option>
+                </select>
+              </label>
+            )}
+            {setPostingsView && (
+              <button type="button" className="btn subtle" style={{fontSize:10, padding:"2px 6px", fontWeight:600}}
+                aria-pressed={postingsView === "grid"}
+                onClick={() => setPostingsView(v => v === "grid" ? "list" : "grid")}
+                title={postingsView === "grid" ? "Switch to list view" : "Switch to grid view"}>
+                {postingsView === "grid" ? "\u2637 Grid" : "\u2261 List"}
+              </button>
+            )}
+          </div>
         </div>
         {setPostingFilter && (
           <div style={{padding:"4px 8px 0"}}>
@@ -4511,9 +4772,19 @@ function DiscoveriesBoard({discoveries, jobPostings, dismissingJobId, onDismissJ
               style={{width:"100%", fontSize:11, padding:"4px 6px", boxSizing:"border-box"}} />
           </div>
         )}
-        <div className="kanban-cards">
+        <div className={"kanban-cards" + (postingsView === "grid" ? " kanban-cards-grid":"")}>
           {postings.map(p => (
-            <JobPostingCard key={p.id} job={p} dismissing={dismissingJobId} onDismiss={onDismissJobPosting} />
+            <JobPostingCard key={p.id} job={p} dismissing={dismissingJobId} onDismiss={onDismissJobPosting}
+              saving={savingJobId} onToggleSave={onToggleSaveJob}
+              view={postingsView}
+              // Re-checked against the live apps list, not just the
+              // presence of applied_item_key, in case the application it
+              // pointed to was since deleted/renamed elsewhere -- same
+              // "don't trust a stored key blindly" reasoning as
+              // quickAttach's apps.find() below.
+              appliedApp={p.applied_item_key && apps ? apps.find(a => a.item_key === p.applied_item_key) : null}
+              onApply={onApplyJob} applying={applyingJobId} onOpenApplied={onOpenApplied}
+              pendingDismiss={pendingDismissJobIds && pendingDismissJobIds.has(p.id)} />
           ))}
           {postings.length === 0 && <div className="kanban-empty-col">No job listings caught yet.</div>}
         </div>
@@ -4524,6 +4795,19 @@ function DiscoveriesBoard({discoveries, jobPostings, dismissingJobId, onDismissJ
         onDragLeave={() => setOverCol(c => c === "triage" ? null : c)}
         onDrop={dropOnTriage}>
         <div className="kanban-col-head">Needs Triage &middot; {needsTriage.length}</div>
+        {selectedTriageIds.length > 1 && onBulkDismiss && onBulkMarkPosting && (
+          <div style={{display:"flex", gap:6, flexWrap:"wrap", alignItems:"center", padding:"0 8px 8px"}}>
+            <span style={{fontSize:11, color:"var(--text-soft)"}}>{selectedTriageIds.length} selected</span>
+            <button className="btn" style={{fontSize:10.5, padding:"4px 8px"}}
+              disabled={bulkBusy} onClick={() => onBulkMarkPosting(selectedTriageIds)}>
+              {bulkBusy ? "\u2026" : "Mark as postings"}
+            </button>
+            <button className="btn" style={{fontSize:10.5, padding:"4px 8px"}}
+              disabled={bulkBusy} onClick={onBulkDismiss}>
+              {bulkBusy ? "\u2026" : "Dismiss selected"}
+            </button>
+          </div>
+        )}
         <div className="kanban-cards">
           {needsTriage.map(d => (
             <DiscoveryCard key={d.id} d={d} dragId={dragId} setDragId={setDragId} onDragEnd={dragEnd}
@@ -4533,23 +4817,29 @@ function DiscoveriesBoard({discoveries, jobPostings, dismissingJobId, onDismissJ
               onDismiss={onDismiss} onDismissSender={onDismissSender} dismissing={dismissing}
               onMarkPosting={onMarkPosting} marking={marking}
               onQuickPick={onQuickPick} attaching={attaching} onOpenResolver={onOpenResolver}
-              onAlwaysPosting={onAlwaysPosting} markingSender={markingSender} />
+              onAlwaysPosting={onAlwaysPosting} markingSender={markingSender}
+              selected={selected} onToggleSelected={onToggleSelected}
+              pendingDismiss={pendingDismissIds && pendingDismissIds.has(d.id)} />
           ))}
           {needsTriage.length === 0 && <div className="kanban-empty-col">Nothing to triage.</div>}
         </div>
       </div>
 
-      <div className={"kanban-col" + (overCol === "applications" ? " drag-over":"")}
-        onDragOver={e => { e.preventDefault(); setOverCol("applications"); }}
-        onDragLeave={() => setOverCol(c => c === "applications" ? null : c)}
-        onDrop={dropOnApplications}>
-        <div className="kanban-col-head">Applications</div>
-        <div className="kanban-cards">
-          <div className="kanban-empty-col">
-            {"Drop a Needs-Triage card here \u2014 or use its chips / \u201CPick application\u2026\u201D \u2014 to attach it to an existing application, or create a new one."}
+      {STATUS_DROP_COLUMNS.map(col => (
+        <div key={col.key} className={"kanban-col" + (overCol === col.key ? " drag-over":"")}
+          onDragOver={e => { e.preventDefault(); setOverCol(col.key); }}
+          onDragLeave={() => setOverCol(c => c === col.key ? null : c)}
+          onDrop={dropOnStatusColumn(col.intent)}>
+          <div className="kanban-col-head" style={{borderColor:col.color+"66", color:col.color}}>
+            {col.label}
+          </div>
+          <div className="kanban-cards">
+            <div className="kanban-empty-col">
+              {"Drop a Needs-Triage card here \u2014 or use its chips / \u201CPick application\u2026\u201D \u2014 to attach it to " + col.landingCopy}
+            </div>
           </div>
         </div>
-      </div>
+      ))}
     </div>
   );
 }
@@ -4562,7 +4852,7 @@ function DiscoveriesBoard({discoveries, jobPostings, dismissingJobId, onDismissJ
 // inline chips on the card itself cover the common (candidates-present)
 // case without ever opening this at all; this modal is for everything
 // else, per Part 3.
-function ResolveDiscoveryModal({discovery, apps, onClose, onPick, onCreate, attaching}){
+function ResolveDiscoveryModal({discovery, apps, intent, onClose, onPick, onCreate, attaching}){
   const [q, setQ] = useState("");
   const inputRef = useRef(null);
   useEffect(() => { if (inputRef.current) inputRef.current.focus(); }, []);
@@ -4581,6 +4871,11 @@ function ResolveDiscoveryModal({discovery, apps, onClose, onPick, onCreate, atta
       <div className="modal" onClick={e => e.stopPropagation()} style={{position:"relative", maxWidth:520}}>
         <button className="close-x" aria-label="Close" onClick={onClose}>{<Icon name="close"/>}</button>
         <h2>Attach to an application</h2>
+        {intent && (
+          <p style={{fontSize:11, fontWeight:700, color: DEFAULT_STATUS_COLORS[intent] || "var(--text-soft)", marginTop:4}}>
+            {"Will also mark the application " + (intent === "interviewing" ? "Interviewing" : "Rejected") + "."}
+          </p>
+        )}
         <p style={{color:"var(--text-mute)", fontSize:12, marginTop:6, lineHeight:1.5}}>
           <strong>{discovery.subject || "(no subject)"}</strong><br/>
           {discovery.sender}{discovery.received_at ? ` \u2022 ${discovery.received_at}` : ""}
@@ -4729,6 +5024,50 @@ function EmailHubPage({fireToast, setPage, setSelectedKey, refreshStatus, refres
   const [selected, setSelected] = useState(() => new Set()); // discovery ids checked for bulk actions
   const [bulkBusy, setBulkBusy] = useState(false);
 
+  // ---- undo-on-dismiss (EMAIL_SYNC_REDESIGN_HANDOFF.md section 4) ----
+  // Dismiss (single, bulk, or job-posting) still calls /dismiss right
+  // away -- but instead of immediately refetching (which would yank the
+  // row out from under the user), the id stays visible-but-greyed for a
+  // few seconds with an Undo toast. Only once that window elapses
+  // without Undo do we refetch and let the row actually disappear.
+  // Undo itself calls the /restore endpoints added alongside this.
+  const UNDO_WINDOW_MS = 5000;
+  const dismissTimers = useRef({});
+  const [pendingDismissDiscoveryIds, setPendingDismissDiscoveryIds] = useState(() => new Set());
+  const [pendingDismissJobIds, setPendingDismissJobIds] = useState(() => new Set());
+  const [dismissToast, setDismissToast] = useState(null); // {kind: 'discovery'|'job', ids, label}
+
+  const scheduleDismissRemoval = (kind, ids, label) => {
+    const setPending = kind === "discovery" ? setPendingDismissDiscoveryIds : setPendingDismissJobIds;
+    setPending(prev => { const next = new Set(prev); ids.forEach(id => next.add(id)); return next; });
+    setDismissToast({kind, ids, label});
+    const key = `${kind}:${ids.join(",")}`;
+    const timeoutId = setTimeout(async () => {
+      delete dismissTimers.current[key];
+      setPending(prev => { const next = new Set(prev); ids.forEach(id => next.delete(id)); return next; });
+      setDismissToast(cur => (cur && cur.kind === kind && cur.ids === ids) ? null : cur);
+      if (kind === "discovery") await loadDiscoveries(); else await loadJobPostings();
+    }, UNDO_WINDOW_MS);
+    dismissTimers.current[key] = timeoutId;
+  };
+
+  const undoDismiss = async () => {
+    if (!dismissToast) return;
+    const {kind, ids} = dismissToast;
+    const setPending = kind === "discovery" ? setPendingDismissDiscoveryIds : setPendingDismissJobIds;
+    const key = `${kind}:${ids.join(",")}`;
+    const t = dismissTimers.current[key];
+    if (t) { clearTimeout(t); delete dismissTimers.current[key]; }
+    setPending(prev => { const next = new Set(prev); ids.forEach(id => next.delete(id)); return next; });
+    setDismissToast(null);
+    const base = kind === "discovery" ? "/api/discoveries" : "/api/job-postings";
+    for (const id of ids) {
+      try { await apiPost(`${base}/${id}/restore`, {}); }
+      catch (e) { /* best effort -- a failed restore just leaves that one dismissed */ }
+    }
+    if (kind === "discovery") await loadDiscoveries(); else await loadJobPostings();
+  };
+
   const loadDiscoveries = async () => {
     try {
       const list = await apiGet("/api/discoveries");
@@ -4743,6 +5082,13 @@ function EmailHubPage({fireToast, setPage, setSelectedKey, refreshStatus, refres
   // 'posting'), which is one row per raw digest email. ----
   const [jobPostings, setJobPostings] = useState(null);
   const [dismissingJobId, setDismissingJobId] = useState(null);
+  const [savingJobId, setSavingJobId] = useState(null);
+  // "Apply" button flow (EMAIL_SYNC_REDESIGN_HANDOFF.md postings gap #2)
+  // -- applyingJobPosting holds the posting object while its confirm
+  // modal is open; applyingJobId is only the in-flight request's job id,
+  // for disabling that one card's button, mirroring dismissingJobId.
+  const [applyingJobPosting, setApplyingJobPosting] = useState(null);
+  const [applyingJobId, setApplyingJobId] = useState(null);
 
   const loadJobPostings = async () => {
     try { setJobPostings(await apiGet("/api/job-postings")); }
@@ -4753,9 +5099,27 @@ function EmailHubPage({fireToast, setPage, setSelectedKey, refreshStatus, refres
     setDismissingJobId(jobId); setDiscError(null);
     try {
       await apiPost(`/api/job-postings/${jobId}/dismiss`, {});
-      setJobPostings(prev => (prev || []).filter(p => p.id !== jobId));
+      scheduleDismissRemoval("job", [jobId], "Dismissed.");
     } catch (e) { setDiscError(String(e.message || e)); }
     finally { setDismissingJobId(null); }
+  };
+
+  // Optimistic star/save toggle -- flips local state immediately (so the
+  // star responds without waiting on the round-trip) and rolls back on
+  // failure. Mirrors the response shape of dismiss/mark-posting (a
+  // refreshed postings list), but we apply it via setJobPostings(list)
+  // rather than a full loadJobPostings() so an in-flight scroll position
+  // / expanded state elsewhere on the board isn't disturbed.
+  const toggleSaveJob = async (jobId, nextSaved) => {
+    setSavingJobId(jobId); setDiscError(null);
+    setJobPostings(prev => (prev || []).map(p => p.id === jobId ? {...p, saved: nextSaved} : p));
+    try {
+      const list = await apiPost(`/api/job-postings/${jobId}/save`, {saved: nextSaved});
+      if (Array.isArray(list)) setJobPostings(list);
+    } catch (e) {
+      setJobPostings(prev => (prev || []).map(p => p.id === jobId ? {...p, saved: !nextSaved} : p));
+      setDiscError(String(e.message || e));
+    } finally { setSavingJobId(null); }
   };
 
   useEffect(() => { loadAccounts(); loadDiscoveries(); loadJobPostings(); }, []);
@@ -4815,7 +5179,7 @@ function EmailHubPage({fireToast, setPage, setSelectedKey, refreshStatus, refres
     try {
       await apiPost(`/api/discoveries/${id}/dismiss`, {});
       setSelected(prev => { const next = new Set(prev); next.delete(id); return next; });
-      await loadDiscoveries();
+      scheduleDismissRemoval("discovery", [id], "Dismissed.");
     } catch (e) { setDiscError(String(e.message || e)); }
     finally { setDismissing(null); }
   };
@@ -4835,11 +5199,30 @@ function EmailHubPage({fireToast, setPage, setSelectedKey, refreshStatus, refres
 
   const onAccepted = async (itemId) => {
     setReviewing(null);
+    setReviewingIntent(null);
     await loadDiscoveries();
     if (refreshApps) await refreshApps();
     if (refreshStatus) await refreshStatus();
     if (fireToast) fireToast("Application created.");
     if (itemId != null && setPage && setSelectedKey) { setPage("pipeline"); setSelectedKey(itemId); }
+  };
+
+  // Counterpart to onAccepted, for the Job Postings "Apply" flow.
+  // Updates the posting's row in place (applied_item_key) rather than a
+  // full loadJobPostings() round-trip, same optimism-after-confirmation
+  // pattern as toggleSaveJob -- the request has already succeeded by the
+  // time this runs, this is just reconciling local state with it.
+  const onApplied = async (job, result) => {
+    setApplyingJobPosting(null);
+    setJobPostings(prev => (prev || []).map(p => p.id === job.id ? {...p, applied_item_key: result.item_key} : p));
+    if (refreshApps) await refreshApps();
+    if (refreshStatus) await refreshStatus();
+    if (fireToast) fireToast("Application created.");
+    if (result.item_id != null && setPage && setSelectedKey) { setPage("pipeline"); setSelectedKey(result.item_id); }
+  };
+
+  const openApplied = (appliedApp) => {
+    if (appliedApp && setPage && setSelectedKey) { setPage("pipeline"); setSelectedKey(appliedApp.id); }
   };
 
   const attach = async (discoveryId) => {
@@ -4863,8 +5246,26 @@ function EmailHubPage({fireToast, setPage, setSelectedKey, refreshStatus, refres
   // ---- board view (Part 3: Job Postings / Needs Triage / Applications) ----
   const [boardView, setBoardView] = useState("board");
   const [postingSort, setPostingSort] = useState("newest");
+  // Grid/list layout for the Job Postings column only -- pure CSS swap,
+  // no backend involvement (EMAIL_SYNC_REDESIGN_HANDOFF.md section 3).
+  // Persisted like other UI-only prefs in this file (jth_* prefix).
+  const POSTINGS_VIEW_KEY = "jth_postings_view";
+  const [postingsView, setPostingsView] = useState(() => {
+    try { return localStorage.getItem(POSTINGS_VIEW_KEY) || "list"; }
+    catch (e) { return "list"; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem(POSTINGS_VIEW_KEY, postingsView); } catch (e) {}
+  }, [postingsView]);
   const [marking, setMarking] = useState(null);
   const [resolvingDiscovery, setResolvingDiscovery] = useState(null);
+  // The manual_status to apply once resolvingDiscovery is actually
+  // attached to a picked application -- set when the resolver was opened
+  // via a drop on one of the Interviews/Rejections/Updates columns
+  // (STATUS_DROP_COLUMNS), null when opened via a card's own "Pick
+  // application..." button/chips (plain attach, no status change).
+  const [resolvingIntent, setResolvingIntent] = useState(null);
+  const [reviewingIntent, setReviewingIntent] = useState(null);
 
   // Click equivalent of dragging a Needs-Triage card onto the Job
   // Postings column. Client-relabels optimistically in local state too
@@ -4932,8 +5333,14 @@ function EmailHubPage({fireToast, setPage, setSelectedKey, refreshStatus, refres
   // Direct attach used by the board's quick-pick chips and the resolver
   // modal -- same endpoint as `attach` above, but takes the item_key as
   // an argument instead of reading it out of the list view's
-  // per-row `attachPicks` state.
-  const quickAttach = async (discoveryId, itemKey) => {
+  // per-row `attachPicks` state. `intent`, when set (a card was dropped
+  // on the Interviews or Rejections column -- see STATUS_DROP_COLUMNS),
+  // is a manual_status applied to whichever application the email just
+  // attached to, via the same /api/applications/{id}/override endpoint
+  // the Pipeline board's own drag-and-drop uses (see moveStatus). Plain
+  // chip/button clicks and drops on Updates never pass an intent, so
+  // they're unaffected -- attach only, no status change.
+  const quickAttach = async (discoveryId, itemKey, intent) => {
     setAttaching(discoveryId); setDiscError(null);
     try {
       const form = new FormData();
@@ -4943,18 +5350,39 @@ function EmailHubPage({fireToast, setPage, setSelectedKey, refreshStatus, refres
       if (onCountChange) onCountChange(result.discoveries.length);
       setSelected(prev => { const next = new Set(prev); next.delete(discoveryId); return next; });
       setResolvingDiscovery(null);
+      setResolvingIntent(null);
+      if (intent) {
+        const app = (apps || []).find(a => a.item_key === itemKey);
+        // Attach already succeeded at this point -- a failed status bump
+        // shouldn't be surfaced as a failed attach, so this is best-effort
+        // and swallows its own error rather than setting discError.
+        if (app) {
+          try { await apiPost(`/api/applications/${app.id}/override`, {manual_status: intent}); }
+          catch (e) { /* attach stands even if the status bump failed */ }
+        }
+      }
       if (refreshApps) await refreshApps();
       if (refreshStatus) await refreshStatus();
-      if (fireToast) fireToast("Attached to the application you picked.");
+      if (fireToast) {
+        fireToast(intent
+          ? `Attached and marked ${intent === "interviewing" ? "Interviewing" : "Rejected"}.`
+          : "Attached to the application you picked.");
+      }
     } catch (e) { setDiscError(String(e.message || e)); }
     finally { setAttaching(null); }
   };
 
-  const openResolver = (discovery) => setResolvingDiscovery(discovery);
+  const openResolver = (discovery, intent) => {
+    setResolvingDiscovery(discovery);
+    setResolvingIntent(intent || null);
+  };
   const openCreateFromResolver = () => {
     const d = resolvingDiscovery;
+    const intent = resolvingIntent;
     setResolvingDiscovery(null);
+    setResolvingIntent(null);
     setReviewing(d);
+    setReviewingIntent(intent);
   };
 
   // ---- bulk selection over the discoveries list ----
@@ -4981,14 +5409,16 @@ function EmailHubPage({fireToast, setPage, setSelectedKey, refreshStatus, refres
     const ids = Array.from(selected);
     if (ids.length === 0) return;
     setBulkBusy(true); setDiscError(null);
+    const okIds = [];
     for (const id of ids) {
-      try { await apiPost(`/api/discoveries/${id}/dismiss`, {}); }
+      try { await apiPost(`/api/discoveries/${id}/dismiss`, {}); okIds.push(id); }
       catch (e) { /* one failure shouldn't stop the rest */ }
     }
     setSelected(new Set());
-    await loadDiscoveries();
     setBulkBusy(false);
-    if (fireToast) fireToast(`Dismissed ${ids.length} discover${ids.length === 1 ? "y" : "ies"}.`);
+    if (okIds.length > 0) {
+      scheduleDismissRemoval("discovery", okIds, `Dismissed ${okIds.length} discover${okIds.length === 1 ? "y" : "ies"}.`);
+    }
   };
 
   // Bulk Attach: only meaningful for selected 'ambiguous' rows that
@@ -5014,6 +5444,24 @@ function EmailHubPage({fireToast, setPage, setSelectedKey, refreshStatus, refres
     if (refreshStatus) await refreshStatus();
     setBulkBusy(false);
     if (fireToast) fireToast(`Attached ${ids.length} email${ids.length === 1 ? "" : "s"}.`);
+  };
+
+  // Bulk Mark as Posting: board-only counterpart to bulkDismiss/bulkAttach
+  // above -- lets a multi-selected group of Needs-Triage cards jump to
+  // Job Postings together (via group drag-and-drop, or the bulk bar),
+  // instead of one row at a time. Same sequential-call pattern as the
+  // others (see bulkDismiss's comment on why this isn't Promise.all'd).
+  const bulkMarkPosting = async (ids) => {
+    if (!ids || ids.length === 0) return;
+    setBulkBusy(true); setDiscError(null);
+    for (const id of ids) {
+      try { await apiPost(`/api/discoveries/${id}/mark-posting`, {}); }
+      catch (e) { /* one failure shouldn't stop the rest */ }
+    }
+    setSelected(prev => { const next = new Set(prev); ids.forEach(id => next.delete(id)); return next; });
+    await Promise.all([loadDiscoveries(), loadJobPostings()]);
+    setBulkBusy(false);
+    if (fireToast) fireToast(`Marked ${ids.length} as posting${ids.length === 1 ? "" : "s"}.`);
   };
 
   const senderCounts = {};
@@ -5194,13 +5642,19 @@ function EmailHubPage({fireToast, setPage, setSelectedKey, refreshStatus, refres
       {discoveries && (discoveries.length > 0 || (jobPostings && jobPostings.length > 0)) && boardView === "board" && (
         <DiscoveriesBoard discoveries={discoveries} jobPostings={jobPostings}
           dismissingJobId={dismissingJobId} onDismissJobPosting={dismissJobPosting}
+          savingJobId={savingJobId} onToggleSaveJob={toggleSaveJob}
+          apps={apps} applyingJobId={applyingJobId} onApplyJob={setApplyingJobPosting} onOpenApplied={openApplied}
           expandedId={expandedId} onToggleExpand={toggleExpand} bodies={bodies} bodyLoadingId={bodyLoadingId}
           dismissing={dismissing} onDismiss={dismiss} onDismissSender={dismissSender}
           marking={marking} onMarkPosting={markPosting}
           attaching={attaching} onQuickPick={quickAttach} onOpenResolver={openResolver}
           senderCounts={senderCounts} postingSort={postingSort} setPostingSort={setPostingSort}
+          postingsView={postingsView} setPostingsView={setPostingsView}
           onAlwaysPosting={alwaysPosting} markingSender={markingSender}
-          postingFilter={postingFilter} setPostingFilter={setPostingFilter} />
+          postingFilter={postingFilter} setPostingFilter={setPostingFilter}
+          selected={selected} onToggleSelected={toggleSelected} bulkBusy={bulkBusy}
+          onBulkDismiss={bulkDismiss} onBulkMarkPosting={bulkMarkPosting}
+          pendingDismissIds={pendingDismissDiscoveryIds} pendingDismissJobIds={pendingDismissJobIds} />
       )}
       {discoveries && discoveries.length > 0 && boardView === "list" && (
         <div style={{display:"flex", flexDirection:"column", gap:8}}>
@@ -5208,7 +5662,7 @@ function EmailHubPage({fireToast, setPage, setSelectedKey, refreshStatus, refres
             const isAmbiguous = d.match_kind === "ambiguous";
             const isChecked = selected.has(d.id);
             return (
-              <div key={d.id} className="doc-card" style={{padding:"10px 12px", border: isChecked ? "1px solid var(--accent, #3B82F6)" : undefined}}>
+              <div key={d.id} className="doc-card" style={{padding:"10px 12px", border: isChecked ? "1px solid var(--accent, #3B82F6)" : undefined, opacity: pendingDismissDiscoveryIds.has(d.id) ? .4 : 1}}>
                 <div className="doc-card-top">
                   <input type="checkbox" style={{marginTop:3}} checked={isChecked} onChange={() => toggleSelected(d.id)} />
                   <span style={{fontSize:15}}><Icon name="mail" size={15}/></span>
@@ -5268,7 +5722,7 @@ function EmailHubPage({fireToast, setPage, setSelectedKey, refreshStatus, refres
                       </>
                     ) : (
                       <button className="btn primary" style={{fontSize:11.5, padding:"5px 10px"}}
-                        onClick={() => setReviewing(d)}>
+                        onClick={() => { setReviewing(d); setReviewingIntent(null); }}>
                         Review
                       </button>
                     )}
@@ -5297,14 +5751,29 @@ function EmailHubPage({fireToast, setPage, setSelectedKey, refreshStatus, refres
       )}
 
       {reviewing && (
-        <DiscoveryReviewModal discovery={reviewing} onClose={() => setReviewing(null)} onAccepted={onAccepted} />
+        <DiscoveryReviewModal discovery={reviewing} initialStatus={reviewingIntent}
+          onClose={() => { setReviewing(null); setReviewingIntent(null); }} onAccepted={onAccepted} />
       )}
       {resolvingDiscovery && (
-        <ResolveDiscoveryModal discovery={resolvingDiscovery} apps={apps}
-          onClose={() => setResolvingDiscovery(null)}
-          onPick={(itemKey) => quickAttach(resolvingDiscovery.id, itemKey)}
+        <ResolveDiscoveryModal discovery={resolvingDiscovery} apps={apps} intent={resolvingIntent}
+          onClose={() => { setResolvingDiscovery(null); setResolvingIntent(null); }}
+          onPick={(itemKey) => quickAttach(resolvingDiscovery.id, itemKey, resolvingIntent)}
           onCreate={openCreateFromResolver}
           attaching={attaching === resolvingDiscovery.id} />
+      )}
+      {applyingJobPosting && (
+        <JobPostingApplyModal job={applyingJobPosting}
+          onClose={() => setApplyingJobPosting(null)}
+          onApplied={(result) => onApplied(applyingJobPosting, result)}
+          setBusyId={setApplyingJobId} />
+      )}
+      {dismissToast && (
+        <div className="toast-stack">
+          <div className="toast undo-toast" role="status" aria-live="polite">
+            <span>{dismissToast.label}</span>
+            <button className="toast-undo-btn" onClick={undoDismiss}>Undo</button>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -5318,10 +5787,15 @@ function EmailHubPage({fireToast, setPage, setSelectedKey, refreshStatus, refres
 // editable -- guess_company_from_email() is deliberately best-effort, and
 // the user always gets a chance to fix it here before anything is
 // written to disk.
-function DiscoveryReviewModal({discovery, onClose, onAccepted}){
+function DiscoveryReviewModal({discovery, initialStatus, onClose, onAccepted}){
   const [company, setCompany] = useState(discovery.guessed_company || "");
   const [roleLabel, setRoleLabel] = useState("");
-  const [status, setStatus] = useState("applied");
+  // Pre-filled from the Interviews/Rejections column the card was
+  // dropped on (STATUS_DROP_COLUMNS' intent, threaded through
+  // openCreateFromResolver) when this modal was reached that way --
+  // still just the dropdown's default, freely editable below like any
+  // other case.
+  const [status, setStatus] = useState(initialStatus || "applied");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const inputRef = useRef(null);
@@ -5411,6 +5885,86 @@ function DiscoveryReviewModal({discovery, onClose, onAccepted}){
           <button className="btn" onClick={onClose} disabled={busy}>Not a match</button>
           <button className="btn primary" disabled={busy || !company.trim()} onClick={accept}>
             {busy ? "Creating\u2026" : "Accept & create application"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// "Apply" confirm modal for a Job Posting card (EMAIL_SYNC_REDESIGN_
+// HANDOFF.md postings gap #2) -- same pre-filled company/role/status
+// shape as DiscoveryReviewModal, backed by POST
+// /api/job-postings/{id}/apply instead of /api/discoveries/{id}/accept.
+// No email-body preview here (unlike DiscoveryReviewModal): a job
+// posting is a listing, not a "confirm this is really an application"
+// judgment call, so there's nothing to review before creating it --
+// company/role are just editable defaults from the extracted posting.
+function JobPostingApplyModal({job, onClose, onApplied, setBusyId}){
+  const [company, setCompany] = useState(job.company || "");
+  const [roleLabel, setRoleLabel] = useState(job.title || "");
+  const [status, setStatus] = useState("applied");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const inputRef = useRef(null);
+
+  useEffect(() => { if (inputRef.current) inputRef.current.focus(); }, []);
+  useEffect(() => {
+    function onKey(e){ if (e.key === "Escape" && !busy) onClose(); }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose, busy]);
+
+  const apply = async () => {
+    const trimmed = company.trim();
+    if (!trimmed) { setError("Company name is required."); return; }
+    setBusy(true); setError(null);
+    if (setBusyId) setBusyId(job.id);
+    try {
+      const form = new FormData();
+      form.append("company", trimmed);
+      form.append("role_label", roleLabel.trim());
+      form.append("status", status);
+      const result = await uploadFormData(`${API_BASE}/api/job-postings/${job.id}/apply`, form);
+      onApplied(result);
+    } catch (e) { setError(e.message || "Couldn't create application."); setBusy(false); }
+    finally { if (setBusyId) setBusyId(null); }
+  };
+
+  return (
+    <div className="modal-backdrop" onClick={() => !busy && onClose()}>
+      <div className="modal" onClick={e => e.stopPropagation()} style={{position:"relative", maxWidth:480}}>
+        <button className="close-x" aria-label="Close" onClick={onClose} disabled={busy}>{<Icon name="close"/>}</button>
+        <h2>Apply to this posting</h2>
+        <p style={{color:"var(--text-mute)", fontSize:12, marginTop:6, lineHeight:1.5}}>
+          <strong>{job.title || "(untitled role)"}</strong>
+          {job.company ? ` \u2022 ${job.company}` : ""}
+        </p>
+        <p style={{color:"var(--text-mute)", fontSize:12, marginTop:10}}>
+          Creates <code>Applications/{company.trim() || "Company"}{roleLabel.trim() ? `/${roleLabel.trim()}` : ""}</code>,
+          saves the original listing email as evidence inside it, and marks this posting "In pipeline".
+        </p>
+
+        <div className="section-label" style={{marginTop:14}}>Company</div>
+        <input ref={inputRef} className="btn" style={{width:"100%"}} type="text" value={company}
+          placeholder="e.g. Acme Corp" onChange={e => setCompany(e.target.value)}
+          onKeyDown={e => { if (e.key === "Escape" && !busy) onClose(); }} />
+
+        <div className="section-label" style={{marginTop:12}}>Role (optional)</div>
+        <input className="btn" style={{width:"100%"}} type="text" value={roleLabel}
+          placeholder="e.g. Software Engineer II" onChange={e => setRoleLabel(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter" && !busy) apply(); if (e.key === "Escape" && !busy) onClose(); }} />
+
+        <div className="section-label" style={{marginTop:12}}>Status</div>
+        <select className="btn" style={{width:"100%"}} value={status} onChange={e => setStatus(e.target.value)}>
+          {DEFAULT_STATUS_ORDER.map(s => <option key={s} value={s}>{s[0].toUpperCase()+s.slice(1)}</option>)}
+        </select>
+
+        {error && <div style={{color:"#F87171", fontSize:12, marginTop:10}}>{error}</div>}
+        <div style={{display:"flex", justifyContent:"flex-end", gap:8, marginTop:14}}>
+          <button className="btn" onClick={onClose} disabled={busy}>Cancel</button>
+          <button className="btn primary" disabled={busy || !company.trim()} onClick={apply}>
+            {busy ? "Creating\u2026" : "Apply & create application"}
           </button>
         </div>
       </div>

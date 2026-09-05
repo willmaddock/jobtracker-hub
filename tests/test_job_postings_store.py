@@ -80,6 +80,55 @@ def test_count_job_postings(tmp_path):
     assert ov.count_job_postings(conn) == 2
 
 
+def test_fresh_db_job_postings_saved_column_defaults_false(tmp_path):
+    conn = ov.get_conn(tmp_path / "overrides.db")
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(job_postings)")}
+    assert "saved" in cols
+    _add(conn)
+    assert ov.list_job_postings(conn)[0]["saved"] == 0
+
+
+def test_set_job_posting_saved_toggles_independently_of_status(tmp_path):
+    conn = ov.get_conn(tmp_path / "overrides.db")
+    _add(conn)
+    job = ov.list_job_postings(conn)[0]
+    ov.set_job_posting_saved(conn, job["id"], True)
+    assert ov.get_job_posting(conn, job["id"])["saved"] == 1
+
+    # Saved survives a dismiss -- these are independent flags.
+    ov.set_job_posting_status(conn, job["id"], "dismissed")
+    dismissed = ov.get_job_posting(conn, job["id"])
+    assert dismissed["status"] == "dismissed"
+    assert dismissed["saved"] == 1
+
+    ov.set_job_posting_saved(conn, job["id"], False)
+    assert ov.get_job_posting(conn, job["id"])["saved"] == 0
+
+
+def test_fresh_db_job_postings_applied_item_key_column_defaults_null(tmp_path):
+    conn = ov.get_conn(tmp_path / "overrides.db")
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(job_postings)")}
+    assert "applied_item_key" in cols
+    _add(conn)
+    assert ov.list_job_postings(conn)[0]["applied_item_key"] is None
+
+
+def test_set_job_posting_applied_links_item_key(tmp_path):
+    conn = ov.get_conn(tmp_path / "overrides.db")
+    _add(conn)
+    job = ov.list_job_postings(conn)[0]
+    ov.set_job_posting_applied(conn, job["id"], "Applications|Haystack|Software Engineer")
+    assert ov.get_job_posting(conn, job["id"])["applied_item_key"] == "Applications|Haystack|Software Engineer"
+
+    # Independent of status/saved, same as the other job_postings flags.
+    ov.set_job_posting_status(conn, job["id"], "dismissed")
+    ov.set_job_posting_saved(conn, job["id"], True)
+    still_linked = ov.get_job_posting(conn, job["id"])
+    assert still_linked["applied_item_key"] == "Applications|Haystack|Software Engineer"
+    assert still_linked["status"] == "dismissed"
+    assert still_linked["saved"] == 1
+
+
 def test_get_job_posting_by_id(tmp_path):
     conn = ov.get_conn(tmp_path / "overrides.db")
     _add(conn)
