@@ -834,9 +834,23 @@ def _extract_and_store_job_postings(
     urls = mailapp.get_posting_urls_for_message(account_name, message_id, fallback_body=body)
     urls_for_jobs = urls if len(urls) == len(jobs) else []
 
+    # Single-job fallback providers (posting_extract.py's
+    # _SINGLE_JOB_FALLBACK_PROVIDERS -- Honeywell, jobs2web/McDonald's, AWS
+    # Educate, Built In, Symplicity) rarely link through the
+    # curated ATS domains extract_posting_urls() looks for, so the
+    # positional match above usually comes up empty for them even when
+    # the email plainly has one obvious "Apply Now" link. Only relevant
+    # when there's exactly one job -- with more than one, which link goes
+    # with which job is genuinely ambiguous and no fallback should guess.
+    single_job_cta_url = (
+        mailapp.extract_primary_cta_url(body)
+        if len(jobs) == 1 and not urls_for_jobs
+        else None
+    )
+
     added = 0
     for i, job in enumerate(jobs):
-        posting_url = urls_for_jobs[i] if i < len(urls_for_jobs) else None
+        posting_url = urls_for_jobs[i] if i < len(urls_for_jobs) else single_job_cta_url
         dedupe_key = posting_extract.compute_dedupe_key(
             account_id, message_id, posting_url, job.get("title"), job.get("company"),
         )
@@ -1445,7 +1459,11 @@ def backfill_email_pdfs():
     one. Idempotent and safe to re-run: a folder that already has an
     "Email - ...pdf" (any of them -- see email_pdf.EMAIL_PDF_PREFIX) is
     left alone rather than getting a duplicate. Returns counts so the
-    Settings panel can show the user something happened (or didn't)."""
+    Settings panel can show the user something happened (or didn't),
+    plus a per-item `details` list (name, company, folder relpath,
+    the saved PDF's own relpath when successful, subject, outcome) so
+    the user can see exactly which items were touched and go check
+    them manually if they want."""
     jt_conn, ov_conn = get_conns()
     root = current_root().resolve()
 
@@ -1456,9 +1474,10 @@ def backfill_email_pdfs():
     saved = 0
     skipped_existing = 0
     failed = 0
+    details = []  # one entry per item actually considered, for the "what/where" panel (see api docstring)
     for m in matches:
         row = jt_conn.execute(
-            "SELECT source_relpath FROM items WHERE item_key = ?", (m["item_key"],)
+            "SELECT source_relpath, role_label, company FROM items WHERE item_key = ?", (m["item_key"],)
         ).fetchone()
         if row is None:
             continue  # item no longer exists (deleted/merged since the match was made)
@@ -1480,9 +1499,24 @@ def backfill_email_pdfs():
         # original sender address -- only the mailbox it arrived in is
         # known at this point, so that's what the PDF's "From:" shows.
         sender_label = account["email"] if account else None
+        before = {f.name for f in dest_folder.iterdir() if f.is_file()}
         ok = _save_email_evidence_pdf(
             dest_folder, account, m["message_id"], m["subject"], sender_label, m["received_at"],
         )
+        # _save_email_evidence_pdf only returns True/False, not the path it
+        # wrote -- diff the folder listing to recover the exact new file's
+        # relpath (relative to root, as /api/open expects) so the frontend
+        # can offer "open this PDF" instead of just "a PDF was saved
+        # somewhere in this folder".
+        new_files = {f.name for f in dest_folder.iterdir() if f.is_file()} - before
+        pdf_relpath = None
+        if ok and new_files:
+            pdf_relpath = str((dest_folder / next(iter(new_files))).relative_to(root))
+        details.append({
+            "name": row["role_label"], "company": row["company"],
+            "relpath": row["source_relpath"], "pdf_relpath": pdf_relpath,
+            "subject": m["subject"], "outcome": "saved" if ok else "failed",
+        })
         if ok:
             saved += 1
         else:
@@ -1494,7 +1528,7 @@ def backfill_email_pdfs():
     if saved:
         build(current_root(), current_db_path())
 
-    return {"ok": True, "checked": checked, "saved": saved, "skipped_existing": skipped_existing, "failed": failed}
+    return {"ok": True, "checked": checked, "saved": saved, "skipped_existing": skipped_existing, "failed": failed, "details": details}
 
 
 # --- job postings (CLAUDE_HANDOFF.md sections 2/8/14) ------------------------

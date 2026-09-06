@@ -739,6 +739,52 @@ def extract_posting_urls(body: str | None) -> list[str]:
     return out
 
 
+# Domains that are almost never the job itself even when they show up as
+# a prominent link in a corporate notification email -- social/footer
+# chrome, not a posting. Kept separate from _NON_POSTING_URL_HINTS (path
+# fragments) since these are whole domains.
+_NON_POSTING_LINK_DOMAINS = [
+    "facebook.com", "twitter.com", "x.com", "instagram.com", "youtube.com",
+    "linkedin.com/company", "linkedin.com/school", "apps.apple.com",
+    "play.google.com", "mailto:",
+]
+
+
+def extract_primary_cta_url(body: str | None) -> str | None:
+    """Best-effort single "Apply Now"/call-to-action link for a one-job
+    corporate notification email (posting_extract.py's single-job
+    fallback providers -- Honeywell, jobs2web/McDonald's, AWS Educate,
+    Built In, Symplicity, etc.), where extract_posting_urls()'s
+    curated ATS-domain whitelist (_JOB_POSTING_URL_DOMAINS) often misses
+    entirely since a single employer's own careers site or in-house ATS
+    domain isn't something that can be enumerated in advance.
+
+    Deliberately looser than extract_posting_urls(): does not require the
+    domain to match a known job board, only that it isn't unsubscribe/
+    preference/tracking chrome (_NON_POSTING_URL_HINTS) or an obvious
+    social/footer link (_NON_POSTING_LINK_DOMAINS). That's only an
+    acceptable trade because this is called for messages already known
+    (from the sender) to be a single job notice -- there's no risk of
+    picking the wrong job out of several, only "some link" vs. "no
+    link". Still returns None rather than a wrong guess when nothing
+    remains -- same "no fake link" rule as guess_posting_url().
+
+    UNVALIDATED against real single-job-sender fixture emails -- see
+    posting_extract.py's _SINGLE_JOB_FALLBACK_PROVIDERS docstring."""
+    if not body:
+        return None
+    for url in extract.extract_urls(body):
+        low = url.lower()
+        if any(hint in low for hint in _NON_POSTING_URL_HINTS):
+            continue
+        if any(hint in low for hint in _GENERIC_COLLECTION_URL_HINTS):
+            continue
+        if any(domain in low for domain in _NON_POSTING_LINK_DOMAINS):
+            continue
+        return url
+    return None
+
+
 def guess_posting_url(body: str | None) -> str | None:
     """Best-effort pick of the one URL in a job-alert email's body that
     actually points at the posting/listing, for display on the Job
