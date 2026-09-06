@@ -389,6 +389,91 @@ def test_single_job_single_tracked_link_now_gets_a_real_posting_url_end_to_end(
     )
 
 
+def test_single_job_fallback_provider_uses_cta_url_when_no_ats_link_found(
+    client, tmp_path, api_module
+):
+    """A single-job direct-notice sender (e.g. Honeywell) links to its own
+    careers site, not a curated ATS domain -- extract_posting_urls() (and
+    so the positional url-to-job match above it) comes up empty for it.
+    mail_app_store.extract_primary_cta_url() is the fallback added for
+    exactly this case (see its docstring's "UNVALIDATED" note, which this
+    test resolves for the one-job path); confirms api.py's
+    _extract_and_store_job_postings actually wires it in via
+    single_job_cta_url, not just that the helper function works alone."""
+    root = tmp_path / "honeywell-cta-tracker"
+    role_dir = root / "Applications" / "Honeywell" / "Software Engineer"
+    role_dir.mkdir(parents=True)
+    (role_dir / "resume.pdf").write_bytes(_minimal_pdf())
+    client.post("/api/workspaces/link", json={"name": "Honeywell CTA Test", "path": str(root)})
+
+    account_id = client.post(
+        "/api/accounts/mail-app/connect",
+        json={"name": "gmail", "email": "willzaeagle@gmail.com"},
+    ).json()["account_id"]
+
+    body = (
+        "Follow us: https://facebook.com/honeywell\n"
+        "Manage preferences: https://noreply.honeywell.com/preferences\n"
+        "Apply now: https://careers.honeywell.com/job/software-engineer-12345\n"
+    )
+    unmatched_hit = {
+        "message_id": "<honeywell-swe-1>",
+        "subject": "Software Engineer at Honeywell",
+        "sender": "noreply@honeywell.com",
+        "received_at": "2026-09-05",
+        "guessed_company": "Honeywell",
+        "force_posting": True,
+    }
+    with patch.object(api_module.mailapp, "search_unmatched_messages", return_value=[unmatched_hit]), \
+         patch.object(api_module.mailapp, "get_message_preview", return_value=body):
+        client.post(f"/api/accounts/{account_id}/discover")
+
+    postings = client.get("/api/job-postings").json()
+    assert len(postings) == 1
+    assert postings[0]["posting_url"] == "https://careers.honeywell.com/job/software-engineer-12345"
+
+
+def test_cta_url_fallback_does_not_apply_when_multiple_jobs_in_one_email(
+    client, tmp_path, api_module
+):
+    """The CTA-url fallback is only safe for exactly one job (api.py's
+    single_job_cta_url is gated on len(jobs) == 1) -- with more than one
+    job in the same email, which link belongs to which job is genuinely
+    ambiguous, so every job should come out with posting_url None rather
+    than all of them guessing the same one link."""
+    root = tmp_path / "lensa-multi-job-tracker"
+    role_dir = root / "Applications" / "Worky" / "Junior Developer"
+    role_dir.mkdir(parents=True)
+    (role_dir / "resume.pdf").write_bytes(_minimal_pdf())
+    client.post("/api/workspaces/link", json={"name": "Lensa Multi Job Test", "path": str(root)})
+
+    account_id = client.post(
+        "/api/accounts/mail-app/connect",
+        json={"name": "gmail", "email": "willzaeagle@gmail.com"},
+    ).json()["account_id"]
+
+    body = (
+        "Worky\nJunior Software Developer Remote\nabout $95K / yr.\nFull-Time\u2022Remote\n"
+        "Govcio\nJr. Software Programmer (Remote)\nabout $62K / yr.\nFull-Time\u2022Remote\n"
+        "Apply now: https://careers.example.com/job/1\n"
+    )
+    unmatched_hit = {
+        "message_id": "<lensa-digest-1>",
+        "subject": "Worky and 1 more company is hiring Junior Developer",
+        "sender": "jobalert@lensa.com",
+        "received_at": "2026-09-04",
+        "guessed_company": None,
+        "force_posting": True,
+    }
+    with patch.object(api_module.mailapp, "search_unmatched_messages", return_value=[unmatched_hit]), \
+         patch.object(api_module.mailapp, "get_message_preview", return_value=body):
+        client.post(f"/api/accounts/{account_id}/discover")
+
+    postings = client.get("/api/job-postings").json()
+    assert len(postings) == 2
+    assert all(p["posting_url"] is None for p in postings)
+
+
 # ---------------------------------------------------------------------------
 # Finding 5 (documented in AUDIT_FINDINGS.md; FIXED as of this commit):
 # get_message_preview() only ever searched the "INBOX" mailbox (the same

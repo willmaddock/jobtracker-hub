@@ -433,6 +433,74 @@ def test_extract_posting_urls_returns_empty_list_when_nothing_recognizable():
     assert mailapp.extract_posting_urls("Visit our site: https://comcast.com") == []
 
 
+def test_extract_primary_cta_url_picks_an_unrecognized_employer_domain():
+    # The whole point of this fallback vs. extract_posting_urls(): a
+    # single employer's own careers-site/in-house-ATS domain isn't in
+    # any curated whitelist, so it has to accept an otherwise-unknown
+    # domain rather than requiring a known job board.
+    body = (
+        "Hi William,\n"
+        "Apply now: https://careers.honeywell.com/job/software-engineer-12345\n"
+    )
+    assert mailapp.extract_primary_cta_url(body) == (
+        "https://careers.honeywell.com/job/software-engineer-12345"
+    )
+
+
+def test_extract_primary_cta_url_returns_first_candidate_in_body_order():
+    body = (
+        "https://careers.acme.com/jobs/111\n"
+        "https://careers.acme.com/jobs/222\n"
+    )
+    assert mailapp.extract_primary_cta_url(body) == "https://careers.acme.com/jobs/111"
+
+
+def test_extract_primary_cta_url_skips_unsubscribe_preference_and_tracking_links():
+    body = (
+        "Manage alerts: https://noreply.jobs2web.com/preferences?x=1\n"
+        "Unsubscribe: https://noreply.jobs2web.com/optout\n"
+        "Apply now: https://careers.mcdonalds.com/job/98765\n"
+    )
+    assert mailapp.extract_primary_cta_url(body) == "https://careers.mcdonalds.com/job/98765"
+
+
+def test_extract_primary_cta_url_skips_social_and_app_store_footer_links():
+    body = (
+        "Follow us: https://facebook.com/honeywell\n"
+        "https://twitter.com/honeywell\n"
+        "https://x.com/honeywell\n"
+        "https://instagram.com/honeywell\n"
+        "https://youtube.com/honeywell\n"
+        "Our company page: https://www.linkedin.com/company/honeywell\n"
+        "Get the app: https://apps.apple.com/us/app/honeywell/id123\n"
+        "https://play.google.com/store/apps/details?id=com.honeywell\n"
+        "Questions? mailto:careers@honeywell.com\n"
+        "Apply now: https://careers.honeywell.com/job/12345\n"
+    )
+    assert mailapp.extract_primary_cta_url(body) == "https://careers.honeywell.com/job/12345"
+
+
+def test_extract_primary_cta_url_skips_generic_collection_links():
+    body = (
+        "See all our openings: https://careers.acme.com/jobs/search\n"
+        "Apply now: https://careers.acme.com/job/12345\n"
+    )
+    assert mailapp.extract_primary_cta_url(body) == "https://careers.acme.com/job/12345"
+
+
+def test_extract_primary_cta_url_returns_none_when_nothing_survives_filtering():
+    body = (
+        "Follow us: https://facebook.com/honeywell\n"
+        "Unsubscribe: https://careers.honeywell.com/unsubscribe\n"
+    )
+    assert mailapp.extract_primary_cta_url(body) is None
+
+
+def test_extract_primary_cta_url_returns_none_for_empty_or_none_body():
+    assert mailapp.extract_primary_cta_url(None) is None
+    assert mailapp.extract_primary_cta_url("") is None
+
+
 def test_guess_posting_url_still_returns_just_the_first_link_for_backward_compat():
     body = (
         "https://www.linkedin.com/jobs/view/1111\n"
