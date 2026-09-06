@@ -228,6 +228,16 @@
   .btn.small{padding:5px 10px;font-size:11.5px;}
   .btn.icon{padding:8px 10px;font-size:15px;line-height:1;}
 
+  /* Two-segment List|Grid control (Job Postings toolbar) -- both
+     options always visible, joined into one pill instead of two
+     separate buttons, so picking either one never changes the
+     control's own width. */
+  .seg-control .seg-btn{border-radius:0;transform:none !important;}
+  .seg-control .seg-btn:hover{transform:none;}
+  .seg-control .seg-btn:first-child{border-radius:6px 0 0 6px;border-right:none;}
+  .seg-control .seg-btn:last-child{border-radius:0 6px 6px 0;}
+  .seg-control .seg-btn.active{background:var(--accent-soft, #3B82F622);color:var(--text-strong);border-color:var(--accent-soft, #3B82F6);}
+
   .page-title{font-size:20px;font-weight:800;color:var(--text-strong);margin:0 0 4px;letter-spacing:-.01em;}
   .page-sub{color:var(--text-soft);font-size:12.5px;margin:0 0 18px;}
 
@@ -410,6 +420,16 @@
     border:1px solid var(--accent-soft);border-radius:10px;padding:10px 14px;margin-bottom:14px;flex-wrap:wrap;}
   .bulk-bar .count{font-size:12.5px;font-weight:700;color:var(--accent-soft);margin-right:4px;}
 
+  /* ---------- Job Postings toolbar (search/sort/view) -- pinned so it
+      stays visible while the card list scrolls underneath, same sticky
+      pattern as .bulk-bar above. Uses padding-bottom instead of the row's
+      old margin-bottom so the glass background has no transparent gap
+      for scrolling cards to peek through right below the controls. ---- */
+  .postings-toolbar{position:sticky;top:0;z-index:4;background:var(--panel-glass);
+    -webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);
+    padding:2px 0 10px;margin-bottom:0;border-bottom:1px solid var(--border);
+    box-shadow:0 6px 12px -8px #00000040;}
+
   /* ---------- search hub (external portals directory) ---------- */
   .hub-prompt-bar{display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap;background:var(--panel-glass);
     -webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);
@@ -450,9 +470,8 @@
   .pick-chip:hover{background:#3B82F62c;}
   .pick-chip:disabled{opacity:.5;cursor:default;}
   .pick-chip.subtle{border-color:var(--border);color:var(--text-soft);background:transparent;}
-  .disc-board .kanban-col{width:300px;}
-  .disc-card{cursor:grab;}
-  .disc-card:active{cursor:grabbing;}
+  .disc-pane{display:flex;flex-direction:column;min-height:0;}
+  .disc-pane-cards{max-height:none;}
 
   .metric-card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:16px 18px;flex:1;min-width:160px;box-shadow:var(--card-shadow);}
   .metric-card .num{font-size:26px;font-weight:700;color:var(--text-strong);}
@@ -711,25 +730,38 @@ const DEFAULT_STATUS_COLORS = {
   applied: "#3B82F6", interviewing: "#F59E0B", rejected: "#EF4444", drafted: "#9aa4b2", unknown: "#5b6472",
 };
 const DEFAULT_STATUS_ORDER = ["drafted","applied","interviewing","rejected","unknown"];
-// The three literal drop columns on the Email Sync board
-// (EMAIL_SYNC_REDESIGN_HANDOFF.md's "Applications" column, split out per
-// the mockup's Interviews/Rejections/Updates kanban). `intent` is the
-// manual_status applied once the email is actually attached to a picked
-// application -- "update" has no real status in db.STATUS_ORDER (it
-// covers assessment invites, portal notices, etc. per the mockup's own
-// "Other updates" description), so its intent is null: attach only, no
-// status change. Colors reuse the app's own status palette rather than
-// the mockup's light-theme ones, except "update" which has no existing
-// status color -- picked a distinct violet that doesn't collide with
-// applied/interviewing/rejected.
-const STATUS_DROP_COLUMNS = [
-  {key:"interviewing", intent:"interviewing", label:"Interviews", color: DEFAULT_STATUS_COLORS.interviewing,
-    landingCopy:"an existing application and mark it Interviewing."},
-  {key:"rejected", intent:"rejected", label:"Rejections", color: DEFAULT_STATUS_COLORS.rejected,
-    landingCopy:"an existing application and mark it Rejected."},
-  {key:"updates", intent:null, label:"Updates", color:"#8B5CF6",
-    landingCopy:"an existing application \u2014 assessment invites, portal notices, and other updates don\u2019t change its status."},
+// Curated, not scanned from any mailbox -- domains confirmed against
+// this app's own posting-extraction code (_PROVIDER_SENDER_HINTS in
+// posting_extract.py, which has real fixture emails backing linkedin.com,
+// joinhandshake.com, lensa.com, and indeed.com specifically -- see
+// _parse_lensa/_parse_indeed) plus ziprecruiter.com from mail_app_store.py's
+// _MIXED_SIGNAL_SENDER_DOMAINS, plus builtin.com confirmed
+// from an actual "Built In" alert's sender address (support@builtin.com)
+// found in-mailbox 2026-09-05. honeywell.com, jobs2web.com (McDonald's
+// alerts route through this shared ATS), awseducate.com, and
+// symplicity.com added the same way, from real sender addresses
+// (noreply@honeywell.com, mcdonalds-jobnotification@noreply.jobs2web.com,
+// support@awseducate.com, NSLS-noreply@csm.symplicity.com) found
+// in-mailbox 2026-09-05 -- see posting_extract.py's
+// _SINGLE_JOB_FALLBACK_PROVIDERS for how those four get parsed once
+// whitelisted (unvalidated against real fixture bodies -- see that
+// module's docstring). Deliberately does NOT include every job board
+// that exists -- only ones with a verified sender domain. Add more here
+// once confirmed, rather than guessing a domain that might silently
+// never match anything (or worse, match the wrong thing).
+const KNOWN_JOB_ALERT_SENDERS = [
+  {label: "LinkedIn", domain: "linkedin.com"},
+  {label: "Indeed", domain: "indeed.com"},
+  {label: "ZipRecruiter", domain: "ziprecruiter.com"},
+  {label: "Handshake", domain: "joinhandshake.com"},
+  {label: "Built In", domain: "builtin.com"},
+  {label: "Lensa", domain: "lensa.com"},
+  {label: "Honeywell", domain: "honeywell.com"},
+  {label: "Jobs2Web (McDonald's, etc.)", domain: "jobs2web.com"},
+  {label: "AWS Educate", domain: "awseducate.com"},
+  {label: "Symplicity", domain: "symplicity.com"},
 ];
+
 const DEFAULT_SECTION_LABELS = {
   applications:"\u{1F4CB} Applications", credentials:"\u{1F393} Credentials", network:"\u{1F91D} Recommendations & Network",
   resume_library:"\u{1F4C4} Resume Library", leads:"\u{1F50D} Leads", compliance:"\u{1F5C2}\uFE0F Case Management",
@@ -4375,27 +4407,33 @@ function SettingsModal({onClose, onRebuild, status, themePref, themeApplied, set
 // blurred, inert app behind it, and no way to act on more than one row
 // at a time. This page gives both the same room as Pipeline/Insights/etc,
 // plus checkbox multi-select with bulk Attach/Dismiss across the queue.
-/* =========================== DISCOVERIES BOARD (Email Sync kanban) ===========================
-   3-column triage board for Email Sync discoveries -- Job Postings / Needs
-   Triage / Applications -- cloned from KanbanBoard's native-HTML5 drag
-   mechanics above (same dataTransfer/dragId/overCol pattern), swapping
-   status-columns for the fixed Job Postings / Needs Triage / Applications
-   trio described in the spec. Every drag action has a click equivalent
-   (chip, "Pick application...", "Mark as posting") so triaging a big
-   batch never requires dragging cards one at a time -- see
-   discoveries-kanban-spec.md Part 3. */
+/* =========================== NEEDS TRIAGE / JOB POSTINGS TABS (Email Sync) ===========================
+   Two single-pane tabs for Email Sync's discovery queue -- Job Postings
+   and Needs Triage -- mirroring Pipeline's own List/Kanban tab pattern
+   instead of a side-by-side kanban board. Drag-and-drop is gone: every
+   action ("Pick application...", "Mark as posting", "Dismiss") is a
+   click, and attaching an email to an application (with an optional
+   status bump) happens in ResolveDiscoveryModal below. See
+   EMAIL_SYNC_TABS_HANDOFF.md concept B. */
 
 // Mail.app's AppleScript dates come through as e.g. "Wednesday, October
 // 15, 2025 at 9:22:46 AM" -- not directly parseable by `new Date(...)`.
-// Strips the weekday and "at" so the browser's Date parser can handle it,
-// then renders a short relative label for the Job Postings card (see
-// docs/specs/discoveries-board-v2-spec.md Part 5). Falls back to the raw string
-// (still shown in the card meta line) if parsing fails for any reason.
-function timeAgo(raw){
+// Strips the weekday and "at" so the browser's Date parser can handle it.
+// Shared by timeAgo() below, so both agree on what "recent" means from
+// the same raw strings.
+function parseMailDate(raw){
   if (!raw) return null;
   const cleaned = raw.replace(/^[A-Za-z]+,\s*/, "").replace(" at ", " ");
   const t = new Date(cleaned);
-  if (isNaN(t.getTime())) return null;
+  return isNaN(t.getTime()) ? null : t;
+}
+
+// Renders a short relative label for the Job Postings card (see
+// docs/specs/discoveries-board-v2-spec.md Part 5). Falls back to the raw string
+// (still shown in the card meta line) if parsing fails for any reason.
+function timeAgo(raw){
+  const t = parseMailDate(raw);
+  if (!t) return null;
   const days = Math.floor((Date.now() - t.getTime()) / 86400000);
   if (days < 0) return null;
   if (days === 0) return "today";
@@ -4409,18 +4447,15 @@ function timeAgo(raw){
 // JobPostingCard (below) instead, reading from /api/job-postings rather
 // than from these raw discovered_matches rows. See CLAUDE_HANDOFF.md
 // section 15.
-function DiscoveryCard({d, dragId, setDragId, onDragEnd, expanded, onToggleExpand, bodyLoading, body,
-  senderCount, onDismiss, onDismissSender, dismissing, onMarkPosting, marking, onQuickPick, attaching, onOpenResolver,
+function DiscoveryCard({d, expanded, onToggleExpand, bodyLoading, body,
+  senderCount, onDismiss, onDismissSender, dismissing, onMarkPosting, marking, attaching, onOpenResolver,
   onAlwaysPosting, markingSender, selected, onToggleSelected, pendingDismiss}){
   const candidates = d.candidates || [];
   const isSelected = !!(selected && selected.has(d.id));
   return (
     <div
-      className={"kanban-card disc-card" + (dragId===d.id ? " dragging":"") + (isSelected ? " selected":"") + (pendingDismiss ? " pending-dismiss":"")}
-      draggable={!pendingDismiss}
+      className={"kanban-card disc-card" + (isSelected ? " selected":"") + (pendingDismiss ? " pending-dismiss":"")}
       aria-busy={pendingDismiss ? "true" : undefined}
-      onDragStart={e => { if (pendingDismiss) { e.preventDefault(); return; } e.dataTransfer.setData("text/plain", String(d.id)); e.dataTransfer.effectAllowed = "move"; setDragId(d.id); }}
-      onDragEnd={onDragEnd}
     >
       <div className="kanban-card-title" style={{display:"flex", alignItems:"center", gap:6}}>
         {onToggleSelected && (
@@ -4443,29 +4478,19 @@ function DiscoveryCard({d, dragId, setDragId, onDragEnd, expanded, onToggleExpan
         {d.received_at ? ` \u2022 ${d.received_at}` : ""}
       </div>
 
-      {candidates.length > 0 && (
-        <div style={{display:"flex", flexWrap:"wrap", gap:5, marginTop:8}}>
-          {candidates.map(c => (
-            <button key={c.item_key} className="pick-chip" disabled={attaching === d.id}
-              onClick={() => onQuickPick(d.id, c.item_key)}>
-              {c.label}
-            </button>
-          ))}
-          <button className="pick-chip subtle" disabled={attaching === d.id} onClick={() => onOpenResolver(d)}>
-            {"\u2026 more"}
-          </button>
-        </div>
-      )}
-
+      {/* Candidate matches are surfaced inside the "Pick application..."
+          modal itself (ResolveDiscoveryModal's "Likely matches" section)
+          rather than as inline quick-pick chips here -- with
+          drag-and-drop gone, that modal is the one place status gets
+          decided too, so it's the more natural spot for them. See
+          EMAIL_SYNC_TABS_HANDOFF.md concept B. */}
       <div style={{display:"flex", flexWrap:"wrap", gap:6, marginTop:8}}>
         <button className="btn" style={{fontSize:10.5, padding:"4px 8px"}} onClick={() => onToggleExpand(d.id)}>
           {expanded ? "Hide email" : "View email"}
         </button>
-        {candidates.length === 0 && (
-          <button className="btn primary" style={{fontSize:10.5, padding:"4px 8px"}} disabled={pendingDismiss || attaching === d.id} onClick={() => onOpenResolver(d)}>
-            {"Pick application\u2026"}
-          </button>
-        )}
+        <button className="btn" style={{fontSize:10.5, padding:"4px 8px"}} disabled={pendingDismiss || attaching === d.id} onClick={() => onOpenResolver(d)}>
+          {"Pick application\u2026"}
+        </button>
         <button className="btn" style={{fontSize:10.5, padding:"4px 8px"}} disabled={pendingDismiss || marking === d.id} onClick={() => onMarkPosting(d.id)}>
           {marking === d.id ? "Marking\u2026" : "Mark as posting"}
         </button>
@@ -4511,6 +4536,13 @@ const JOB_SOURCE_DISPLAY_NAMES = {
   handshake: "Handshake",
   indeed: "Indeed",
   ziprecruiter: "ZipRecruiter",
+  // Single-job fallback providers (posting_extract.py's
+  // _SINGLE_JOB_FALLBACK_PROVIDERS) -- CSS capitalize() would otherwise
+  // render these as "Jobs2web"/"Awseducate"/"Builtin".
+  jobs2web: "Jobs2Web",
+  awseducate: "AWS Educate",
+  builtin: "Built In",
+  symplicity: "Symplicity",
 };
 function jobSourceDisplayName(source){
   if (!source) return source;
@@ -4549,6 +4581,18 @@ function postingComparator(postingSort) {
       if (bv == null) return -1;
       return bv - av;             // highest pay first
     }
+    // received_at is a human-readable AppleScript date string
+    // ("Wednesday, September 2, 2026 at 2:13:49 PM"), not ISO -- a plain
+    // string compare here sorts by weekday-name spelling, not by time
+    // (e.g. "Wednesday" outranks "Saturday" alphabetically even when the
+    // Saturday date is the later one), so "Newest" silently buried
+    // today's postings under a stale weekday. Parse to real timestamps
+    // via the same parseMailDate() the "posted Xd ago" label already
+    // uses, and fall back to the old string compare only if parsing
+    // fails on one side, so a completely blank/garbage date doesn't
+    // crash the sort.
+    const at_ = parseMailDate(a.received_at), bt_ = parseMailDate(b.received_at);
+    if (at_ && bt_) return postingSort === "oldest" ? at_ - bt_ : bt_ - at_;
     const av = a.received_at || "", bv = b.received_at || "";
     return postingSort === "oldest" ? av.localeCompare(bv) : bv.localeCompare(av);
   };
@@ -4637,22 +4681,30 @@ function JobPostingCard({job, dismissing, onDismiss, pendingDismiss, saving, onT
   );
 }
 
-function DiscoveriesBoard({discoveries, jobPostings, dismissingJobId, onDismissJobPosting,
-  savingJobId, onToggleSaveJob, apps, applyingJobId, onApplyJob, onOpenApplied,
-  expandedId, onToggleExpand, bodies, bodyLoadingId, dismissing, onDismiss,
-  onDismissSender, marking, onMarkPosting, attaching, onQuickPick, onOpenResolver, senderCounts, postingSort, setPostingSort,
-  postingsView, setPostingsView,
-  onAlwaysPosting, markingSender, postingFilter, setPostingFilter,
-  selected, onToggleSelected, bulkBusy, onBulkDismiss, onBulkMarkPosting,
-  pendingDismissIds, pendingDismissJobIds}){
-  const [dragId, setDragId] = useState(null);
-  const [overCol, setOverCol] = useState(null);
-
-  const byId = {};
-  discoveries.forEach(d => byId[d.id] = d);
-
+/* =========================== JOB POSTINGS PANE (Email Sync tab) ===========================
+   Single full-width pane for the "Job Postings" tab -- filter/sort/grid
+   controls unchanged from the old board column, just no longer sharing
+   width with Needs Triage. See EMAIL_SYNC_TABS_HANDOFF.md. */
+function JobPostingsPane({jobPostings, dismissingJobId, onDismissJobPosting, savingJobId, onToggleSaveJob,
+  apps, applyingJobId, onApplyJob, onOpenApplied, postingSort, setPostingSort,
+  postingsView, setPostingsView, postingFilter, setPostingFilter,
+  postingFavoritesOnly, setPostingFavoritesOnly, pendingDismissJobIds}){
+  const savedCount = useMemo(() => (jobPostings || []).filter(p => p.saved).length, [jobPostings]);
+  // Distinct sources actually present right now (lowercase ids, e.g.
+  // "linkedin"/"handshake") -- drives the filter dropdown below so it
+  // never offers a source with zero postings. Sorted by display name for
+  // a stable, readable order.
+  const [postingSourceFilter, setPostingSourceFilter] = useState("all");
+  const availableSources = useMemo(() => {
+    const set = new Set((jobPostings || []).map(p => (p.source || "").toLowerCase()).filter(Boolean));
+    return [...set].sort((a, b) => jobSourceDisplayName(a).localeCompare(jobSourceDisplayName(b)));
+  }, [jobPostings]);
   const postings = useMemo(() => {
     let list = jobPostings || [];
+    if (postingFavoritesOnly) list = list.filter(p => p.saved);
+    if (postingSourceFilter !== "all") {
+      list = list.filter(p => (p.source || "").toLowerCase() === postingSourceFilter);
+    }
     const q = (postingFilter || "").trim().toLowerCase();
     if (q) {
       list = list.filter(p =>
@@ -4660,200 +4712,204 @@ function DiscoveriesBoard({discoveries, jobPostings, dismissingJobId, onDismissJ
         (p.company || "").toLowerCase().includes(q)
       );
     }
-    // "Saved" is a pre-sort partition (saved items always float to the
-    // top), not part of the comparator itself -- see
-    // EMAIL_SYNC_REDESIGN_HANDOFF.md section 3.
-    const saved = list.filter(p => p.saved);
-    const rest = list.filter(p => !p.saved);
+    // Saved items used to float to the top of every sort as a pre-sort
+    // partition (see EMAIL_SYNC_REDESIGN_HANDOFF.md section 3), but that
+    // fought with Newest/Oldest in the main list and cluttered it --
+    // starring something now only surfaces it in the Favorites view
+    // (postingFavoritesOnly), not by reordering the regular list.
     const cmp = postingComparator(postingSort);
-    return [...saved].sort(cmp).concat([...rest].sort(cmp));
-  }, [jobPostings, postingSort, postingFilter]);
-
-  const needsTriage = useMemo(() => discoveries.filter(d => d.kind !== "posting"), [discoveries]);
-  const needsTriageIds = useMemo(() => new Set(needsTriage.map(d => d.id)), [needsTriage]);
-
-  // Group drag: if the card being dragged is part of the current
-  // multi-select, the drop should act on every selected (still
-  // Needs-Triage) id, not just the one the pointer happened to land on --
-  // see EMAIL_SYNC_REDESIGN_HANDOFF.md section 1's "group drag" note.
-  const dragGroupIds = (draggedId) => {
-    if (selected && selected.has(draggedId) && selected.size > 1) {
-      return Array.from(selected).filter(id => needsTriageIds.has(id));
-    }
-    return [draggedId];
-  };
-
-  const dragEnd = () => { setDragId(null); setOverCol(null); };
-
-  const dropOnPostings = (e) => {
-    e.preventDefault(); setOverCol(null);
-    const id = Number(e.dataTransfer.getData("text/plain") || dragId);
-    const ids = dragGroupIds(id);
-    if (ids.length > 1 && onBulkMarkPosting) {
-      onBulkMarkPosting(ids);
-    } else {
-      const d = byId[id];
-      if (d && d.kind !== "posting") onMarkPosting(id);
-    }
-    setDragId(null);
-  };
-
-  // Interviews / Rejections / Updates all funnel through the same
-  // resolve/attach flow as the old single "Applications" column did --
-  // an email can't just become "an interview," it has to attach to one
-  // specific application record, so a multi-card drop here still can't
-  // be resolved in bulk (only the single dragged card opens the
-  // resolver, even inside a selection). What's new is `intent`: the
-  // column the card was dropped on travels along as the status to apply
-  // once an application is actually picked (see EmailHubPage's
-  // quickAttach/openCreateFromResolver). Updates carries `null` --
-  // "other updates" (assessment invites, portal notices, etc., per the
-  // mockup) don't imply any particular status, so dropping there is a
-  // plain attach with no status change.
-  const dropOnStatusColumn = (intent) => (e) => {
-    e.preventDefault(); setOverCol(null);
-    const id = Number(e.dataTransfer.getData("text/plain") || dragId);
-    const d = byId[id];
-    if (d && d.kind !== "posting") onOpenResolver(d, intent);
-    setDragId(null);
-  };
-
-  // Postings aren't un-classified back to Needs Triage by this board (not
-  // in the spec) -- dropping there is just a clean no-op landing zone.
-  const dropOnTriage = (e) => { e.preventDefault(); setOverCol(null); setDragId(null); };
-
-  const cardProps = {
-    dragId, setDragId, onDragEnd: dragEnd, onToggleExpand, bodyLoadingId, bodies,
-    onDismiss, onDismissSender, dismissing, onMarkPosting, marking, onQuickPick, attaching, onOpenResolver,
-    onAlwaysPosting, markingSender, selected, onToggleSelected,
-  };
-
-  const selectedTriageIds = useMemo(
-    () => (selected ? Array.from(selected).filter(id => needsTriageIds.has(id)) : []),
-    [selected, needsTriageIds]
-  );
+    return [...list].sort(cmp);
+  }, [jobPostings, postingSort, postingFilter, postingFavoritesOnly, postingSourceFilter]);
 
   return (
-    <div className="kanban disc-board">
-      <div className={"kanban-col" + (overCol === "postings" ? " drag-over":"")}
-        onDragOver={e => { e.preventDefault(); setOverCol("postings"); }}
-        onDragLeave={() => setOverCol(c => c === "postings" ? null : c)}
-        onDrop={dropOnPostings}>
-        <div className="kanban-col-head" style={{justifyContent:"space-between", gap:6}}>
-          <span>Job Postings &middot; {postings.length}</span>
-          <div style={{display:"flex", alignItems:"center", gap:6}}>
-            {setPostingSort && (
-              <label style={{display:"flex", alignItems:"center", gap:0}}>
-                <span className="sr-only">Sort job postings by</span>
-                <select value={postingSort} onChange={e => setPostingSort(e.target.value)}
-                  className="btn subtle" style={{fontSize:10, padding:"2px 4px", fontWeight:600}}
-                  title="Sort job postings">
-                  <option value="newest">Newest</option>
-                  <option value="oldest">Oldest</option>
-                  <option value="company">Company</option>
-                  <option value="pay">Pay</option>
-                </select>
-              </label>
-            )}
-            {setPostingsView && (
-              <button type="button" className="btn subtle" style={{fontSize:10, padding:"2px 6px", fontWeight:600}}
-                aria-pressed={postingsView === "grid"}
-                onClick={() => setPostingsView(v => v === "grid" ? "list" : "grid")}
-                title={postingsView === "grid" ? "Switch to list view" : "Switch to grid view"}>
-                {postingsView === "grid" ? "\u2637 Grid" : "\u2261 List"}
-              </button>
-            )}
-          </div>
+    <div className="disc-pane">
+      {/* ---- filter/sort/view row -- fixed-width sort <select> and a
+          two-segment List|Grid control (instead of one button whose
+          label swapped to name the OTHER mode) so this row's total
+          width never changes as you switch sort option or view: the
+          filter input's flex-basis stayed put before too, but the
+          select's content-driven width ("Company"/"Pay" vs "Newest")
+          and the single toggle's swapping label ("Grid" vs "\u2261 List")
+          each nudged things over by a few px on click, which read as
+          the row "moving." Both controls now reserve fixed space
+          regardless of which option is active. ---- */}
+      <div className="postings-toolbar" style={{display:"flex", flexWrap:"wrap", gap:8, alignItems:"center"}}>
+        <div style={{position:"relative", flex:"1 1 260px"}}>
+          <input type="text" placeholder="Filter by title or company\u2026"
+            value={postingFilter || ""} onChange={e => setPostingFilter(e.target.value)}
+            style={{width:"100%", boxSizing:"border-box", fontSize:12, padding:"6px 28px 6px 10px", borderRadius:8, border:"1px solid var(--border)", background:"var(--panel)", color:"var(--text)"}} />
+          {/* Only rendered once there's text to clear, same as the
+              browser's own native search-input × -- this filter is a
+              plain text input (not type="search"), so it never got
+              that built-in affordance and needed its own. */}
+          {postingFilter && (
+            <button type="button" onClick={() => setPostingFilter("")}
+              aria-label="Clear filter" title="Clear filter"
+              style={{position:"absolute", right:6, top:"50%", transform:"translateY(-50%)",
+                border:"none", background:"none", cursor:"pointer", color:"var(--text-mute)",
+                fontSize:14, lineHeight:1, padding:4, display:"flex"}}>
+              {"\u2715"}
+            </button>
+          )}
         </div>
-        {setPostingFilter && (
-          <div style={{padding:"4px 8px 0"}}>
-            <input type="text" placeholder="Filter by title or company\u2026"
-              value={postingFilter || ""} onChange={e => setPostingFilter(e.target.value)}
-              style={{width:"100%", fontSize:11, padding:"4px 6px", boxSizing:"border-box"}} />
-          </div>
+        <button type="button"
+          className={"btn subtle" + (postingFavoritesOnly ? " active" : "")}
+          aria-pressed={postingFavoritesOnly}
+          title={postingFavoritesOnly ? "Showing favorites only" : "Show favorites only"}
+          style={{fontSize:12, padding:"6px 10px", fontWeight:600, flex:"none",
+            color: postingFavoritesOnly ? "var(--accent, #F59700)" : undefined}}
+          onClick={() => setPostingFavoritesOnly(v => !v)}>
+          {"\u2605"} Favorites{savedCount > 0 ? ` (${savedCount})` : ""}
+        </button>
+        {availableSources.length > 1 && (
+          <select value={postingSourceFilter} onChange={e => setPostingSourceFilter(e.target.value)}
+            className="btn subtle" style={{fontSize:12, padding:"6px 10px", fontWeight:600, width:120, flex:"none"}}
+            title="Filter by known sender">
+            <option value="all">All senders</option>
+            {availableSources.map(s => (
+              <option key={s} value={s}>{jobSourceDisplayName(s)}</option>
+            ))}
+          </select>
         )}
-        <div className={"kanban-cards" + (postingsView === "grid" ? " kanban-cards-grid":"")}>
-          {postings.map(p => (
-            <JobPostingCard key={p.id} job={p} dismissing={dismissingJobId} onDismiss={onDismissJobPosting}
-              saving={savingJobId} onToggleSave={onToggleSaveJob}
-              view={postingsView}
-              // Re-checked against the live apps list, not just the
-              // presence of applied_item_key, in case the application it
-              // pointed to was since deleted/renamed elsewhere -- same
-              // "don't trust a stored key blindly" reasoning as
-              // quickAttach's apps.find() below.
-              appliedApp={p.applied_item_key && apps ? apps.find(a => a.item_key === p.applied_item_key) : null}
-              onApply={onApplyJob} applying={applyingJobId} onOpenApplied={onOpenApplied}
-              pendingDismiss={pendingDismissJobIds && pendingDismissJobIds.has(p.id)} />
-          ))}
-          {postings.length === 0 && <div className="kanban-empty-col">No job listings caught yet.</div>}
+        <select value={postingSort} onChange={e => setPostingSort(e.target.value)}
+          className="btn subtle" style={{fontSize:12, padding:"6px 10px", fontWeight:600, width:104, flex:"none"}}
+          title="Sort job postings">
+          <option value="newest">Newest</option>
+          <option value="oldest">Oldest</option>
+          <option value="company">Company</option>
+          <option value="pay">Pay</option>
+        </select>
+        <div className="seg-control" style={{display:"flex", flex:"none"}}>
+          <button type="button" className={"btn subtle seg-btn" + (postingsView === "list" ? " active" : "")}
+            style={{fontSize:12, padding:"6px 10px", fontWeight:600}}
+            aria-pressed={postingsView === "list"} onClick={() => setPostingsView("list")} title="List view">
+            {"\u2261 List"}
+          </button>
+          <button type="button" className={"btn subtle seg-btn" + (postingsView === "grid" ? " active" : "")}
+            style={{fontSize:12, padding:"6px 10px", fontWeight:600}}
+            aria-pressed={postingsView === "grid"} onClick={() => setPostingsView("grid")} title="Grid view">
+            {"\u2637 Grid"}
+          </button>
         </div>
       </div>
-
-      <div className={"kanban-col" + (overCol === "triage" ? " drag-over":"")}
-        onDragOver={e => { e.preventDefault(); setOverCol("triage"); }}
-        onDragLeave={() => setOverCol(c => c === "triage" ? null : c)}
-        onDrop={dropOnTriage}>
-        <div className="kanban-col-head">Needs Triage &middot; {needsTriage.length}</div>
-        {selectedTriageIds.length > 1 && onBulkDismiss && onBulkMarkPosting && (
-          <div style={{display:"flex", gap:6, flexWrap:"wrap", alignItems:"center", padding:"0 8px 8px"}}>
-            <span style={{fontSize:11, color:"var(--text-soft)"}}>{selectedTriageIds.length} selected</span>
-            <button className="btn" style={{fontSize:10.5, padding:"4px 8px"}}
-              disabled={bulkBusy} onClick={() => onBulkMarkPosting(selectedTriageIds)}>
-              {bulkBusy ? "\u2026" : "Mark as postings"}
-            </button>
-            <button className="btn" style={{fontSize:10.5, padding:"4px 8px"}}
-              disabled={bulkBusy} onClick={onBulkDismiss}>
-              {bulkBusy ? "\u2026" : "Dismiss selected"}
-            </button>
-          </div>
-        )}
-        <div className="kanban-cards">
-          {needsTriage.map(d => (
-            <DiscoveryCard key={d.id} d={d} dragId={dragId} setDragId={setDragId} onDragEnd={dragEnd}
-              expanded={expandedId===d.id} onToggleExpand={onToggleExpand}
-              bodyLoading={bodyLoadingId===d.id} body={bodies[d.id]}
-              senderCount={d.sender ? (senderCounts[d.sender]||0) : 0}
-              onDismiss={onDismiss} onDismissSender={onDismissSender} dismissing={dismissing}
-              onMarkPosting={onMarkPosting} marking={marking}
-              onQuickPick={onQuickPick} attaching={attaching} onOpenResolver={onOpenResolver}
-              onAlwaysPosting={onAlwaysPosting} markingSender={markingSender}
-              selected={selected} onToggleSelected={onToggleSelected}
-              pendingDismiss={pendingDismissIds && pendingDismissIds.has(d.id)} />
-          ))}
-          {needsTriage.length === 0 && <div className="kanban-empty-col">Nothing to triage.</div>}
-        </div>
+      <div className={"kanban-cards disc-pane-cards" + (postingsView === "grid" ? " kanban-cards-grid":"")}>
+        {postings.map(p => (
+          <JobPostingCard key={p.id} job={p} dismissing={dismissingJobId} onDismiss={onDismissJobPosting}
+            saving={savingJobId} onToggleSave={onToggleSaveJob}
+            view={postingsView}
+            // Re-checked against the live apps list, not just the
+            // presence of applied_item_key, in case the application it
+            // pointed to was since deleted/renamed elsewhere -- same
+            // "don't trust a stored key blindly" reasoning as
+            // quickAttach's apps.find() below.
+            appliedApp={p.applied_item_key && apps ? apps.find(a => a.item_key === p.applied_item_key) : null}
+            onApply={onApplyJob} applying={applyingJobId} onOpenApplied={onOpenApplied}
+            pendingDismiss={pendingDismissJobIds && pendingDismissJobIds.has(p.id)} />
+        ))}
+        {postings.length === 0 && postingFavoritesOnly &&
+          <EmptyState icon={<Icon name="mailbox" size={26}/>} title="No favorites yet." sub="Star a posting to see it here." />}
+        {postings.length === 0 && !postingFavoritesOnly && postingSourceFilter !== "all" &&
+          <EmptyState icon={<Icon name="mailbox" size={26}/>} title={`No postings from ${jobSourceDisplayName(postingSourceFilter)} right now.`} />}
+        {postings.length === 0 && !postingFavoritesOnly && postingSourceFilter === "all" &&
+          <EmptyState icon={<Icon name="mailbox" size={26}/>} title="No job listings caught yet." />}
       </div>
-
-      {STATUS_DROP_COLUMNS.map(col => (
-        <div key={col.key} className={"kanban-col" + (overCol === col.key ? " drag-over":"")}
-          onDragOver={e => { e.preventDefault(); setOverCol(col.key); }}
-          onDragLeave={() => setOverCol(c => c === col.key ? null : c)}
-          onDrop={dropOnStatusColumn(col.intent)}>
-          <div className="kanban-col-head" style={{borderColor:col.color+"66", color:col.color}}>
-            {col.label}
-          </div>
-          <div className="kanban-cards">
-            <div className="kanban-empty-col">
-              {"Drop a Needs-Triage card here \u2014 or use its chips / \u201CPick application\u2026\u201D \u2014 to attach it to " + col.landingCopy}
-            </div>
-          </div>
-        </div>
-      ))}
     </div>
   );
 }
 
-// Opened by dropping a Needs-Triage card onto the Applications column,
-// clicking its "Pick application..." button (no candidates), or "...
-// more" next to its quick-pick chips. Always offers a full search over
-// every open application -- not just the backend's narrowed candidates
-// -- plus "Create new application" for genuinely new senders. The
-// inline chips on the card itself cover the common (candidates-present)
-// case without ever opening this at all; this modal is for everything
-// else, per Part 3.
-function ResolveDiscoveryModal({discovery, apps, intent, onClose, onPick, onCreate, attaching}){
+/* =========================== NEEDS TRIAGE PANE (Email Sync tab) ===========================
+   Single full-width pane for the "Needs Triage" tab -- replaces the old
+   3-column kanban (Job Postings / Needs Triage / Interviews-Rejections-
+   Updates rail) plus its side panel. Drag-and-drop is gone entirely: the
+   only way to attach an email to an application (and optionally bump its
+   status) is the "Pick application..." button, which now opens
+   ResolveDiscoveryModal with its own status picker built in -- see
+   EMAIL_SYNC_TABS_HANDOFF.md concept B. */
+function NeedsTriagePane({discoveries, expandedId, onToggleExpand, bodies, bodyLoadingId,
+  dismissing, onDismiss, onDismissSender, marking, onMarkPosting, attaching, onOpenResolver,
+  onAlwaysPosting, markingSender, senderCounts, selected, onToggleSelected, onSetSelection, bulkBusy,
+  onBulkDismiss, onBulkMarkPosting, pendingDismissIds}){
+  const needsTriage = useMemo(() => (discoveries || []).filter(d => d.kind !== "posting"), [discoveries]);
+  const needsTriageIds = useMemo(() => needsTriage.map(d => d.id), [needsTriage]);
+  const selectedTriageIds = useMemo(
+    () => (selected ? Array.from(selected).filter(id => needsTriageIds.includes(id)) : []),
+    [selected, needsTriageIds]
+  );
+  // Indeterminate (dash) state needs a DOM ref -- the checkbox element
+  // has no plain HTML attribute for it, only a JS property set after
+  // mount/update. Reflects "some but not all of the current (filtered)
+  // list selected", separately from checked ("all selected").
+  const selectAllRef = useRef(null);
+  const allSelected = needsTriageIds.length > 0 && selectedTriageIds.length === needsTriageIds.length;
+  const someSelected = selectedTriageIds.length > 0 && !allSelected;
+  useEffect(() => {
+    if (selectAllRef.current) selectAllRef.current.indeterminate = someSelected;
+  }, [someSelected]);
+
+  return (
+    <div className="disc-pane">
+      {needsTriage.length > 0 && onSetSelection && (
+        <div style={{display:"flex", gap:10, flexWrap:"wrap", alignItems:"center", marginBottom:10}}>
+          <label style={{display:"flex", alignItems:"center", gap:6, fontSize:11, color:"var(--text-soft)", cursor:"pointer"}}>
+            <input ref={selectAllRef} type="checkbox" checked={allSelected}
+              onChange={() => onSetSelection(needsTriageIds, !allSelected)} />
+            {selectedTriageIds.length > 0 ? `${selectedTriageIds.length} selected` : "Select all"}
+          </label>
+          {selectedTriageIds.length > 0 && onBulkDismiss && onBulkMarkPosting && (
+            <>
+              <button className="btn" style={{fontSize:11, padding:"5px 10px"}}
+                disabled={bulkBusy} onClick={() => onBulkMarkPosting(selectedTriageIds)}>
+                {bulkBusy ? "\u2026" : "Mark as postings"}
+              </button>
+              <button className="btn" style={{fontSize:11, padding:"5px 10px"}}
+                disabled={bulkBusy} onClick={onBulkDismiss}>
+                {bulkBusy ? "\u2026" : "Dismiss selected"}
+              </button>
+            </>
+          )}
+        </div>
+      )}
+      <div className="kanban-cards disc-pane-cards">
+        {needsTriage.map(d => (
+          <DiscoveryCard key={d.id} d={d}
+            expanded={expandedId===d.id} onToggleExpand={onToggleExpand}
+            bodyLoading={bodyLoadingId===d.id} body={bodies[d.id]}
+            senderCount={d.sender ? (senderCounts[d.sender]||0) : 0}
+            onDismiss={onDismiss} onDismissSender={onDismissSender} dismissing={dismissing}
+            onMarkPosting={onMarkPosting} marking={marking}
+            attaching={attaching} onOpenResolver={onOpenResolver}
+            onAlwaysPosting={onAlwaysPosting} markingSender={markingSender}
+            selected={selected} onToggleSelected={onToggleSelected}
+            pendingDismiss={pendingDismissIds && pendingDismissIds.has(d.id)} />
+        ))}
+        {needsTriage.length === 0 && <EmptyState icon={<Icon name="mailbox" size={26}/>} title="Nothing to triage." />}
+      </div>
+    </div>
+  );
+}
+
+// Opened by a Needs-Triage card's "Pick application..." button -- the
+// only way left to attach an email to an application, now that
+// drag-and-drop is gone. Always offers a full search over every open
+// application -- not just the backend's narrowed candidates -- plus
+// "Create new application" for genuinely new senders.
+// Status choice lives here (in "Also update status") rather than
+// being pre-set by which kanban column a card was dropped on -- there's
+// no drag-and-drop left on the Needs Triage tab, so this is the only
+// place left to decide it. Picking an application (candidate chip,
+// search result) just highlights it; "Attach" is a separate, explicit
+// step so the status choice -- made after picking the application --
+// is never lost by an accidental early click. See
+// EMAIL_SYNC_TABS_HANDOFF.md concept B.
+const RESOLVE_STATUS_CHOICES = [
+  {key:"none", label:"No change"},
+  {key:"interviewing", label:"Interviewing"},
+  {key:"rejected", label:"Rejected"},
+];
+function ResolveDiscoveryModal({discovery, apps, onClose, onPick, onCreate, attaching}){
   const [q, setQ] = useState("");
+  const [pickedKey, setPickedKey] = useState(null);
+  const [statusChoice, setStatusChoice] = useState("none");
   const inputRef = useRef(null);
   useEffect(() => { if (inputRef.current) inputRef.current.focus(); }, []);
 
@@ -4865,51 +4921,77 @@ function ResolveDiscoveryModal({discovery, apps, intent, onClose, onPick, onCrea
   }, [openApps, query]);
 
   const candidates = discovery.candidates || [];
+  const candidateKeys = new Set(candidates.map(c => c.item_key));
+  const restApps = filtered.filter(a => !candidateKeys.has(a.item_key));
+
+  const doAttach = () => {
+    if (!pickedKey || attaching) return;
+    onPick(pickedKey, statusChoice === "none" ? null : statusChoice);
+  };
+
+  const rowStyle = (key) => ({
+    textAlign:"left", justifyContent:"flex-start",
+    border: pickedKey === key ? "1px solid var(--accent, #3B82F6)" : undefined,
+    background: pickedKey === key ? "#3B82F614" : undefined,
+  });
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={e => e.stopPropagation()} style={{position:"relative", maxWidth:520}}>
         <button className="close-x" aria-label="Close" onClick={onClose}>{<Icon name="close"/>}</button>
         <h2>Attach to an application</h2>
-        {intent && (
-          <p style={{fontSize:11, fontWeight:700, color: DEFAULT_STATUS_COLORS[intent] || "var(--text-soft)", marginTop:4}}>
-            {"Will also mark the application " + (intent === "interviewing" ? "Interviewing" : "Rejected") + "."}
-          </p>
-        )}
         <p style={{color:"var(--text-mute)", fontSize:12, marginTop:6, lineHeight:1.5}}>
           <strong>{discovery.subject || "(no subject)"}</strong><br/>
           {discovery.sender}{discovery.received_at ? ` \u2022 ${discovery.received_at}` : ""}
         </p>
 
-        {candidates.length > 0 && (
-          <>
-            <div className="section-label" style={{marginTop:14}}>Likely matches</div>
-            <div style={{display:"flex", flexWrap:"wrap", gap:6, marginTop:6}}>
-              {candidates.map(c => (
-                <button key={c.item_key} className="pick-chip" disabled={attaching}
-                  onClick={() => onPick(c.item_key)}>{c.label}</button>
-              ))}
-            </div>
-          </>
-        )}
-
-        <div className="section-label" style={{marginTop:14}}>Search all applications</div>
+        <div className="section-label" style={{marginTop:14}}>Search your applications</div>
         <input ref={inputRef} className="input" style={{marginTop:6, width:"100%"}} placeholder="Company or role\u2026"
           value={q} onChange={e => setQ(e.target.value)} />
-        <div style={{marginTop:8, maxHeight:260, overflowY:"auto", display:"flex", flexDirection:"column", gap:4}}>
+        <div style={{marginTop:8, maxHeight:220, overflowY:"auto", display:"flex", flexDirection:"column", gap:4}}>
           <button className="btn primary" style={{textAlign:"left", justifyContent:"flex-start"}} disabled={attaching}
             onClick={onCreate}>
             {"+ Create new application" + (discovery.guessed_company ? ` for "${discovery.guessed_company}"` : "")}
           </button>
-          {filtered.map(a => (
-            <button key={a.item_key} className="btn subtle" style={{textAlign:"left", justifyContent:"flex-start"}}
-              disabled={attaching} onClick={() => onPick(a.item_key)}>
+          {candidates.map(c => (
+            <button key={c.item_key} className="btn subtle" style={rowStyle(c.item_key)}
+              disabled={attaching} onClick={() => setPickedKey(c.item_key)}>
+              {c.label}
+              <span style={{marginLeft:8, fontSize:9, fontWeight:700, color:"var(--amber-text)"}}>Likely match</span>
+            </button>
+          ))}
+          {restApps.map(a => (
+            <button key={a.item_key} className="btn subtle" style={rowStyle(a.item_key)}
+              disabled={attaching} onClick={() => setPickedKey(a.item_key)}>
               {a.effective_company}{a.role_label && a.role_label !== "(root)" ? ` \u2014 ${a.role_label}` : ""}
             </button>
           ))}
-          {filtered.length === 0 && (
+          {candidates.length === 0 && restApps.length === 0 && (
             <p style={{color:"var(--text-mute)", fontSize:12, padding:"6px 2px"}}>No matching applications.</p>
           )}
+        </div>
+
+        <div className="section-label" style={{marginTop:14}}>Also update status</div>
+        <div style={{display:"flex", flexWrap:"wrap", gap:6, marginTop:6}}>
+          {RESOLVE_STATUS_CHOICES.map(({key, label}) => (
+            <button key={key} type="button" className="btn subtle" disabled={attaching}
+              style={{
+                fontSize:11.5, padding:"5px 10px",
+                border: statusChoice === key ? `1px solid ${DEFAULT_STATUS_COLORS[key] || "var(--border)"}` : undefined,
+                color: key !== "none" ? DEFAULT_STATUS_COLORS[key] : undefined,
+                fontWeight: statusChoice === key ? 700 : 500,
+              }}
+              onClick={() => setStatusChoice(key)}>
+              {label}
+            </button>
+          ))}
+        </div>
+
+        <div style={{display:"flex", justifyContent:"flex-end", gap:8, marginTop:16}}>
+          <button className="btn" onClick={onClose}>Cancel</button>
+          <button className="btn primary" disabled={!pickedKey || attaching} onClick={doAttach}>
+            {attaching ? "Attaching\u2026" : "Attach"}
+          </button>
         </div>
       </div>
     </div>
@@ -5014,12 +5096,15 @@ function EmailHubPage({fireToast, setPage, setSelectedKey, refreshStatus, refres
   const [discError, setDiscError] = useState(null);
   const [scanning, setScanning] = useState(false);
   const [backfilling, setBackfilling] = useState(false);
+  // Last backfill's per-item results, so the button's "Saved N PDFs" toast
+  // isn't the only trace of what happened -- kept until dismissed or the
+  // next backfill run replaces it, whichever's first.
+  const [backfillResults, setBackfillResults] = useState(null);
   const [dismissing, setDismissing] = useState(null);
   const [reviewing, setReviewing] = useState(null);
   const [expandedId, setExpandedId] = useState(null);
   const [bodies, setBodies] = useState({});
   const [bodyLoadingId, setBodyLoadingId] = useState(null);
-  const [attachPicks, setAttachPicks] = useState({});
   const [attaching, setAttaching] = useState(null);
   const [selected, setSelected] = useState(() => new Set()); // discovery ids checked for bulk actions
   const [bulkBusy, setBulkBusy] = useState(false);
@@ -5169,9 +5254,22 @@ function EmailHubPage({fireToast, setPage, setSelectedKey, refreshStatus, refres
         if (result.saved > 0) fireToast(`Saved ${result.saved} missing email PDF${result.saved === 1 ? "" : "s"}.`);
         else fireToast("No missing email PDFs found.");
       }
+      // Keep the full per-item list around (not just saved ones) so a
+      // failure is just as visible as a success -- see EmptyState below
+      // in the results panel for the zero-touched case.
+      setBackfillResults(result.details || []);
       if (result.saved > 0 && refreshApps) await refreshApps();
     } catch (e) { setDiscError(String(e.message || e)); }
     finally { setBackfilling(false); }
+  };
+
+  // Opens the exact PDF the backfill just saved (see api.py's pdf_relpath)
+  // so the user can manually check it -- /api/open only serves files, not
+  // folders, so this is the file itself, not dest_folder.
+  const revealBackfilledFolder = async (pdfRelpath) => {
+    if (!pdfRelpath) { if (fireToast) fireToast("No PDF path recorded for this one."); return; }
+    try { await apiPost("/api/open", {relpath: pdfRelpath}); }
+    catch (e) { if (fireToast) fireToast("Couldn't open that file."); }
   };
 
   const dismiss = async (id) => {
@@ -5225,27 +5323,18 @@ function EmailHubPage({fireToast, setPage, setSelectedKey, refreshStatus, refres
     if (appliedApp && setPage && setSelectedKey) { setPage("pipeline"); setSelectedKey(appliedApp.id); }
   };
 
-  const attach = async (discoveryId) => {
-    const itemKey = attachPicks[discoveryId];
-    if (!itemKey) return;
-    setAttaching(discoveryId); setDiscError(null);
-    try {
-      const form = new FormData();
-      form.append("item_key", itemKey);
-      const result = await uploadFormData(`${API_BASE}/api/discoveries/${discoveryId}/attach`, form);
-      setDiscoveries(result.discoveries);
-      if (onCountChange) onCountChange(result.discoveries.length);
-      setSelected(prev => { const next = new Set(prev); next.delete(discoveryId); return next; });
-      if (refreshApps) await refreshApps();
-      if (refreshStatus) await refreshStatus();
-      if (fireToast) fireToast("Attached to the application you picked.");
-    } catch (e) { setDiscError(String(e.message || e)); }
-    finally { setAttaching(null); }
-  };
-
-  // ---- board view (Part 3: Job Postings / Needs Triage / Applications) ----
-  const [boardView, setBoardView] = useState("board");
+  // ---- tabs (Job Postings / Needs Triage) -- replaces the old 3-column
+  // board (Job Postings / Needs Triage / Interviews-Rejections-Updates
+  // rail) plus its side panel with a single full-width pane per tab,
+  // mirroring Pipeline's own List/Kanban pattern. See
+  // EMAIL_SYNC_TABS_HANDOFF.md concept B. ----
+  const [emailTab, setEmailTab] = useState("postings");
   const [postingSort, setPostingSort] = useState("newest");
+  // "Favorites" view -- filters the Job Postings list down to saved/
+  // starred items only, on top of the existing saved-floats-to-top
+  // partition in JobPostingsPane. Separate from postingSort since it's
+  // orthogonal to recency (a favorite can be old or new).
+  const [postingFavoritesOnly, setPostingFavoritesOnly] = useState(false);
   // Grid/list layout for the Job Postings column only -- pure CSS swap,
   // no backend involvement (EMAIL_SYNC_REDESIGN_HANDOFF.md section 3).
   // Persisted like other UI-only prefs in this file (jth_* prefix).
@@ -5259,12 +5348,6 @@ function EmailHubPage({fireToast, setPage, setSelectedKey, refreshStatus, refres
   }, [postingsView]);
   const [marking, setMarking] = useState(null);
   const [resolvingDiscovery, setResolvingDiscovery] = useState(null);
-  // The manual_status to apply once resolvingDiscovery is actually
-  // attached to a picked application -- set when the resolver was opened
-  // via a drop on one of the Interviews/Rejections/Updates columns
-  // (STATUS_DROP_COLUMNS), null when opened via a card's own "Pick
-  // application..." button/chips (plain attach, no status change).
-  const [resolvingIntent, setResolvingIntent] = useState(null);
   const [reviewingIntent, setReviewingIntent] = useState(null);
 
   // Click equivalent of dragging a Needs-Triage card onto the Job
@@ -5311,10 +5394,21 @@ function EmailHubPage({fireToast, setPage, setSelectedKey, refreshStatus, refres
   // place (search_unmatched_messages excludes digest-shaped subjects
   // unless the sender is already whitelisted), so there'd otherwise be no
   // card to click "always treat as postings" on. This lets the user
-  // whitelist an address directly, then re-scan to pick up its mail.
+  // whitelist an address directly, then immediately check the inbox for
+  // its mail in one step (previously two separate buttons/clicks).
   const [manualSender, setManualSender] = useState("");
   const [addingManualSender, setAddingManualSender] = useState(false);
-  const addManualPostingSender = async () => {
+  // Whitelist every entry in KNOWN_JOB_ALERT_SENDERS in one click instead
+  // of walking through them one at a time (fill field, whitelist, repeat
+  // x6). One scan at the end, not one per sender.
+  const [whitelistingAllKnown, setWhitelistingAllKnown] = useState(false);
+
+  // Combined version of the two steps above: whitelist the typed sender,
+  // then immediately run the same scan `scan()` below runs from the
+  // toolbar -- one click instead of "add sender" then hunt for "Check
+  // inbox now". `scan` is defined further down (it needs accts loaded
+  // first) but is stable across renders, so calling it here is safe.
+  const whitelistAndCheckInboxNow = async () => {
     const sender = manualSender.trim();
     if (!sender) return;
     setAddingManualSender(true); setDiscError(null);
@@ -5325,21 +5419,45 @@ function EmailHubPage({fireToast, setPage, setSelectedKey, refreshStatus, refres
       setDiscoveries(result.discoveries);
       if (onCountChange) onCountChange(result.discoveries.length);
       setManualSender("");
-      if (fireToast) fireToast(`Whitelisted "${sender}" -- click "Check inbox now" to pull in its mail.`);
+      await scan();
+      if (fireToast) fireToast(`Whitelisted "${sender}" and checked the inbox for its mail.`);
     } catch (e) { setDiscError(String(e.message || e)); }
     finally { setAddingManualSender(false); }
   };
 
-  // Direct attach used by the board's quick-pick chips and the resolver
-  // modal -- same endpoint as `attach` above, but takes the item_key as
-  // an argument instead of reading it out of the list view's
-  // per-row `attachPicks` state. `intent`, when set (a card was dropped
-  // on the Interviews or Rejections column -- see STATUS_DROP_COLUMNS),
-  // is a manual_status applied to whichever application the email just
-  // attached to, via the same /api/applications/{id}/override endpoint
-  // the Pipeline board's own drag-and-drop uses (see moveStatus). Plain
-  // chip/button clicks and drops on Updates never pass an intent, so
-  // they're unaffected -- attach only, no status change.
+  // "Whitelist all known senders" -- same idea as whitelistAndCheckInboxNow
+  // above but for every entry in KNOWN_JOB_ALERT_SENDERS at once, so the
+  // user isn't clicking each chip then re-typing/whitelisting individually.
+  // Sequential (not Promise.all) so a single failure is easy to attribute
+  // to one sender, then a single scan() at the end covers all of them.
+  const whitelistAllKnownSenders = async () => {
+    setWhitelistingAllKnown(true); setDiscError(null);
+    try {
+      let latest = null;
+      for (const k of KNOWN_JOB_ALERT_SENDERS) {
+        const form = new FormData();
+        form.append("sender", k.domain);
+        latest = await uploadFormData(`${API_BASE}/api/discoveries/sender-classification`, form);
+      }
+      if (latest) {
+        setDiscoveries(latest.discoveries);
+        if (onCountChange) onCountChange(latest.discoveries.length);
+      }
+      await scan();
+      if (fireToast) fireToast(`Whitelisted all ${KNOWN_JOB_ALERT_SENDERS.length} known senders and checked the inbox.`);
+    } catch (e) { setDiscError(String(e.message || e)); }
+    finally { setWhitelistingAllKnown(false); }
+  };
+
+
+  // Direct attach used by the resolver modal -- takes the item_key
+  // straight from ResolveDiscoveryModal's local selection state.
+  // `intent`, when set (the modal's "Also update status" choice was
+  // Interviewing/Rejected rather than "No change"), is a manual_status
+  // applied to whichever application the email just attached to, via the
+  // same /api/applications/{id}/override endpoint the Pipeline board's
+  // own drag-and-drop uses (see moveStatus). "No change" never passes an
+  // intent, so it's unaffected -- attach only, no status change.
   const quickAttach = async (discoveryId, itemKey, intent) => {
     setAttaching(discoveryId); setDiscError(null);
     try {
@@ -5372,17 +5490,14 @@ function EmailHubPage({fireToast, setPage, setSelectedKey, refreshStatus, refres
     finally { setAttaching(null); }
   };
 
-  const openResolver = (discovery, intent) => {
+  const openResolver = (discovery) => {
     setResolvingDiscovery(discovery);
-    setResolvingIntent(intent || null);
   };
   const openCreateFromResolver = () => {
     const d = resolvingDiscovery;
-    const intent = resolvingIntent;
     setResolvingDiscovery(null);
-    setResolvingIntent(null);
     setReviewing(d);
-    setReviewingIntent(intent);
+    setReviewingIntent(null);
   };
 
   // ---- bulk selection over the discoveries list ----
@@ -5394,10 +5509,19 @@ function EmailHubPage({fireToast, setPage, setSelectedKey, refreshStatus, refres
     });
   };
 
-  const selectableIds = (discoveries || []).map(d => d.id);
-  const allSelected = selectableIds.length > 0 && selectableIds.every(id => selected.has(id));
-  const toggleSelectAll = () => {
-    setSelected(prev => allSelected ? new Set() : new Set(selectableIds));
+  // "Select all" header checkbox on Needs Triage -- ids is always the
+  // full current (post-filter) list from NeedsTriagePane, so this is a
+  // clean replace rather than a per-id toggle loop: selectAll adds all
+  // of them regardless of prior state, clearing selectAll removes just
+  // those ids (any selection elsewhere in `selected` -- there isn't any
+  // today, but this keeps the intent narrow -- is left alone).
+  const setTriageSelection = (ids, selectAll) => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (selectAll) ids.forEach(id => next.add(id));
+      else ids.forEach(id => next.delete(id));
+      return next;
+    });
   };
 
   // Bulk Dismiss: works on any selected row regardless of match kind --
@@ -5421,36 +5545,10 @@ function EmailHubPage({fireToast, setPage, setSelectedKey, refreshStatus, refres
     }
   };
 
-  // Bulk Attach: only meaningful for selected 'ambiguous' rows that
-  // already have a candidate picked in their dropdown -- a clean-match
-  // row needs the Review form (company/role/status are all editable
-  // there), so bulk-accepting those without a look isn't offered.
-  const bulkAttachable = Array.from(selected).filter(id => attachPicks[id]);
-  const bulkAttach = async () => {
-    const ids = bulkAttachable;
-    if (ids.length === 0) return;
-    setBulkBusy(true); setDiscError(null);
-    for (const id of ids) {
-      const itemKey = attachPicks[id];
-      try {
-        const form = new FormData();
-        form.append("item_key", itemKey);
-        await uploadFormData(`${API_BASE}/api/discoveries/${id}/attach`, form);
-      } catch (e) { /* one failure shouldn't stop the rest */ }
-    }
-    setSelected(prev => { const next = new Set(prev); ids.forEach(id => next.delete(id)); return next; });
-    await loadDiscoveries();
-    if (refreshApps) await refreshApps();
-    if (refreshStatus) await refreshStatus();
-    setBulkBusy(false);
-    if (fireToast) fireToast(`Attached ${ids.length} email${ids.length === 1 ? "" : "s"}.`);
-  };
-
-  // Bulk Mark as Posting: board-only counterpart to bulkDismiss/bulkAttach
-  // above -- lets a multi-selected group of Needs-Triage cards jump to
-  // Job Postings together (via group drag-and-drop, or the bulk bar),
-  // instead of one row at a time. Same sequential-call pattern as the
-  // others (see bulkDismiss's comment on why this isn't Promise.all'd).
+  // Bulk Mark as Posting: lets a multi-selected group of Needs-Triage
+  // cards jump to Job Postings together, instead of one row at a time.
+  // Same sequential-call pattern as bulkDismiss above (see its comment
+  // on why this isn't Promise.all'd).
   const bulkMarkPosting = async (ids) => {
     if (!ids || ids.length === 0) return;
     setBulkBusy(true); setDiscError(null);
@@ -5468,7 +5566,7 @@ function EmailHubPage({fireToast, setPage, setSelectedKey, refreshStatus, refres
   (discoveries || []).forEach(d => { if (d.sender) senderCounts[d.sender] = (senderCounts[d.sender] || 0) + 1; });
 
   return (
-    <div>
+    <div style={{display:"flex", flexDirection:"column", height:"100%"}}>
       <h1 className="page-title">Email Sync</h1>
       <p style={{color:"var(--text-soft)", fontSize:13, lineHeight:1.5, maxWidth:760, marginTop:-6, marginBottom:20}}>
         Connect the inboxes you applied from, then review anything that looks like application mail
@@ -5476,9 +5574,159 @@ function EmailHubPage({fireToast, setPage, setSelectedKey, refreshStatus, refres
         attach a row below.
       </p>
 
-      {/* ---- connected accounts ---- */}
-      <div className="section-label">Connected accounts</div>
+      {/* ---- at-a-glance stats ---- */}
+      {/* Every number here comes straight off state the page already
+          loads (accounts/discoveries/jobPostings) -- no separate sync
+          log exists yet, so this deliberately doesn't claim one (no
+          timeline of past syncs). Reuses .metric-card from the Insights
+          page for visual consistency rather than one-off styling. */}
+      {accounts && discoveries && (
+        <div style={{display:"flex", gap:14, flexWrap:"wrap", marginBottom:20}}>
+          <div className="metric-card">
+            <div className="num">{accounts.filter(a => a.last_synced_at).length}/{accounts.length}</div>
+            <div className="lbl">Accounts synced</div>
+          </div>
+          <div className="metric-card">
+            <div className="num">{accounts.reduce((sum, a) => sum + (a.matched_email_count || 0), 0)}</div>
+            <div className="lbl">Matched emails</div>
+          </div>
+          <div className="metric-card">
+            <div className="num">{jobPostings ? jobPostings.length : 0}</div>
+            <div className="lbl">Job postings caught</div>
+          </div>
+          <div className="metric-card">
+            <div className="num">{discoveries.filter(d => d.kind !== "posting").length}</div>
+            <div className="lbl">Needs triage</div>
+          </div>
+        </div>
+      )}
+
+      {/* ---- connected accounts + possible new applications -- moved
+          off the fixed header entirely and into their own "Manage
+          accounts" tab alongside Job postings / Needs triage (see
+          EMAIL_SYNC_TABS_HANDOFF.md concept C). Pipeline's own fixed
+          header is just title + stat-strip + filter row; this
+          setup/maintenance content (account cards, known-senders
+          picker, manual-sender input) has no Pipeline equivalent, and
+          living permanently in the header -- collapsed or not -- was
+          either invisible or pushed the header tall enough to leave
+          only a sliver of the Job Postings / Needs Triage list visible
+          below. A dedicated tab gives it a full-height pane of its own
+          like the other two, while the metric cards above still
+          surface the accounts-synced and discoveries counts at a
+          glance. Errors stay visible regardless of which tab is
+          active. ---- */}
       {acctError && <div className="warning-banner" style={{marginTop:8}}>{acctError}</div>}
+      {discError && <div className="warning-banner" style={{marginTop:8}}>{discError}</div>}
+
+      <div style={{display:"flex", gap:8, flexWrap:"wrap", alignItems:"center", marginTop:12, marginBottom:14}}>
+        <button className="btn" style={{fontSize:12, padding:"6px 12px"}} disabled={scanning} onClick={scan}>
+          {scanning ? "Checking…" : <><Icon name="refresh" size={13} style={{marginRight:4, verticalAlign:"-2px"}}/>Check inbox now</>}
+        </button>
+        <button className="btn" style={{fontSize:12, padding:"6px 12px"}} disabled={backfilling} onClick={backfillEmailPdfs}
+          title="Saves the source email as a PDF for any already-linked application that doesn't have one yet.">
+          {backfilling ? "Backfilling…" : "Backfill missing email PDFs"}
+        </button>
+      </div>
+
+      {backfillResults && (
+        <div className="doc-card" style={{padding:"10px 14px", marginBottom:14, maxWidth:820}}>
+          <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:6}}>
+            <span style={{fontSize:12.5, fontWeight:600, color:"var(--text-strong)"}}>
+              Last backfill: {backfillResults.filter(d => d.outcome === "saved").length} saved,{" "}
+              {backfillResults.filter(d => d.outcome === "failed").length} failed
+            </span>
+            <button type="button" className="btn subtle" style={{fontSize:11, padding:"3px 8px"}}
+              onClick={() => setBackfillResults(null)}>Dismiss</button>
+          </div>
+          {backfillResults.length === 0 && (
+            <p style={{fontSize:12, color:"var(--text-soft)", margin:0}}>
+              Every already-linked application already had its email PDF -- nothing needed backfilling.
+            </p>
+          )}
+          {backfillResults.length > 0 && (
+            <div style={{display:"flex", flexDirection:"column", gap:4, maxHeight:220, overflowY:"auto"}}>
+              {backfillResults.map((d, i) => (
+                <div key={i} style={{display:"flex", alignItems:"center", gap:8, fontSize:12, padding:"4px 0",
+                  borderTop: i > 0 ? "1px solid var(--border)" : "none"}}>
+                  <span style={{flex:"none", fontSize:10.5, fontWeight:700, textTransform:"uppercase",
+                    color: d.outcome === "saved" ? "var(--green-text, #4ade80)" : "var(--red-text, #f87171)",
+                    width:44}}>{d.outcome}</span>
+                  <span style={{flex:1, minWidth:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap",
+                    color:"var(--text-strong)"}} title={`${d.company} — ${d.name} — ${d.subject || ""}`}>
+                    {d.company} — {d.name}
+                  </span>
+                  {d.outcome === "saved" && d.pdf_relpath && (
+                    <button type="button" className="btn subtle" style={{fontSize:11, padding:"3px 8px", flex:"none"}}
+                      onClick={() => revealBackfilledFolder(d.pdf_relpath)}>
+                      Open PDF
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ---- tabs -- Pipeline's own List/Kanban tab pattern, extended
+          with a third "Manage accounts" pane for the setup/maintenance
+          content that used to live in the collapsible header section
+          above. Only one pane renders at a time; see
+          EMAIL_SYNC_TABS_HANDOFF.md concept C. ---- */}
+      <div className="tabs">
+        <button className={"tab-btn" + (emailTab === "postings" ? " active" : "")} onClick={() => setEmailTab("postings")}>
+          Job postings {jobPostings ? jobPostings.length : 0}
+        </button>
+        <button className={"tab-btn" + (emailTab === "triage" ? " active" : "")} onClick={() => setEmailTab("triage")}>
+          Needs triage {discoveries ? discoveries.filter(d => d.kind !== "posting").length : 0}
+        </button>
+        <button className={"tab-btn" + (emailTab === "manage" ? " active" : "")} onClick={() => setEmailTab("manage")}>
+          Manage accounts {accounts ? accounts.length : 0}
+        </button>
+      </div>
+
+      {/* ---- scrollable body -- everything above this line (title,
+          metric cards, error banners, Check inbox now/Backfill, and the
+          tab bar itself) is fixed page chrome and must never scroll.
+          Mirrors Pipeline's own header/body split: PipelinePage's root
+          is a height:100% flex column with a flex:1,minHeight:0 box
+          around just the List/Kanban content, so only that inner box
+          scrolls while the title/stat-strip/filter row stay put. Same
+          shape here -- this is the only element in the page that
+          scrolls, and now all three tab panes (including Manage
+          accounts) live inside it. ---- */}
+      <div style={{flex:1, minHeight:0, overflow:"auto"}}>
+        {!discError && !discoveries && emailTab !== "manage" && <p style={{color:"var(--text-mute)", fontSize:12}}>Loading…</p>}
+        {discoveries && discoveries.length === 0 && (!jobPostings || jobPostings.length === 0) && emailTab !== "manage" && (
+          <EmptyState icon={<Icon name="mailbox" size={26}/>} title="Nothing pending review" sub="Check inbox now to scan your connected accounts again." />
+        )}
+        {discoveries && (discoveries.length > 0 || (jobPostings && jobPostings.length > 0)) && emailTab === "postings" && (
+          <JobPostingsPane jobPostings={jobPostings}
+            dismissingJobId={dismissingJobId} onDismissJobPosting={dismissJobPosting}
+            savingJobId={savingJobId} onToggleSaveJob={toggleSaveJob}
+            apps={apps} applyingJobId={applyingJobId} onApplyJob={setApplyingJobPosting} onOpenApplied={openApplied}
+            postingSort={postingSort} setPostingSort={setPostingSort}
+            postingsView={postingsView} setPostingsView={setPostingsView}
+            postingFilter={postingFilter} setPostingFilter={setPostingFilter}
+            postingFavoritesOnly={postingFavoritesOnly} setPostingFavoritesOnly={setPostingFavoritesOnly}
+            pendingDismissJobIds={pendingDismissJobIds} />
+        )}
+        {discoveries && (discoveries.length > 0 || (jobPostings && jobPostings.length > 0)) && emailTab === "triage" && (
+          <NeedsTriagePane discoveries={discoveries}
+            expandedId={expandedId} onToggleExpand={toggleExpand} bodies={bodies} bodyLoadingId={bodyLoadingId}
+            dismissing={dismissing} onDismiss={dismiss} onDismissSender={dismissSender}
+            marking={marking} onMarkPosting={markPosting}
+            attaching={attaching} onOpenResolver={openResolver}
+            onAlwaysPosting={alwaysPosting} markingSender={markingSender}
+            senderCounts={senderCounts}
+            selected={selected} onToggleSelected={toggleSelected} onSetSelection={setTriageSelection} bulkBusy={bulkBusy}
+            onBulkDismiss={bulkDismiss} onBulkMarkPosting={bulkMarkPosting}
+            pendingDismissIds={pendingDismissDiscoveryIds} />
+        )}
+        {emailTab === "manage" && (
+      <>
+      <div className="section-label">Connected accounts</div>
       {!acctError && !accounts && <p style={{color:"var(--text-mute)", fontSize:12}}>Loading…</p>}
       {accounts && (
         <div style={{marginTop:10}}>
@@ -5584,180 +5832,48 @@ function EmailHubPage({fireToast, setPage, setSelectedKey, refreshStatus, refres
         invites) that doesn't match anything already in your tracker. Nothing is created until you
         review and accept a match, individually or in bulk below.
       </p>
-      {discError && <div className="warning-banner" style={{marginTop:8}}>{discError}</div>}
 
-      <div style={{display:"flex", gap:8, flexWrap:"wrap", alignItems:"center", marginTop:14}}>
+      <div style={{display:"flex", gap:6, flexWrap:"wrap", alignItems:"center", marginTop:14}}>
+        <span style={{fontSize:11, color:"var(--text-soft)", marginRight:2}}>Known senders:</span>
+        {KNOWN_JOB_ALERT_SENDERS.map(k => (
+          <button key={k.domain} type="button" className="btn subtle" style={{fontSize:11.5, padding:"4px 9px"}}
+            title={`Fill the field below with ${k.domain}`} onClick={() => setManualSender(k.domain)}>
+            {k.label}
+          </button>
+        ))}
+        <button type="button" className="btn primary" style={{fontSize:11.5, padding:"4px 9px", marginLeft:4}}
+          disabled={whitelistingAllKnown || scanning} onClick={whitelistAllKnownSenders}
+          title="Whitelist every known sender above and check the inbox for their mail, in one step">
+          {whitelistingAllKnown ? "Whitelisting all…" : "Whitelist all known senders"}
+        </button>
+      </div>
+      <div style={{display:"flex", gap:8, flexWrap:"wrap", alignItems:"center", marginTop:8}}>
         <input type="text" placeholder="jobalerts-noreply@linkedin.com" value={manualSender}
           onChange={e => setManualSender(e.target.value)}
-          onKeyDown={e => { if (e.key === "Enter" && !addingManualSender) addManualPostingSender(); }}
+          onKeyDown={e => { if (e.key === "Enter" && !addingManualSender) whitelistAndCheckInboxNow(); }}
           style={{fontSize:12.5, padding:"6px 10px", borderRadius:8, border:"1px solid var(--border)", background:"var(--panel)", color:"var(--text)", minWidth:260}} />
-        <button className="btn" style={{fontSize:12, padding:"6px 12px"}}
-          disabled={!manualSender.trim() || addingManualSender} onClick={addManualPostingSender}
-          title="For a sender whose mail always looks like a job-alert digest (LinkedIn Job Alerts, Handshake, Built In, etc.) -- these never produce a review card on their own, since digest-shaped subjects are excluded from scanning by default. Whitelist the address here, then Check inbox now.">
-          {addingManualSender ? "Adding…" : "Always treat this sender as postings"}
+        <button className="btn primary" style={{fontSize:12, padding:"6px 12px"}}
+          disabled={!manualSender.trim() || addingManualSender || scanning} onClick={whitelistAndCheckInboxNow}
+          title="For a sender whose mail always looks like a job-alert digest (LinkedIn Job Alerts, Handshake, Built In, etc.) -- these never produce a review card on their own, since digest-shaped subjects are excluded from scanning by default. This whitelists the address and checks the inbox for its mail in one step.">
+          {addingManualSender ? "Whitelisting…" : scanning ? "Checking…" : "Whitelist & check inbox now"}
         </button>
       </div>
       <p style={{color:"var(--text-soft)", fontSize:11.5, lineHeight:1.4, marginTop:4, maxWidth:760}}>
-        For recurring job-alert senders (LinkedIn Job Alerts, Handshake, Built In, Indeed, etc.) that never show up
-        below on their own -- type the sender's email address, then click "Check inbox now" to pull in their mail.
+        Click a known sender above to fill in its domain, or type any other recurring job-alert sender's address
+        below -- one click whitelists it and pulls in its mail immediately.
       </p>
-
-      <div style={{display:"flex", gap:8, flexWrap:"wrap", alignItems:"center", marginTop:12, marginBottom:10, position:"sticky", top:0, zIndex:2, background:"var(--bg-page, var(--bg))", paddingBottom:8}}>
-        <div style={{display:"flex", background:"var(--panel)", border:"1px solid var(--border)", borderRadius:8, overflow:"hidden"}}>
-          <button className="btn subtle" style={{border:"none", borderRadius:0, background: boardView==="board" ? "var(--border)":"transparent"}} onClick={() => setBoardView("board")}>Board (drag or click to triage)</button>
-          <button className="btn subtle" style={{border:"none", borderRadius:0, background: boardView==="list" ? "var(--border)":"transparent"}} onClick={() => setBoardView("list")}>List</button>
-        </div>
-        <button className="btn" style={{fontSize:12, padding:"6px 12px"}} disabled={scanning} onClick={scan}>
-          {scanning ? "Checking…" : <><Icon name="refresh" size={13} style={{marginRight:4, verticalAlign:"-2px"}}/>Check inbox now</>}
-        </button>
-        <button className="btn" style={{fontSize:12, padding:"6px 12px"}} disabled={backfilling} onClick={backfillEmailPdfs}
-          title="Saves the source email as a PDF for any already-linked application that doesn't have one yet.">
-          {backfilling ? "Backfilling…" : "Backfill missing email PDFs"}
-        </button>
-        <div style={{flex:1}} />
-        {boardView === "list" && discoveries && discoveries.length > 0 && (
-          <>
-            <label style={{display:"flex", alignItems:"center", gap:6, fontSize:12, color:"var(--text-soft)", cursor:"pointer"}}>
-              <input type="checkbox" checked={allSelected} onChange={toggleSelectAll} />
-              Select all ({discoveries.length})
-            </label>
-            <button className="btn" style={{fontSize:12, padding:"6px 12px"}}
-              disabled={selected.size === 0 || bulkBusy} onClick={bulkDismiss}>
-              {bulkBusy ? "Working…" : `Dismiss selected${selected.size ? ` (${selected.size})` : ""}`}
-            </button>
-            <button className="btn primary" style={{fontSize:12, padding:"6px 12px"}}
-              disabled={bulkAttachable.length === 0 || bulkBusy}
-              title="Attaches every selected row that already has an application picked from its dropdown."
-              onClick={bulkAttach}>
-              {bulkBusy ? "Working…" : `Attach selected${bulkAttachable.length ? ` (${bulkAttachable.length})` : ""}`}
-            </button>
-          </>
+      </>
         )}
       </div>
-
-      {!discError && !discoveries && <p style={{color:"var(--text-mute)", fontSize:12}}>Loading…</p>}
-      {discoveries && discoveries.length === 0 && (!jobPostings || jobPostings.length === 0) && (
-        <EmptyState icon={<Icon name="mailbox" size={26}/>} title="Nothing pending review" sub="Check inbox now to scan your connected accounts again." />
-      )}
-      {discoveries && (discoveries.length > 0 || (jobPostings && jobPostings.length > 0)) && boardView === "board" && (
-        <DiscoveriesBoard discoveries={discoveries} jobPostings={jobPostings}
-          dismissingJobId={dismissingJobId} onDismissJobPosting={dismissJobPosting}
-          savingJobId={savingJobId} onToggleSaveJob={toggleSaveJob}
-          apps={apps} applyingJobId={applyingJobId} onApplyJob={setApplyingJobPosting} onOpenApplied={openApplied}
-          expandedId={expandedId} onToggleExpand={toggleExpand} bodies={bodies} bodyLoadingId={bodyLoadingId}
-          dismissing={dismissing} onDismiss={dismiss} onDismissSender={dismissSender}
-          marking={marking} onMarkPosting={markPosting}
-          attaching={attaching} onQuickPick={quickAttach} onOpenResolver={openResolver}
-          senderCounts={senderCounts} postingSort={postingSort} setPostingSort={setPostingSort}
-          postingsView={postingsView} setPostingsView={setPostingsView}
-          onAlwaysPosting={alwaysPosting} markingSender={markingSender}
-          postingFilter={postingFilter} setPostingFilter={setPostingFilter}
-          selected={selected} onToggleSelected={toggleSelected} bulkBusy={bulkBusy}
-          onBulkDismiss={bulkDismiss} onBulkMarkPosting={bulkMarkPosting}
-          pendingDismissIds={pendingDismissDiscoveryIds} pendingDismissJobIds={pendingDismissJobIds} />
-      )}
-      {discoveries && discoveries.length > 0 && boardView === "list" && (
-        <div style={{display:"flex", flexDirection:"column", gap:8}}>
-          {discoveries.map(d => {
-            const isAmbiguous = d.match_kind === "ambiguous";
-            const isChecked = selected.has(d.id);
-            return (
-              <div key={d.id} className="doc-card" style={{padding:"10px 12px", border: isChecked ? "1px solid var(--accent, #3B82F6)" : undefined, opacity: pendingDismissDiscoveryIds.has(d.id) ? .4 : 1}}>
-                <div className="doc-card-top">
-                  <input type="checkbox" style={{marginTop:3}} checked={isChecked} onChange={() => toggleSelected(d.id)} />
-                  <span style={{fontSize:15}}><Icon name="mail" size={15}/></span>
-                  <div style={{flex:1, minWidth:0}}>
-                    <div style={{fontSize:13, fontWeight:600, color:"var(--text-strong)"}}>
-                      {d.guessed_company || "Unknown company"}
-                      {isAmbiguous && (
-                        <span style={{marginLeft:6, fontSize:9.5, fontWeight:700, color:"var(--amber-text)", border:"1px solid var(--amber-text)", borderRadius:4, padding:"1px 5px", verticalAlign:"middle"}}>
-                          Which application?
-                        </span>
-                      )}
-                    </div>
-                    <div style={{fontSize:11, color:"var(--text-soft)", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>
-                      {d.subject || "(no subject)"}
-                    </div>
-                    <div style={{fontSize:10.5, color:"var(--text-mute)"}}>
-                      {d.account_email}{d.received_at ? ` \u2022 ${d.received_at}` : ""}
-                    </div>
-                    {isAmbiguous && (
-                      <div style={{fontSize:11, color:"var(--text-soft)", marginTop:3}}>
-                        Matches {d.guessed_company}, but there's more than one open application there
-                        {" "}-- pick which one this email belongs to:
-                      </div>
-                    )}
-                    {d.sender && senderCounts[d.sender] > 1 && (
-                      <button
-                        className="btn-link"
-                        style={{fontSize:10.5, color:"var(--text-mute)", textDecoration:"underline", background:"none", border:"none", padding:0, marginTop:2, cursor:"pointer"}}
-                        disabled={dismissing === d.sender}
-                        onClick={() => dismissSender(d.sender)}>
-                        {dismissing === d.sender ? "Dismissing…" : `Dismiss all ${senderCounts[d.sender]} from this sender`}
-                      </button>
-                    )}
-                  </div>
-                  <div className="doc-card-actions">
-                    <button className="btn" style={{fontSize:11.5, padding:"5px 10px"}}
-                      onClick={() => toggleExpand(d.id)}>
-                      {expandedId === d.id ? "Hide email" : "View email"}
-                    </button>
-                    {isAmbiguous ? (
-                      <>
-                        <select
-                          className="input"
-                          style={{fontSize:11.5, padding:"5px 8px", maxWidth:220}}
-                          value={attachPicks[d.id] || ""}
-                          onChange={(e) => setAttachPicks(prev => ({...prev, [d.id]: e.target.value}))}>
-                          <option value="" disabled>Pick an application…</option>
-                          {(d.candidates || []).map(c => (
-                            <option key={c.item_key} value={c.item_key}>{c.label}</option>
-                          ))}
-                        </select>
-                        <button className="btn primary" style={{fontSize:11.5, padding:"5px 10px"}}
-                          disabled={!attachPicks[d.id] || attaching === d.id}
-                          onClick={() => attach(d.id)}>
-                          {attaching === d.id ? "Attaching…" : "Attach"}
-                        </button>
-                      </>
-                    ) : (
-                      <button className="btn primary" style={{fontSize:11.5, padding:"5px 10px"}}
-                        onClick={() => { setReviewing(d); setReviewingIntent(null); }}>
-                        Review
-                      </button>
-                    )}
-                    <button className="btn" style={{fontSize:11.5, padding:"5px 10px"}}
-                      disabled={dismissing === d.id} onClick={() => dismiss(d.id)}>
-                      {dismissing === d.id ? "Dismissing…" : "Dismiss"}
-                    </button>
-                  </div>
-                </div>
-                {expandedId === d.id && (
-                  <div style={{
-                    marginTop:8, maxHeight:220, overflowY:"auto", whiteSpace:"pre-wrap",
-                    fontSize:11.5, lineHeight:1.5, color:"var(--text-soft)",
-                    background:"var(--bg-inset, rgba(255,255,255,0.03))", border:"1px solid var(--border, rgba(255,255,255,0.08))",
-                    borderRadius:6, padding:"8px 10px",
-                  }}>
-                    {bodyLoadingId === d.id
-                      ? "Loading email…"
-                      : (bodies[d.id] || "Couldn't load the original email (it may have moved or been deleted since this was found). Judge from the subject/sender above, or check Mail.app directly.")}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
 
       {reviewing && (
         <DiscoveryReviewModal discovery={reviewing} initialStatus={reviewingIntent}
           onClose={() => { setReviewing(null); setReviewingIntent(null); }} onAccepted={onAccepted} />
       )}
       {resolvingDiscovery && (
-        <ResolveDiscoveryModal discovery={resolvingDiscovery} apps={apps} intent={resolvingIntent}
-          onClose={() => { setResolvingDiscovery(null); setResolvingIntent(null); }}
-          onPick={(itemKey) => quickAttach(resolvingDiscovery.id, itemKey, resolvingIntent)}
+        <ResolveDiscoveryModal discovery={resolvingDiscovery} apps={apps}
+          onClose={() => setResolvingDiscovery(null)}
+          onPick={(itemKey, intent) => quickAttach(resolvingDiscovery.id, itemKey, intent)}
           onCreate={openCreateFromResolver}
           attaching={attaching === resolvingDiscovery.id} />
       )}
@@ -5790,11 +5906,12 @@ function EmailHubPage({fireToast, setPage, setSelectedKey, refreshStatus, refres
 function DiscoveryReviewModal({discovery, initialStatus, onClose, onAccepted}){
   const [company, setCompany] = useState(discovery.guessed_company || "");
   const [roleLabel, setRoleLabel] = useState("");
-  // Pre-filled from the Interviews/Rejections column the card was
-  // dropped on (STATUS_DROP_COLUMNS' intent, threaded through
-  // openCreateFromResolver) when this modal was reached that way --
-  // still just the dropdown's default, freely editable below like any
-  // other case.
+  // initialStatus threads through from openCreateFromResolver when this
+  // modal was reached via the resolver's "+ Create new application"
+  // button -- currently always null (the resolver's own status choice
+  // only applies to attaching to an *existing* application), but the
+  // prop is kept in case that changes. Just the dropdown's default,
+  // freely editable below like any other case.
   const [status, setStatus] = useState(initialStatus || "applied");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
