@@ -2,8 +2,15 @@
 
 ## Start here
 
-- [`../CLAUDE_HANDOFF.md`](../CLAUDE_HANDOFF.md) — the single living handoff for Claude and ongoing engineering work. Keep this file current.
-- [`../CHANGES.md`](../CHANGES.md) — project change history.
+- [`CLAUDE_HANDOFF.md`](troubleshooting/CLAUDE_HANDOFF.md) — the single living handoff for Claude and ongoing engineering work. Keep this file current.
+- [`CHANGES.md`](troubleshooting/CHANGES.md) — project change history.
+
+## Troubleshooting
+
+- [`troubleshooting/email-sync/`](troubleshooting/email-sync/) — start
+  here for any Email Sync (Mail.app discovery / Job Postings) bug report.
+  Symptom-to-cause table, numbered audit findings, and pointers to the
+  relevant source files and regression tests.
 
 ## Specifications
 
@@ -14,5 +21,6 @@
 ## Archived handoffs
 
 - [`archive/handoffs/HANDOFF_SESSION16_LEGACY.md`](archive/handoffs/HANDOFF_SESSION16_LEGACY.md) — preserved prior session-by-session engineering handoff. It is historical reference, not the active handoff.
+- [`archive/handoffs/HANDOFF.md`](archive/handoffs/HANDOFF.md) — superseded root-level pointer stub, kept for history only.
 
 Other files in this directory are development logs, source material, and the User Guide.

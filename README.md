@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-3fb950?style=for-the-badge)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-macOS-lightgrey?style=for-the-badge&logo=apple&logoColor=white)](#-download-for-macos)
 
-**v1.1.0**
+**v1.2.0**
 
 A local, private dashboard over a folder of job-application documents you
 already keep on disk — a real pipeline view (list + drag-and-drop Kanban),
@@ -25,12 +25,14 @@ hunting and turns it into a dashboard; it never uploads anything anywhere.
 - [Zero-config layout: drop `_app/` inside your own tracker folder](#zero-config-layout-drop-_app-inside-your-own-tracker-folder)
 - [Customizing classification for your own folders](#customizing-classification-for-your-own-folders)
 - [Running it](#running-it)
+- [Connecting Mail.app for Email Sync](#connecting-mailapp-for-email-sync)
 - [Running the tests](#running-the-tests)
 - [Two local databases, two very different lifetimes](#two-local-databases-two-very-different-lifetimes)
 - [What it does](#what-it-does)
 - [Power-user features](#power-user-features)
 - [Multiple trackers / a second, independent installation](#multiple-trackers--a-second-independent-installation)
 - [Why "Date applied" matters more than file dates](#why-date-applied-matters-more-than-file-dates)
+- [Troubleshooting & continuing engineering work](#troubleshooting--continuing-engineering-work)
 - [Files](#files)
 - [Building the macOS app (.dmg) from source](#building-the-macos-app-dmg-from-source)
 - [License](#license)
@@ -198,6 +200,33 @@ here is reachable from your LAN or the internet. File endpoints resolve
 every path against the tracker root and refuse anything that would
 escape it.
 
+## Connecting Mail.app for Email Sync
+
+Email Sync is **macOS only** and requires at least one account already
+configured in **System Settings → Internet Accounts** with "Mail"
+enabled — JobTracker Hub doesn't do its own OAuth or IMAP login, and
+never stores a credential of any kind. Instead it drives Mail.app
+itself over AppleScript (`osascript`), so it only ever sees mail
+Mail.app itself already has access to.
+
+The first time it asks Mail.app for anything, macOS will show a
+standard **"'JobTracker Hub' wants to control 'Mail'"** Automation
+permission prompt. Click **OK** — if you click Don't Allow, or need to
+grant it later, enable JobTracker Hub under **System Settings →
+Privacy & Security → Automation → Mail**.
+
+From there, connect an account from the Accounts view and run a sync.
+Candidate job-alert emails land in **Needs Triage**; accept one to
+promote it onto the **Job Postings** board, or dismiss it. Nothing is
+deleted — a dismissed item can be restored, and a **Reset Email Sync**
+action is available if you want to wipe synced state (accounts,
+matches, discoveries, postings) without touching any of your actual
+applications or documents.
+
+Having a problem with a sync (missing links, emails that won't load,
+etc.)? See [Troubleshooting & continuing engineering
+work](#troubleshooting--continuing-engineering-work) below.
+
 ## Running the tests
 
 The backend has a pytest suite (`tests/`) covering workspace
@@ -291,6 +320,16 @@ meant to be committed.
   Everything here is saved server-side (`overrides.db`, same as your
   notes) via `/api/hub/settings`, so it travels with the tracker through
   export/import instead of being pinned to one browser.
+- **Email Sync** *(macOS only)* — connects to accounts already set up
+  in Mail.app and scans for job-alert/ATS emails (LinkedIn, Indeed,
+  Handshake, Lensa, and similar), surfacing candidate postings in a
+  **Needs Triage** queue. Accept one into a first-class card on the
+  **Job Postings** board (with a real "Open job" link back to the
+  listing), dismiss it, or promote it straight into a new application.
+  No OAuth, no IMAP credentials, no cloud — it drives Mail.app itself
+  over AppleScript, so it only ever sees accounts you've already
+  configured locally. See [Connecting Mail.app for Email
+  Sync](#connecting-mailapp-for-email-sync) to set it up.
 
 ## Power-user features
 
@@ -380,6 +419,35 @@ Insights velocity chart is built from it too. Setting this on your active
 applications is the highest-leverage thing to do after your first
 rebuild.
 
+## Troubleshooting & continuing engineering work
+
+The repo root is intentionally kept to just this `README.md` for
+documentation — everything else lives under `docs/`, indexed here so
+one read of this file (by a person or an AI picking up the project
+cold) is enough to find it.
+
+**Email Sync acting up?** (Mail.app discovery → Needs Triage → Job
+Postings board) Start at
+[`docs/troubleshooting/email-sync/`](docs/troubleshooting/email-sync/) —
+a symptom-to-cause table, numbered audit findings against real user
+data, and pointers to the exact source files, scripts, and tests
+involved.
+
+**Picking up engineering work, or an AI continuing a prior session?**
+Read, in this order:
+1. [`docs/troubleshooting/CLAUDE_HANDOFF.md`](docs/troubleshooting/CLAUDE_HANDOFF.md)
+   — the single living handoff. Read this first; it explains the
+   ZIP-based workflow, current state, and open items, and should be
+   kept current going forward.
+2. [`docs/troubleshooting/CHANGES.md`](docs/troubleshooting/CHANGES.md)
+   — project change history / dev log for completed work items.
+
+**One-off data-repair or read-only debug scripts** for specific known
+bugs live in
+[`scripts/troubleshooting/`](scripts/troubleshooting/) (e.g. backfilling
+missing job-posting links, cleaning up bogus account matches) — see
+that folder's own `README.md` for the full index.
+
 ## Files
 
 Backend:
@@ -424,6 +492,13 @@ Documentation:
 - `docs/JobTracker_User_Guide.pdf` — the full user guide.
 - `docs/guide-src/` — its LaTeX source and screenshots, if you want to
   edit or rebuild the PDF.
+- `docs/troubleshooting/email-sync/` — Email Sync troubleshooting entry
+  point: symptom-to-cause table and numbered audit findings. See
+  [Troubleshooting & continuing engineering work](#troubleshooting--continuing-engineering-work) above.
+- `docs/troubleshooting/CLAUDE_HANDOFF.md` — the single living handoff
+  for ongoing engineering work; the next Claude session should read this
+  first.
+- `docs/troubleshooting/CHANGES.md` — project change history.
 
 Tests:
 - `tests/` — the pytest suite; see [Running the tests](#running-the-tests).
@@ -432,9 +507,11 @@ Tests:
 - `pytest.ini` — points pytest at `tests/`.
 
 Maintenance scripts:
-- `scripts/troubleshooting/fix_doubled_tracker_names.py` — one-off cleanup for a tracker
-  name/folder doubled by a since-fixed bug — see "Multiple trackers"
-  above.
+- `scripts/troubleshooting/` — one-off data-repair and read-only debug
+  tools for specific real bugs (e.g. `fix_doubled_tracker_names.py` for
+  a tracker name/folder doubled by a since-fixed bug, see "Multiple
+  trackers" above). See that folder's own `README.md` for the full
+  index, and [Troubleshooting](#troubleshooting) above.
 
 ## Building the macOS app (.dmg) from source
 

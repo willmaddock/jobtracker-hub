@@ -138,7 +138,7 @@ License & MIT (see repository \file{LICENSE}).
 \end{tabularx}
 \vfill
 \textbf{Repository:} JobTracker Hub — this guide lives in \file{docs/} alongside the code it documents.\par
-\textbf{Guide version:} 1.1.0 \quad | \quad \textbf{Updated:} August 28, 2026\par
+\textbf{Guide version:} 1.2.0 \quad | \quad \textbf{Updated:} September 6, 2026\par
 \vspace{0.6cm}
 {\small\color{muted} Designed as a JobTracker Hub reference manual, with a compact technical-document layout.}
 \end{titlepage}
@@ -168,16 +168,18 @@ Contributing or inspecting the repository & \hyperref[sec:contributors]{Appendix
 \subsection{Release overview}
 
 \begin{infobox}
-\textbf{JobTracker Hub 1.1.0.} This release refines the desktop and web workflows around workspace health, import validation, and durable local data. It also documents the macOS DMG installation path and the safeguards used when importing folders or archives.
+\textbf{JobTracker Hub 1.2.0.} This release adds \textbf{Email Sync}, a macOS-only feature that connects to accounts already configured in Mail.app and surfaces job-alert and ATS emails you haven't matched to a tracked application yet. It also refines the desktop and web workflows around workspace health, import validation, and durable local data, and documents the macOS DMG installation path and the safeguards used when importing folders or archives.
 \end{infobox}
 
-The 1.1.0 guide covers the current status cards, the multi-step import preview, persistent \file{overrides.db} tracking data, and the packaged macOS installation flow. The underlying design remains local-first: the application works with documents on your filesystem and keeps tracking state in local storage.
+The 1.2.0 guide covers Email Sync end to end, the current status cards, the multi-step import preview, persistent \file{overrides.db} tracking data, and the packaged macOS installation flow. The underlying design remains local-first: the application works with documents on your filesystem and keeps tracking state in local storage.
 
 \subsection{What JobTracker Hub actually does}
 
 JobTracker Hub sits one level inside a folder that already contains your job-search material. It indexes the files on disk, infers useful metadata from folder and filename conventions, and presents the result through a local dashboard.
 
 The important design choice is that the application does \emph{not} require you to migrate your existing documents into a hosted database. Your tracker remains a normal folder you can inspect in Finder or Explorer.
+
+On macOS, it can optionally connect to accounts already configured in Mail.app and surface job-alert and ATS emails you haven't matched to a tracked application yet — see \textbf{Email Sync} below.
 
 \begin{infobox}
 \textbf{The core mental model:} your filesystem is the source of truth. \file{jobtracker.db} is a rebuildable index, while \file{overrides.db} holds the durable choices you make in the app, such as status overrides, notes, dates, snoozes, archives, and company merges.
@@ -465,6 +467,38 @@ Everything here — your target role/location, custom cards, and overrides — i
 
 Company merges affect the application's logical view; they do not require you to rename the underlying files.
 
+\subsection{Email Sync}\label{sec:email-sync}
+
+\app{Email Sync} is \textbf{macOS only}. It connects to accounts already configured in \textbf{System Settings \textgreater{} Internet Accounts} with Mail enabled, and scans them for job-alert and ATS emails (LinkedIn, Indeed, ZipRecruiter, Handshake, and others) that don't yet match anything in your tracker.
+
+\begin{infobox}
+\textbf{No OAuth, no IMAP credentials, no cloud.} JobTracker Hub never stores a credential of any kind. It drives Mail.app itself over AppleScript (\texttt{osascript}), so it only ever sees mail Mail.app itself already has access to. See the Privacy section of the repository README for the full framing.
+\end{infobox}
+
+The first time it asks Mail.app for anything, macOS shows a standard \textbf{"'JobTracker Hub' wants to control 'Mail'"} Automation permission prompt. Click \textbf{OK} — if you click Don't Allow, or need to grant it later, enable JobTracker Hub under \textbf{System Settings \textgreater{} Privacy \& Security \textgreater{} Automation \textgreater{} Mail}.
+
+From \app{Manage accounts}, connect each inbox you applied from and sync it. The dashboard's summary cards track accounts synced, matched emails, job postings caught, and how many items currently need triage.
+
+\screenshot{images/email-sync-accounts.png}{Manage accounts with all six inboxes connected and synced. (Account addresses are redacted here; your own accounts show their real addresses.)}
+
+Candidate job-alert emails that don't match anything already in your tracker land in \textbf{Needs Triage}. Accept one to promote it onto the \textbf{Job Postings} board, or dismiss it — nothing is deleted, and a dismissed item can be restored.
+
+\screenshot{images/email-sync-needs-triage-empty.png}{Needs Triage with an empty queue — the state you want to see once you're caught up.}
+
+Accepted postings collect on the \textbf{Job Postings} board, in list or grid view, where each card can open the original posting or start a new application pre-filled from it.
+
+\screenshot{images/email-sync-job-postings.png}{Job Postings in list view: title, company, source, and quick actions per posting.}
+
+\textbf{Check inbox now} runs an immediate sync across every connected account. \textbf{Backfill missing email PDFs} re-attaches the source email as a PDF to any already-linked application that's missing one, without touching applications that already have their email saved.
+
+\screenshot{images/email-sync-backfill-result.png}{A completed backfill run, reporting how many PDFs were saved versus how many needed nothing.}
+
+Nothing here is destructive: \textbf{Reset Email Sync}, available from \app{Manage accounts}, wipes synced state (accounts, matches, discoveries, postings) without touching any of your actual applications or documents.
+
+\begin{infobox}
+\textbf{Having a sync problem?} Missing links, emails that won't load, or other Email Sync issues are covered separately in \nameref{sec:troubleshooting} \textrightarrow{} \textbf{Email Sync issues}, which points at the dedicated troubleshooting material in \file{docs/troubleshooting/email-sync/} rather than duplicating it here.
+\end{infobox}
+
 \section{Working With Documents}\label{sec:documents}
 
 \subsection{Upload}
@@ -690,6 +724,10 @@ Then refresh the frontend.
 
 First check whether it is hidden because it is a source file such as \file{.tex}. Then rebuild the index. Also check whether the filename, folder, or extension matches one of the ignored patterns documented in \file{classify.py}.
 
+\subsection{Email Sync issues}
+
+Problems specific to \nameref{sec:email-sync} — missing "Open job" links, an email that won't load in the preview, or Mail.app permission trouble — have their own dedicated material rather than being duplicated in this guide. Start at \file{docs/troubleshooting/email-sync/README.md} in the repository: it has a quick symptom-to-document table and points to the relevant audit findings, scripts, and the living engineering handoff.
+
 \section{License}\label{sec:license}
 
 JobTracker Hub is distributed under the MIT License. See the repository's \file{LICENSE} file for the authoritative license text.
@@ -733,11 +771,11 @@ JobTracker can manipulate real files, so a few conventions are intentionally str
   \item The sample tracker uses fake organizations and placeholder content so you can test without exposing real applications.
 \end{itemize}
 
-\section{Release Notes for 1.1.0}
+\section{Release Notes for 1.2.0}
 
-This guide is aligned to the repository README supplied with JobTracker Hub 1.1.0. The release documentation covers the current macOS DMG installation and Gatekeeper flow, the tracker switcher and preview-first import/link workflow, durable local tracking data in \file{overrides.db}, Search Hub persistence, and the current packaging/test commands.
+This guide is aligned to the repository README supplied with JobTracker Hub 1.2.0. The headline addition is \textbf{Email Sync} (\S\ref{sec:email-sync}): macOS-only, Mail.app-driven discovery of job-alert and ATS emails, with a Needs Triage queue, a Job Postings board, an Apply flow that pre-fills a new application from a posting, and a non-destructive Reset Email Sync action.
 
-The guide also documents the workspace status cards and import validation sequence in more detail so that the user-facing manual explains the same current workflows from the perspective of someone operating the application.
+Everything documented for 1.1.0 remains current: the macOS DMG installation and Gatekeeper flow, the tracker switcher and preview-first import/link workflow, durable local tracking data in \file{overrides.db}, Search Hub persistence, and the current packaging/test commands. The guide also documents the workspace status cards and import validation sequence in more detail so that the user-facing manual explains the same current workflows from the perspective of someone operating the application.
 
 For future releases, update this section and the guide version metadata together with the repository README and the shipped PDF.
 

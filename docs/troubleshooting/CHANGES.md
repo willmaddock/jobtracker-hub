@@ -1,3 +1,32 @@
+# Email Sync / Job Postings — see CLAUDE_HANDOFF.md and AUDIT_FINDINGS.md
+
+Email Sync (Mail.app discovery → Needs Triage → Job Postings board) was
+built and audited across several sessions but was never logged into
+this file's numbered "Item" scheme — its history lives instead in
+[`CLAUDE_HANDOFF.md`](CLAUDE_HANDOFF.md) (design/implementation,
+checkpoint by checkpoint) and
+[`docs/troubleshooting/email-sync/AUDIT_FINDINGS.md`](email-sync/AUDIT_FINDINGS.md)
+(bugs found against real usage, root causes, fixes, regression tests).
+Start at [`docs/troubleshooting/email-sync/README.md`](email-sync/README.md)
+for a symptom-to-cause index into both. Noted here only so this
+changelog doesn't look like Email Sync never happened.
+
+**Version bump (2026-09-06):** `1.1.0` → `1.2.0` (minor, per semver —
+Email Sync is a new user-facing feature, not a patch). Updated in the
+three places that carry a live version string: `README.md`'s badge,
+`_app/frontend/index.html`'s `APP_VERSION` (drives the in-app footer,
+e.g. the sidebar's "© 2026 JobTracker Hub · v1.2.0"), and
+`scripts/jobtracker-hub.spec`'s `CFBundleShortVersionString` (the
+packaged `.app`'s bundle version, e.g. Finder's Get Info). Historical
+mentions of `1.1.0` in `docs/ITEM6_DEV_LOG.tex` and
+`docs/archive/handoffs/HANDOFF_SESSION16_LEGACY.md` were left
+untouched — they're accurate records of what version things were at
+that point in time, not live references.
+`docs/guide-src/JobTracker_User_Guide.tex` still says 1.1.0 throughout
+(including its own "Release Notes for 1.1.0" section) — deliberately
+not touched yet since it needs real content updates for Email Sync,
+not just a version-number find/replace; that's the next piece of work.
+
 # Item 8D — DMG: Mounted Volume Gets the Real App Icon: IMPLEMENTED
 
 ## Why this item exists
@@ -167,7 +196,7 @@ Checkpoint 6 of Item 6 (Auto-Fill Date Applied) left "Timeline view" as
 the recommended next feature: showing the shape of an application's
 life — applied, interviewed, resolved — from evidence the app already
 has, rather than anything the user has to type. Full scope definition:
-[`docs/specs/ITEM7_TIMELINE_FDD_DRAFT.md`](docs/specs/ITEM7_TIMELINE_FDD_DRAFT.md).
+[`docs/specs/ITEM7_TIMELINE_FDD_DRAFT.md`](../specs/ITEM7_TIMELINE_FDD_DRAFT.md).
 
 ## What this item contains
 

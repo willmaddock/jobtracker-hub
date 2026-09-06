@@ -39,8 +39,9 @@ The repository also contained generated Python caches and local runtime/workspac
 
 - `CLAUDE_HANDOFF.md` — **single living Claude/project handoff; keep updating this file**
 - `CHANGES.md` — project change history
+- `docs/troubleshooting/email-sync/` — Email Sync troubleshooting entry point (moved here 2026-09-06; was `AUDIT_FINDINGS.md` at the repo root — see checkpoint below)
 - `docs/specs/` — durable/historical feature specifications
-- `docs/archive/handoffs/` — historical session handoffs preserved for reference
+- `docs/archive/handoffs/` — historical session handoffs preserved for reference (also holds the old root `HANDOFF.md` pointer stub, moved 2026-09-06)
 - `docs/` — development logs, user guide, and project documentation
 
 
@@ -2324,4 +2325,56 @@ whole branch as done, not a re-audit of everything.
 
 ### Latest Returned ZIP
 - Filename: `jobtracker-hub-final-20260906.zip`
+- Returned/attached to user: see the message this ZIP was attached to.
+
+## Checkpoint — 2026-09-06 (documentation reorg: Email Sync troubleshooting folder)
+
+### What changed
+Doc-only reorganization, no application behavior touched. The user had
+two lingering root-level docs left over from the Email Sync work and
+wanted a clear troubleshooting entry point for future Claude sessions
+(and humans) hitting Email Sync bugs:
+
+- `AUDIT_FINDINGS.md` moved from the repo root to
+  `docs/troubleshooting/email-sync/AUDIT_FINDINGS.md`.
+- `HANDOFF.md` (the old root pointer stub) moved to
+  `docs/archive/handoffs/HANDOFF.md`, matching the plan this file already
+  described back in the "Starting Repository Snapshot" section at the
+  top — that move had been declared but not actually done until now.
+- New `docs/troubleshooting/email-sync/README.md`: a symptom-to-cause
+  table, reading order for the Email Sync docs, a list of relevant
+  source files/tests, and a flagged known gap — `_app/mail_app_store.py`,
+  `_app/overrides_store.py`, `_app/api.py`, and `_app/frontend/index.html`
+  all cite `EMAIL_SYNC_REDESIGN_HANDOFF.md` and `EMAIL_SYNC_TABS_HANDOFF.md`
+  by name in comments, but **neither file exists in this repo** — their
+  content appears to have been folded into this file (`CLAUDE_HANDOFF.md`)
+  without the inline comments being updated. Not fixed this session
+  (would mean touching dozens of comments across four files for a
+  cosmetic citation issue); just documented so nobody burns time
+  searching for a file that isn't there.
+- Root `README.md` gained a "Troubleshooting" section linking to the new
+  folder, referenced from the Contents list and the Files section.
+- `docs/README.md` gained a "Troubleshooting" section, and its archived-
+  handoffs list now also mentions the relocated `HANDOFF.md`.
+- `scripts/troubleshooting/README.md`'s one reference to `AUDIT_FINDINGS.md`
+  updated to the new path, plus a pointer up to the new doc folder.
+- This file's own "Documentation organization" list (near the top) was
+  updated to reflect the new locations.
+
+### What was deliberately left alone
+- `CLAUDE_HANDOFF.md` itself stays at the repo root — it's the active
+  living handoff (see rule 6 in "Critical Workspace / ZIP Boundary"
+  above and `docs/README.md`'s link to it), not lingering clutter.
+- Historical checkpoint entries earlier in this file that say
+  "`AUDIT_FINDINGS.md` at the repo root" were left as-written — they're
+  an accurate record of what was true at that point in time, not a
+  live reference that needed updating.
+- The dozens of in-code comments across `_app/*.py` and
+  `_app/frontend/index.html` that cite `AUDIT_FINDINGS.md` or
+  `CLAUDE_HANDOFF.md` by bare filename (no path) were left as-is — they
+  still resolve fine via search/grep and rewriting all of them was out
+  of scope for a documentation-location cleanup.
+
+### Latest Returned ZIP
+- Filename: `jobtracker-hub-updated-20260906.zip`
 - Returned/attached to user: see the message this ZIP was attached to.
