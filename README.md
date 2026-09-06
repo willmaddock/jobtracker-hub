@@ -364,7 +364,7 @@ before this fix could double-prefix an owned tracker's name/folder if you
 imported from an existing app-owned tracker folder without typing an
 explicit name (see `workspace._strip_owned_prefix`'s docstring for why).
 If you already have one of these, quit the app and run
-`scripts/fix_doubled_tracker_names.py` (dry run by default; add `--apply`
+`scripts/troubleshooting/fix_doubled_tracker_names.py` (dry run by default; add `--apply`
 to actually rename things) — it collapses the name and folder back to a
 single prefix and leaves everything else untouched. It only ever touches
 app-owned trackers, never a linked folder.
@@ -432,7 +432,7 @@ Tests:
 - `pytest.ini` — points pytest at `tests/`.
 
 Maintenance scripts:
-- `scripts/fix_doubled_tracker_names.py` — one-off cleanup for a tracker
+- `scripts/troubleshooting/fix_doubled_tracker_names.py` — one-off cleanup for a tracker
   name/folder doubled by a since-fixed bug — see "Multiple trackers"
   above.
 

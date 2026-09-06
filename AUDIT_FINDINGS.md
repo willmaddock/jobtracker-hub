@@ -61,7 +61,7 @@ wasn't limited to multi-job digests.
 **Not fixed by this change:** postings promoted *before* this fix shipped
 still have `posting_url = NULL` stored — there's no automatic backfill
 for already-promoted `job_postings` rows, since extraction only ever ran
-once, at sync time. `scripts/backfill_job_posting_urls.py` (added in this
+once, at sync time. `scripts/troubleshooting/backfill_job_posting_urls.py` (added in this
 audit) covers that: it re-fetches each affected message, re-runs the same
 extraction + count-matched URL pairing under the fixed filter, and
 updates only the `posting_url` column on matching rows. Dry-run by
@@ -182,7 +182,7 @@ matched even once the right body was being read.
 promoted before this fix shipped still have `posting_url = NULL` stored
 if their message's raw HTML source genuinely has no matching link either
 (a plain-text-only email, or an ATS whose links this app doesn't
-recognize). `scripts/backfill_job_posting_urls.py` was itself calling
+recognize). `scripts/troubleshooting/backfill_job_posting_urls.py` was itself calling
 `extract_posting_urls(body)` directly (the old plain-text-only path) and
 has been updated in this same pass to call
 `get_posting_urls_for_message()` instead, so it now benefits from the
