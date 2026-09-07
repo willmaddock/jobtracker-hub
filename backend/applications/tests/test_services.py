@@ -1,6 +1,6 @@
 from django.test import SimpleTestCase
 
-from .services import (
+from ..services import (
     compute_bulk_override_fields,
     compute_override_fields,
     resolve_effective_status,
