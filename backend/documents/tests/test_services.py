@@ -7,8 +7,8 @@ from django.test import TestCase, override_settings
 
 from accounts.models import Workspace
 from applications.models import Application
-from .models import Document
-from .services import get_owned_document
+from ..models import Document
+from ..services import get_owned_document
 
 User = get_user_model()
 
