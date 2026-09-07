@@ -1,0 +1,14 @@
+# Backend (Django + DRF) dependencies. There was no manifest for these
+# yet -- Phase 1-3 apparently installed them straight into
+# .venv-django without recording versions anywhere. Pinned here to
+# what's actually in that venv, plus the two new Phase 4 packages.
+#
+#   pip install -r backend/requirements.txt
+Django==6.1.1
+djangorestframework==3.18.0
+
+# Phase 4 -- S3-compatible object storage for the Document model
+# (docs/DJANGO_MIGRATION_PLAN.md Phase 4). django-storages provides
+# the Storage backend; boto3 is its S3 client dependency.
+django-storages[s3]==1.14.4
+boto3==1.35.36

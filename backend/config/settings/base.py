@@ -131,6 +131,27 @@ USE_TZ = True
 STATIC_URL = 'static/'
 
 
+# File storage (uploaded Documents: resumes, cover letters, evidence
+# PDFs -- see docs/DJANGO_MIGRATION_PLAN.md Phase 4).
+#
+# base.py sets the plain-filesystem default so every environment has
+# *something* that works out of the box; dev.py leaves it alone and
+# just points MEDIA_ROOT/MEDIA_URL somewhere sane for local testing.
+# prod.py is the one that actually overrides STORAGES["default"] to
+# the S3 backend -- see that file for the real config. Local
+# filesystem storage on a prod-style host would silently lose every
+# uploaded file on the next deploy, so this default is dev-only in
+# practice even though nothing here enforces that.
+STORAGES = {
+    'default': {
+        'BACKEND': 'django.core.files.storage.FileSystemStorage',
+    },
+    'staticfiles': {
+        'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage',
+    },
+}
+
+
 # Email
 # https://docs.djangoproject.com/en/6.1/topics/email/#topic-email-configuration
 
