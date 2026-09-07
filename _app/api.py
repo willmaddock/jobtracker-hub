@@ -30,7 +30,6 @@ single-user local tool, not something meant to be exposed on your network.
 
 from __future__ import annotations
 
-import mimetypes
 import shutil
 import tempfile
 from pathlib import Path
@@ -57,6 +56,32 @@ from build_index import BuildError, build, create_application_folder, create_cat
 from classify import classify_section
 from classify import classify_doc_type, is_source_file, normalize_for_search
 from db import APP_DIR
+from domain.applications import (
+    compute_bulk_override_fields,
+    compute_override_fields,
+    resolve_effective_status,
+)
+from domain.errors import (
+    ApplicationFolderNotFoundError,
+    FileNotFoundInRootError,
+    InvalidApplicationFolderError,
+    InvalidApplyStatusError,
+    ItemNotFoundError,
+    JobPostingAlreadyAppliedError,
+    JobPostingNotFoundError,
+    PathEscapesRootError,
+    RootDeletionRefusedError,
+    TrashFailedError,
+)
+from domain.identity import item_key_for
+from domain.job_postings import build_apply_response, ensure_postable, validate_apply_status
+from infrastructure.paths import (
+    guess_media_type,
+    remove_empty_parents,
+    resolve_safe,
+    resolve_safe_dir,
+    trash_path,
+)
 
 ws.bootstrap()
 FRONTEND_DIR = APP_DIR / "frontend"
@@ -85,19 +110,6 @@ def current_db_path() -> Path:
 
 def current_ov_db_path() -> Path:
     return _active()[2]
-
-# Explicit MIME types for formats browsers/servers sometimes guess wrong
-# (or don't know at all, like .tex) — used by /api/file so inline
-# previews (PDF iframe, .md/.tex text view) always get a sane Content-Type
-# instead of falling back to application/octet-stream.
-EXTRA_MEDIA_TYPES = {
-    ".pdf": "application/pdf",
-    ".tex": "text/x-tex",
-    ".md": "text/markdown",
-    ".markdown": "text/markdown",
-    ".txt": "text/plain",
-    ".json": "application/json",
-}
 
 # Extensions that /api/file renders as plain text in the iframe viewer.
 # These get wrapped in our own minimal HTML (see _wrap_text_for_viewer)
@@ -166,6 +178,60 @@ def _build_error_handler(request: Request, exc: BuildError):
     return JSONResponse(status_code=400, content={"detail": str(exc)})
 
 
+# Registered once here so every route that calls into domain/identity.py or
+# infrastructure/paths.py keeps returning the exact same status codes and
+# messages it always did, without a try/except at each call site. See
+# domain/errors.py and EXTRACTION_NOTES.md.
+@app.exception_handler(ItemNotFoundError)
+def _item_not_found(request: Request, exc: ItemNotFoundError):
+    return JSONResponse(status_code=404, content={"detail": str(exc)})
+
+
+@app.exception_handler(PathEscapesRootError)
+def _path_escapes_root(request: Request, exc: PathEscapesRootError):
+    return JSONResponse(status_code=403, content={"detail": str(exc)})
+
+
+@app.exception_handler(FileNotFoundInRootError)
+def _file_not_found(request: Request, exc: FileNotFoundInRootError):
+    return JSONResponse(status_code=404, content={"detail": str(exc)})
+
+
+@app.exception_handler(InvalidApplicationFolderError)
+def _invalid_app_folder(request: Request, exc: InvalidApplicationFolderError):
+    return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+
+@app.exception_handler(RootDeletionRefusedError)
+def _root_deletion_refused(request: Request, exc: RootDeletionRefusedError):
+    return JSONResponse(status_code=403, content={"detail": str(exc)})
+
+
+@app.exception_handler(ApplicationFolderNotFoundError)
+def _app_folder_not_found(request: Request, exc: ApplicationFolderNotFoundError):
+    return JSONResponse(status_code=404, content={"detail": str(exc)})
+
+
+@app.exception_handler(TrashFailedError)
+def _trash_failed(request: Request, exc: TrashFailedError):
+    return JSONResponse(status_code=500, content={"detail": str(exc)})
+
+
+@app.exception_handler(JobPostingNotFoundError)
+def _job_posting_not_found(request: Request, exc: JobPostingNotFoundError):
+    return JSONResponse(status_code=404, content={"detail": str(exc)})
+
+
+@app.exception_handler(JobPostingAlreadyAppliedError)
+def _job_posting_already_applied(request: Request, exc: JobPostingAlreadyAppliedError):
+    return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+
+@app.exception_handler(InvalidApplyStatusError)
+def _invalid_apply_status(request: Request, exc: InvalidApplyStatusError):
+    return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+
 # Kept for flexibility (e.g. running the frontend from a separate dev
 # server) even though the normal path — serving everything from this same
 # process at http://localhost:8000 — never needs it. Note: frontend/index.html
@@ -189,64 +255,6 @@ def get_conns():
     jt_conn = db.get_jt_conn(current_db_path())
     ov_conn = ov.get_conn(current_ov_db_path())
     return jt_conn, ov_conn
-
-
-def resolve_safe(relpath: str) -> Path:
-    """Resolve a relpath against DEFAULT_ROOT and refuse anything that
-    escapes it (defense in depth — relpaths only ever come from our own
-    index, but this endpoint is reachable from the browser)."""
-    root = current_root().resolve()
-    full = (root / relpath).resolve()
-    try:
-        full.relative_to(root)
-    except ValueError:
-        raise HTTPException(status_code=403, detail="Path escapes JobTracker root.")
-    if not full.exists() or not full.is_file():
-        raise HTTPException(status_code=404, detail=f"File not found: {relpath}")
-    return full
-
-
-def resolve_safe_dir(relpath: str) -> Path:
-    """Same guarantee as resolve_safe, but for a whole application folder
-    (source_relpath) instead of a single file — used by application
-    delete. Deliberately refuses the root itself and 'Applications/' itself
-    (an empty/blank relpath), so a bad or missing source_relpath can never
-    trash the whole JobTracker folder or the entire Applications section."""
-    root = current_root().resolve()
-    relpath = (relpath or "").strip()
-    if not relpath or relpath in (".", "Applications"):
-        raise HTTPException(status_code=400, detail="Refusing to delete: not a valid application folder.")
-    full = (root / relpath).resolve()
-    try:
-        full.relative_to(root)
-    except ValueError:
-        raise HTTPException(status_code=403, detail="Path escapes JobTracker root.")
-    if full == root:
-        raise HTTPException(status_code=403, detail="Refusing to delete the JobTracker root.")
-    if not full.exists() or not full.is_dir():
-        raise HTTPException(status_code=404, detail=f"Application folder not found: {relpath}")
-    return full
-
-
-def guess_media_type(path: Path) -> str:
-    ext = path.suffix.lower()
-    if ext in EXTRA_MEDIA_TYPES:
-        return EXTRA_MEDIA_TYPES[ext]
-    guessed, _ = mimetypes.guess_type(path.name)
-    return guessed or "application/octet-stream"
-
-
-def item_key_for(jt_conn, app_id: int) -> str:
-    """Resolve a numeric `items.id` (what the frontend/URLs use) to the
-    stable `item_key` that overrides.db is actually keyed by. Ids come
-    from an AUTOINCREMENT column that gets reset on every /api/rebuild, so
-    they're convenient/clean for routes and URLs but are NOT what
-    overrides should be stored against — item_key (section|company|role|
-    relpath) is the thing that survives a rebuild."""
-    row = jt_conn.execute("SELECT item_key FROM items WHERE id = ?", (app_id,)).fetchone()
-    if row is None:
-        raise HTTPException(status_code=404, detail=f"No application with id {app_id}. Try rebuilding the index.")
-    return row["item_key"]
 
 
 # --- models --------------------------------------------------------------
@@ -1631,19 +1639,16 @@ async def apply_to_job_posting(
     of "Apply" afterward -- see that column's comment for why this isn't
     enforced as a hard foreign key (the created application can later be
     deleted or moved independent of this row)."""
-    if status and status not in db.STATUS_ORDER:
-        raise HTTPException(status_code=400, detail=f"Unknown status '{status}'. Must be one of {db.STATUS_ORDER}.")
+    validate_apply_status(status, db.STATUS_ORDER)
 
     jt_conn, ov_conn = get_conns()
     job = ov.get_job_posting(ov_conn, job_id)
-    if job is None:
+    try:
+        ensure_postable(job, job_id)
+    except (JobPostingNotFoundError, JobPostingAlreadyAppliedError):
         jt_conn.close()
         ov_conn.close()
-        raise HTTPException(status_code=404, detail="No such job posting.")
-    if job["applied_item_key"]:
-        jt_conn.close()
-        ov_conn.close()
-        raise HTTPException(status_code=409, detail="Already applied to this posting.")
+        raise
 
     try:
         dest_folder = create_application_folder(current_root(), company, role_label)
@@ -1680,8 +1685,7 @@ async def apply_to_job_posting(
         ov.set_job_posting_applied(ov_conn, job_id, row["item_key"])
 
     ov_conn.close()
-    return {"ok": True, "relpath": relpath, "item_id": row["id"] if row is not None else None,
-            "item_key": row["item_key"] if row is not None else None}
+    return build_apply_response(relpath, row)
 
 
 # --- applications / pipeline -------------------------------------------------
@@ -2162,12 +2166,12 @@ def delete_category(folder: str):
                 # Resolved up front, before any trashing — resolve_safe
                 # requires the file to still exist, so this has to happen
                 # before the loop below removes it.
-                doc_full_paths = [(d["relpath"], resolve_safe(d["relpath"])) for d in doc_rows]
+                doc_full_paths = [(d["relpath"], resolve_safe(root, d["relpath"])) for d in doc_rows]
                 for relpath, full_path in doc_full_paths:
-                    _trash_path(full_path)
+                    trash_path(full_path)
                     trashed_files.append(relpath)
                 if doc_full_paths:
-                    _remove_empty_parents(doc_full_paths[0][1], apps_root)
+                    remove_empty_parents(doc_full_paths[0][1], apps_root)
         else:
             full_path = (root / folder).resolve()
             try:
@@ -2175,7 +2179,7 @@ def delete_category(folder: str):
             except ValueError:
                 full_path = None
             if full_path is not None and full_path != root and full_path.exists():
-                _trash_path(full_path)
+                trash_path(full_path)
                 trashed_folders.append(folder)
 
         jt_conn.execute(f"DELETE FROM documents WHERE item_id IN ({placeholders})", item_ids)
@@ -2207,7 +2211,7 @@ def delete_document(req: DeleteDocumentRequest):
     waiting for the next /api/rebuild. Also clears any doc-type override
     for it, since an override for a file that no longer exists is just
     clutter in overrides.db."""
-    full_path = resolve_safe(req.relpath)
+    full_path = resolve_safe(current_root(), req.relpath)
     jt_conn, ov_conn = get_conns()
     row = jt_conn.execute("SELECT id FROM documents WHERE relpath = ?", (req.relpath,)).fetchone()
 
@@ -2280,7 +2284,7 @@ def rename_document(req: RenameDocumentRequest):
     if not new_name or "/" in new_name or "\\" in new_name:
         raise HTTPException(status_code=400, detail="Invalid filename.")
 
-    full_path = resolve_safe(req.relpath)
+    full_path = resolve_safe(current_root(), req.relpath)
     dest = unique_dest_path(full_path.parent, new_name) if new_name != full_path.name else full_path
     if dest == full_path:
         return {"ok": True, "relpath": req.relpath, "unchanged": True}
@@ -2322,7 +2326,7 @@ def save_document_override(req: DocumentOverrideRequest):
     manual correction, so it survives a rebuild. Returns the item's refreshed
     document list (same pattern as rename/upload) so the frontend can patch
     its per-item cache in place instead of wiping and losing it."""
-    resolve_safe(req.relpath)  # 404s if the relpath doesn't actually exist under the root
+    resolve_safe(current_root(), req.relpath)  # 404s if the relpath doesn't actually exist under the root
     jt_conn, ov_conn = get_conns()
     ov.set_document_override(ov_conn, req.relpath, req.doc_type_override)
     row = jt_conn.execute("SELECT item_id FROM documents WHERE relpath = ?", (req.relpath,)).fetchone()
@@ -2346,48 +2350,15 @@ def save_override(app_id: int, req: OverrideRequest):
     jt_conn, ov_conn = get_conns()
     item_key = item_key_for(jt_conn, app_id)
 
-    # Use model_fields_set (not `is not None`) so an explicitly-sent null
-    # (e.g. "Mark followed up" clearing next_action/next_action_date) is
-    # actually applied instead of being indistinguishable from "field not
-    # sent at all" and silently dropped by upsert_override's merge.
-    fields: dict = {}
-    if req.reset_status:
-        fields["manual_status"] = None
-    elif "manual_status" in req.model_fields_set:
-        fields["manual_status"] = req.manual_status
-    if "notes" in req.model_fields_set:
-        fields["notes"] = req.notes
-    if "date_applied" in req.model_fields_set:
-        fields["date_applied"] = req.date_applied
-        # A date_applied write that doesn't also carry a source is a manual
-        # retype (or a clear) -- any provenance label from an earlier
-        # detected-date accept is now stale, so drop it here rather than
-        # leaving a "Detected from ..." caption pointing at a date the user
-        # just overwrote by hand. When the caller DOES send a source (accepting
-        # a suggestion), the branch below applies it instead of this default.
-        fields["date_applied_source"] = None
-    if "date_applied_source" in req.model_fields_set:
-        fields["date_applied_source"] = req.date_applied_source
-    if "next_action" in req.model_fields_set:
-        fields["next_action"] = req.next_action
-    if "next_action_date" in req.model_fields_set:
-        fields["next_action_date"] = req.next_action_date
-    if "archived" in req.model_fields_set:
-        fields["archived"] = int(req.archived) if req.archived is not None else 0
-    if "snoozed_until" in req.model_fields_set:
-        fields["snoozed_until"] = req.snoozed_until
-    if "activity_override" in req.model_fields_set:
-        fields["activity_override"] = req.activity_override
+    fields = compute_override_fields(req.model_fields_set, req.model_dump(), req.reset_status)
     ov.upsert_override(ov_conn, item_key, **fields)
 
     # Item 7: log a status_history row whenever manual_status actually
-    # changes (set OR cleared via reset_status) -- the resulting EFFECTIVE
-    # status is what gets logged, not the raw manual_status field, so a
-    # reset-to-auto is still a findable transition (see overrides_store.py).
+    # changed -- see resolve_effective_status's docstring.
     if "manual_status" in fields:
         item_row = jt_conn.execute("SELECT status FROM items WHERE id = ?", (app_id,)).fetchone()
         auto_status = item_row["status"] if item_row else "unknown"
-        effective_status = fields["manual_status"] or auto_status
+        effective_status = resolve_effective_status(fields, auto_status)
         ov.append_status_history(ov_conn, item_key, effective_status)
 
     jt_conn.close()
@@ -2402,22 +2373,7 @@ def bulk_override(req: BulkOverrideRequest):
     Bulk Archive) in Needs Attention. Takes numeric ids, same as the
     single-item override route above."""
     jt_conn, ov_conn = get_conns()
-    # Same model_fields_set fix as save_override above — see its comment.
-    fields: dict = {}
-    if req.reset_status:
-        fields["manual_status"] = None
-    elif "manual_status" in req.model_fields_set:
-        fields["manual_status"] = req.manual_status
-    if "archived" in req.model_fields_set:
-        fields["archived"] = int(req.archived) if req.archived is not None else 0
-    if "snoozed_until" in req.model_fields_set:
-        fields["snoozed_until"] = req.snoozed_until
-    if "next_action" in req.model_fields_set:
-        fields["next_action"] = req.next_action
-    if "next_action_date" in req.model_fields_set:
-        fields["next_action_date"] = req.next_action_date
-    if "activity_override" in req.model_fields_set:
-        fields["activity_override"] = req.activity_override
+    fields = compute_bulk_override_fields(req.model_fields_set, req.model_dump(), req.reset_status)
 
     updated = 0
     for app_id in req.item_ids:
@@ -2426,77 +2382,14 @@ def bulk_override(req: BulkOverrideRequest):
             continue
         ov.upsert_override(ov_conn, row["item_key"], **fields)
         # Item 7: same status_history logging as save_override, per item --
-        # see its comment above.
+        # see resolve_effective_status's docstring.
         if "manual_status" in fields:
-            effective_status = fields["manual_status"] or row["status"]
+            effective_status = resolve_effective_status(fields, row["status"])
             ov.append_status_history(ov_conn, row["item_key"], effective_status)
         updated += 1
     jt_conn.close()
     ov_conn.close()
     return {"ok": True, "count": updated}
-
-
-def _trash_path(full_path: Path) -> None:
-    """Moves a file or folder to the OS Trash (send2trash — recoverable,
-    never a permanent unlink) and verifies it's actually gone. Shared by
-    every delete path in this file (single document, single application,
-    bulk application delete, and category delete) so they all get
-    identical error messages and the same belt-and-suspenders check
-    below, instead of each duplicating this logic slightly differently."""
-    try:
-        send2trash(str(full_path))
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=(
-                f"Couldn't move '{full_path.name}' to Trash ({e}). "
-                "On macOS this is almost always a missing Automation/Finder "
-                "permission for whatever process is running this server — "
-                "check System Settings > Privacy & Security > Automation "
-                "(or Files and Folders) and allow it there, then try again."
-            ),
-        )
-
-    # Belt-and-suspenders: on macOS, send2trash's AppleScript/Finder path
-    # can swallow a missing-Automation-permission failure and return
-    # successfully without actually moving anything (distinct from the
-    # exception case above — no exception is raised at all). If we drop
-    # DB rows and report success anyway, the file/folder quietly
-    # reappears on the next rebuild and looks exactly like "delete
-    # doesn't work." Guard against that by checking it's actually gone
-    # before touching the database.
-    if full_path.exists():
-        raise HTTPException(
-            status_code=500,
-            detail=(
-                f"'{full_path.name}' is still on disk after the Trash call — "
-                "it silently didn't move. On macOS this is almost always a "
-                "missing Automation/Finder permission for whatever process "
-                "is running this server — check System Settings > Privacy & "
-                "Security > Automation (or Files and Folders) and allow it "
-                "there, then try again."
-            ),
-        )
-
-
-def _remove_empty_parents(path: Path, stop_at: Path) -> None:
-    """Walks up from `path`'s parent, removing now-empty directories,
-    stopping at (and never removing) `stop_at` itself or anything outside
-    it. Used after trashing a Role/ subfolder or a nested category item
-    so an empty Company/ (or similar) shell doesn't linger on disk and
-    read as "it only deleted the contents, not the whole folder." Never
-    trashes a directory that still has something in it."""
-    stop_at = stop_at.resolve()
-    parent = path.parent
-    while parent != stop_at and stop_at in parent.parents and parent.exists() and not any(parent.iterdir()):
-        empty_parent = parent
-        parent = parent.parent
-        try:
-            empty_parent.rmdir()
-        except OSError:
-            # Not empty after all (race) or some other filesystem hiccup —
-            # leave it rather than risk removing something unexpected.
-            break
 
 
 def _delete_application(jt_conn, ov_conn, app_id: int) -> None:
@@ -2520,8 +2413,8 @@ def _delete_application(jt_conn, ov_conn, app_id: int) -> None:
         ).fetchall()
     ]
 
-    full_path = resolve_safe_dir(row["source_relpath"])
-    _trash_path(full_path)
+    full_path = resolve_safe_dir(current_root(), row["source_relpath"])
+    trash_path(full_path)
 
     # If this application lived in a Role/ subfolder (Applications/<Company>/<Role>/),
     # the trash call above only removed that Role folder — the parent
@@ -2530,7 +2423,7 @@ def _delete_application(jt_conn, ov_conn, app_id: int) -> None:
     # the whole folder" (they think of Company/ as the folder, since that's
     # what New Application named for them).
     apps_root = (current_root() / "Applications").resolve()
-    _remove_empty_parents(full_path, apps_root)
+    remove_empty_parents(full_path, apps_root)
 
     jt_conn.execute("DELETE FROM documents WHERE item_id = ?", (app_id,))
     jt_conn.execute("DELETE FROM items WHERE id = ?", (app_id,))
@@ -2815,7 +2708,7 @@ def open_file(req: OpenFileRequest):
     """Shell out to the OS's default opener — same cross-platform approach
     as before. Still useful for non-PDF files, or "open in my real PDF app"
     even when the inline viewer below is enough for a quick look."""
-    full_path = resolve_safe(req.relpath)
+    full_path = resolve_safe(current_root(), req.relpath)
 
     import platform
     import subprocess
@@ -2886,7 +2779,7 @@ def serve_file(relpath: str):
     files inside DEFAULT_ROOT (resolve_safe blocks path traversal via
     '../' or symlink escapes), and the server itself only binds to
     127.0.0.1 (see __main__), so this never leaves your machine."""
-    full_path = resolve_safe(relpath)
+    full_path = resolve_safe(current_root(), relpath)
     # Deliberately omit `filename=` here. Starlette only emits a
     # Content-Disposition header at all when `filename` is set — and
     # defaults that header to "attachment", forcing a download regardless
@@ -2930,7 +2823,7 @@ def preview_docx(relpath: str):
     HTML instead of the file bytes. .doc (the old pre-2007 binary format)
     isn't supported by the underlying library — those still fall back to
     "Open" like before this endpoint existed."""
-    full_path = resolve_safe(relpath)
+    full_path = resolve_safe(current_root(), relpath)
     if full_path.suffix.lower() != ".docx":
         raise HTTPException(status_code=400, detail="Inline docx preview only supports .docx files")
     try:
