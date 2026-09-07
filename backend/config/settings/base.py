@@ -41,6 +41,11 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'rest_framework',
     'accounts',
+    'applications',
+    'email_sync',
+    'postings',
+    'documents',
+    'core',
 ]
 
 # Must be set before the first makemigrations — swapping the user
