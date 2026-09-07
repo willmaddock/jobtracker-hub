@@ -277,6 +277,49 @@ tests/test_workspaces.py .........
 ==================== 48 passed, 1 warning in 0.90s =====================
 ```
 
+### Running the Django backend tests
+
+The in-progress Django backend (`backend/`) has its own test suites per
+app (`core`, `applications`, `documents`, `postings`, `accounts`,
+`email_sync`), separate from the `_app`/`tests/` pytest suite above.
+Run these from inside `backend/`, in their own virtualenv:
+
+```bash
+cd backend
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+pip install Django==6.1.1 djangorestframework==3.18.0
+python manage.py test
+python manage.py test core
+```
+
+On Windows, activate with `venv\Scripts\activate` instead. The two
+`test` commands above run the whole backend suite and a single app
+(`core`) respectively.
+
+**Copy-paste note:** don't add trailing `# comment` text to these
+commands. zsh (the default shell on modern macOS) doesn't treat `#`
+as a comment marker in interactive mode the way bash does, so
+`python manage.py test # whole suite` gets parsed as `manage.py test`
+with `#`, `whole`, and `suite` as literal test-label arguments — which
+fails with `ModuleNotFoundError` for each word.
+
+
+**Note:** `backend/requirements.txt` only lists extras on top of
+Django/DRF — install `Django==6.1.1` and `djangorestframework==3.18.0`
+explicitly as shown above (these are the versions pinned elsewhere in
+this project).
+
+If your environment expects a specific settings module, set it before
+running, e.g. `DJANGO_SETTINGS_MODULE=config.settings.dev`.
+
+Each new run should print `OK` — if any app reports a failure, check
+that app's `tests_*.py` / `tests/` directory for the traceback, and
+compare against the model/serializer for the field it's asserting on
+(a field allowing `null=True` on a `CharField` is a common cause of a
+`None` vs `""` mismatch in test assertions).
+
 ## Two local databases, two very different lifetimes
 
 - **`jobtracker.db`** — the disposable, auto-built index. Every click of

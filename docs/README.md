@@ -2,7 +2,9 @@
 
 ## Start here
 
-- [`CLAUDE_HANDOFF.md`](troubleshooting/CLAUDE_HANDOFF.md) — the single living handoff for Claude and ongoing engineering work. Keep this file current.
+- [`CLAUDE_HANDOFF.md`](troubleshooting/CLAUDE_HANDOFF.md) — the living handoff for the `_app/` single-user FastAPI app's Email Sync / Job Postings redesign. Keep this file current.
+- [`DJANGO_BACKEND_HANDOFF.md`](DJANGO_BACKEND_HANDOFF.md) — the living handoff for the `backend/` Django rewrite track (Phase 9 onward). A different codebase from `_app/` — check which directory a change touches before assuming either file applies.
+- [`DJANGO_MIGRATION_PLAN.md`](DJANGO_MIGRATION_PLAN.md) — the stable Phase 0-10 plan for the Django rewrite. Doesn't change session to session; `DJANGO_BACKEND_HANDOFF.md` is where progress against it is recorded.
 - [`CHANGES.md`](troubleshooting/CHANGES.md) — project change history.
 
 ## Troubleshooting

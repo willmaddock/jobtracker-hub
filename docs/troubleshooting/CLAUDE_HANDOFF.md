@@ -1,7 +1,9 @@
 # JobTracker — Living Claude Handoff
 ## Email Sync → Job Postings Audit, Redesign, and Implementation
 
-> **Purpose:** This is the single living handoff document for the JobTracker email-sync / job-postings redesign.
+> **Purpose:** This is the living handoff document for the JobTracker email-sync / job-postings redesign in the **`_app/` single-user FastAPI app**.
+>
+> **Scope note (added when `docs/DJANGO_BACKEND_HANDOFF.md` was created):** this file covers `_app/` only, not the `backend/` Django rewrite (`docs/DJANGO_MIGRATION_PLAN.md` Phase 9+) — that track has its own living handoff at `docs/DJANGO_BACKEND_HANDOFF.md`, including its own separate Gmail OAuth/email-sync implementation. The two codebases solve overlapping problems (email-derived job postings) with entirely different architectures (single-user desktop + Mail.app vs multi-user Django + Gmail API) and should not be conflated — a fix or feature in one does not apply to the other.
 >
 > **Rule:** Keep this file in the repository and update it continuously as work progresses. A new Claude session should read this file first, inspect the actual repository, and continue without relying on chat history.
 

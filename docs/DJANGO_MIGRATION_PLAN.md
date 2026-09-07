@@ -11,6 +11,12 @@ views. The point of this migration is to land on
 `Django framework → models → domain/services → API`, not to reproduce
 the current file shape inside a new framework.
 
+**Status:** for what's actually been built against this plan
+phase-by-phase (as opposed to what's planned), see
+[`DJANGO_BACKEND_HANDOFF.md`](DJANGO_BACKEND_HANDOFF.md) — the living
+checkpoint doc for this track. This file stays the stable plan; that
+one is the changing progress record.
+
 ---
 
 ## Phase 0 — Characterize before touching anything
@@ -175,6 +181,44 @@ later; it's the riskiest, most different part of the whole migration:
   produce the same posting count each time, not accumulate duplicates.
   Design the dedupe key and upsert logic for this from the start
   rather than discovering the bug after multiple users hit it.
+
+### Phase 9 progress
+
+Slice-by-slice status against the bullets above (see
+`DJANGO_BACKEND_HANDOFF.md` for the full checkpoint history — this is
+just the current-state summary):
+
+- **Matching logic port** — done. `backend/email_sync/matching.py`
+  ports thread-ID matching, sender whitelisting, and subject
+  classification from `mail_app_store.py`.
+- **Provider-agnostic sync orchestration** — done.
+  `backend/email_sync/providers.py` (the `EmailProvider`/
+  `FetchedMessage` contract) + `backend/email_sync/sync_service.py`
+  (thread trust, posting-notice routing, term matching, idempotent
+  upserts via `get_or_create`, one `@transaction.atomic` block).
+- **Gmail provider (message-fetching only)** — done.
+  `backend/email_sync/gmail_provider.py` implements `EmailProvider`
+  against the real Gmail API (list/get, pagination, error
+  classification). Fully mock-tested, no OAuth of its own.
+- **Gmail OAuth (connect/callback, encrypted token storage, real
+  service_factory)** — done. `backend/email_sync/oauth.py` +
+  `views.py`/`urls.py`. `GmailCredential` model, Fernet field-level
+  encryption, `GET /api/email-accounts/gmail/{connect,callback}`,
+  registers `get_provider("gmail")` for real use.
+- **Manual "sync now" trigger** — done. `POST
+  /api/email-accounts/<id>/sync` (`backend/email_sync/views.py`'s
+  `EmailAccountSyncView`) calls `sync_service.sync_account()` for one
+  account at a time. No scheduling of any kind yet — see below.
+- **Disconnect/revoke flow** — done. `POST
+  /api/email-accounts/<id>/disconnect`
+  (`EmailAccountDisconnectView`) best-effort revokes the Gmail grant
+  with Google (`oauth.revoke_gmail_token()`) and always deletes the
+  local `GmailCredential` row, marking the account `"disconnected"`.
+- **Not started:** Microsoft Graph / generic IMAP providers; the
+  background-task runner (Celery/Redis or Django-Q) — sync now has a
+  manual per-account trigger but nothing scheduled or workspace-wide;
+  any frontend UI for connecting an account, triggering a sync,
+  disconnecting one, or reviewing Discoveries/AccountMatches.
 
 ## Phase 10 — Production deployment
 
