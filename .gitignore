@@ -57,3 +57,5 @@ _app.bak-*/
 /JobTracker — */
 /my-tracker/
 .jobtracker/
+.venv-django/
+db.sqlite3
