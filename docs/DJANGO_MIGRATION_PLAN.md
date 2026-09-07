@@ -216,3 +216,73 @@ order exists to avoid. Email sync (Phase 9) comes last among the
 functional work because it's a full rewrite, not a port, and you want
 everything else — auth, models, storage, the API surface — proven
 solid before taking on the riskiest piece.
+
+---
+
+## Appendix — Phase 0 endpoint inventory
+
+67 routes in the current `_app/api.py`, grouped by the Django app
+boundary each maps to.
+
+**System / diagnostics** (`core`)
+`GET /api/status` · `GET /api/diagnostics` ·
+`POST /api/diagnostics/reveal-log` · `GET /api/health`
+
+**Workspaces** (`workspaces`)
+`GET/POST /api/workspaces` · `POST /api/workspaces/inspect` ·
+`POST /api/workspaces/link` · `POST /api/workspaces/import` ·
+`POST /api/workspaces/import-folder` ·
+`POST /api/workspaces/import-folder-local` ·
+`GET /api/workspaces/{id}/export` · `POST /api/workspaces/switch` ·
+`POST /api/workspaces/{id}/rename` · `DELETE /api/workspaces/{id}` ·
+`POST /api/rebuild`
+
+**Email accounts & sync** (`email_sync`) — *the whole cluster is the
+Phase 9 rewrite target; do not design its DRF shape ahead of Phase 9*
+`GET /api/accounts` · `GET /api/accounts/mail-app/available` ·
+`POST /api/accounts/mail-app/connect` · `DELETE /api/accounts/{id}` ·
+`POST /api/accounts/reset-email-sync` ·
+`POST /api/accounts/{id}/sync` · `POST /api/accounts/{id}/discover`
+
+**Discoveries** (`email_sync`)
+`GET /api/discoveries` · dismiss / restore / preview / mark-posting /
+dismiss-sender / sender-classification / attach / accept (all
+`{discovery_id}`-scoped) · `POST /api/discoveries/backfill-email-pdfs`
+
+**Job postings** (`postings`) — Phase 6
+`GET /api/job-postings` · dismiss / restore / save / apply (all
+`{job_id}`-scoped)
+
+**Applications** (`applications`)
+`GET /api/applications` · `GET /api/applications/{id}/documents` ·
+`GET /api/applications/{id}/dossier` ·
+`POST /api/applications/{id}/documents` · `POST /api/applications/new` ·
+override (single + bulk) · delete (single + bulk)
+
+**Categories & documents** (`documents`) — Phase 4, the
+folder→storage rewrite; `/api/file` and `/api/preview-docx` change
+shape here too (local-path traversal guard → "fetch object the user
+owns")
+`POST/GET /api/categories/new`, `/api/categories` ·
+`POST /api/categories/{folder}/override` ·
+`POST /api/categories/{folder}/delete` · `POST /api/documents/delete` ·
+`POST /api/documents/rename` · `POST /api/documents/override`
+
+**Cross-cutting views** (`core`)
+`GET /api/attention` · `GET /api/insights` · `GET /api/search` ·
+`GET /api/browse` · `GET /api/manage` (+ merge/unmerge) ·
+`GET/POST /api/hub/settings` · `POST /api/open` ·
+`POST /api/open-url` · `GET /api/file` · `GET /api/preview-docx`
+
+**Two things this inventory flags for later phases:**
+
+1. `/api/file` and `/api/preview-docx` currently serve from a local
+   path via `infrastructure/paths.py`'s traversal guards. On
+   storage-backed `Document` models (Phase 4) they become "fetch this
+   object the user owns" — a different and simpler permission check,
+   not a like-for-like port.
+2. The accounts/discoveries/sync cluster (13 routes) maps one-to-one
+   onto Phase 9. Its underlying data model changes once Mail.app is
+   gone — real per-provider `EmailAccount` records with OAuth tokens
+   replace "is Mail.app available" — so its DRF shape shouldn't be
+   locked in before Phase 9 actually starts.
