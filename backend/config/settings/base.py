@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.1/ref/settings/
 """
 
+import os
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -152,6 +153,25 @@ STORAGES = {
 }
 
 
+# Django REST Framework (docs/DJANGO_MIGRATION_PLAN.md Phase 8).
+#
+# SessionAuthentication over token auth: the `desktop/` launcher runs
+# the frontend same-origin against this same server (see Phase 2's
+# "decided based on whether the frontend stays same-origin" note), so
+# there's no cross-origin case to design a token scheme around.
+# BasicAuthentication is included only so DRF's browsable API and
+# manual curl/http testing can authenticate without a browser session.
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework.authentication.SessionAuthentication',
+        'rest_framework.authentication.BasicAuthentication',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ],
+}
+
+
 # Email
 # https://docs.djangoproject.com/en/6.1/topics/email/#topic-email-configuration
 
@@ -160,3 +180,41 @@ MAILERS = {
         'BACKEND': 'django.core.mail.backends.console.EmailBackend',
     },
 }
+
+
+# Gmail OAuth (Phase 9 slice, docs/DJANGO_MIGRATION_PLAN.md) --
+# credentials for *this app's* registration with Google, not any
+# user's mailbox credentials (those are the whole point of the OAuth
+# dance and are never configured here). Real values must come from
+# the environment in any deployed environment -- the empty-string
+# defaults below only let local `manage.py test`/`runserver` boot
+# without a real Google Cloud project configured; email_sync.oauth
+# raises a clear error at the moment a connect flow is actually
+# attempted with these unset, rather than failing silently.
+GOOGLE_OAUTH_CLIENT_ID = os.environ.get('GOOGLE_OAUTH_CLIENT_ID', '')
+GOOGLE_OAUTH_CLIENT_SECRET = os.environ.get('GOOGLE_OAUTH_CLIENT_SECRET', '')
+GOOGLE_OAUTH_REDIRECT_URI = os.environ.get(
+    'GOOGLE_OAUTH_REDIRECT_URI', 'http://localhost:8000/api/email-accounts/gmail/callback'
+)
+
+# Symmetric key (cryptography.fernet) GmailCredential uses to encrypt
+# stored OAuth access/refresh tokens at rest -- see email_sync.oauth's
+# module docstring for why field-level encryption rather than relying
+# on the database's own encryption-at-rest. SECURITY WARNING: this
+# dev-only fallback key is checked into source control, same caveat as
+# SECRET_KEY above -- generate a real one
+# (`python -c "from cryptography.fernet import Fernet;
+# print(Fernet.generate_key().decode())"`) and set
+# GMAIL_TOKEN_ENCRYPTION_KEY in the environment before this is ever
+# deployed. Rotating this key makes every already-stored token
+# undecryptable, so treat it with the same care as a database
+# password, not as a rotate-on-a-whim secret.
+GMAIL_TOKEN_ENCRYPTION_KEY = os.environ.get(
+    'GMAIL_TOKEN_ENCRYPTION_KEY', 'fXjaJnCzcqV7qdtv8krT14nLUD6QBFScd6jZf5hzVGg='
+)
+
+# Read-only scope only -- this app never sends, deletes, or modifies
+# mail, only classifies it for matching (email_sync.matching), so the
+# OAuth consent screen a user sees should never ask for more than
+# reading.
+GMAIL_OAUTH_SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
