@@ -22,8 +22,8 @@ class HubSettings(models.Model):
         primary_key=True,
         related_name="hub_settings",
     )
-    role = models.CharField(max_length=255, blank=True, null=True)
-    location = models.CharField(max_length=255, blank=True, null=True)
+    role = models.CharField(max_length=255, blank=True, default="")
+    location = models.CharField(max_length=255, blank=True, default="")
     # { [linkName]: {title?, url?} } -- edits to built-in cards.
     custom_links = models.JSONField(default=dict, blank=True)
     # { [categoryId]: [{id, title, url, note}] } -- cards you've added.
