@@ -12,3 +12,25 @@ djangorestframework==3.18.0
 # the Storage backend; boto3 is its S3 client dependency.
 django-storages[s3]==1.14.4
 boto3==1.35.36
+
+# Phase 6 -- test-only. postings/tests/test_extraction.py reads the
+# real fixture PDFs the same way _app/requirements.txt's pypdf pin
+# always has (see that file); not needed at runtime.
+pypdf>=4.0
+
+# Phase 9 -- Gmail OAuth (email_sync/oauth.py, email_sync/gmail_provider.py).
+# google-api-python-client is the Gmail v1 client gmail_provider.py's
+# service_factory-supplied object duck-types (see that module's own
+# docstring on why it never imports this itself); google-auth +
+# google-auth-oauthlib are the token/credential and browser-consent-
+# flow libraries oauth.py builds on directly. cryptography backs
+# oauth.py's field-level encryption of stored OAuth tokens
+# (GmailCredential.access_token/refresh_token). requests is pinned
+# explicitly (not just relied on as a transitive dep of the google-*
+# packages above) because oauth.py's disconnect/revoke flow calls it
+# directly, against Google's OAuth revoke endpoint.
+google-api-python-client==2.200.0
+google-auth==2.57.1
+google-auth-oauthlib==1.4.1
+cryptography>=42.0
+requests>=2.32

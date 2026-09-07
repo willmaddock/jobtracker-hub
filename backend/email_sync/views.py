@@ -1,0 +1,254 @@
+"""
+email_sync views: the Gmail OAuth connect/callback endpoints plus the
+manual "sync now" trigger (Phase 9, docs/DJANGO_MIGRATION_PLAN.md).
+
+The OAuth views return JSON, never an HTTP redirect to a frontend
+route -- there's no frontend route to redirect to yet (no Phase 8
+email-sync UI has been built), and a JSON response is trivially
+adaptable by whatever frontend eventually calls this vs. a redirect
+target baked in here that a later slice would just have to change
+anyway.
+
+EmailAccountSyncView and EmailAccountDisconnectView are deliberately
+the smallest possible next slices on top of that: the former wires the
+already-fully-tested sync_service.sync_account() up to something
+callable at all, ahead of any real Celery/background scheduling; the
+latter closes the gap oauth.py's own module docstring used to flag --
+revoking a Gmail grant with Google, not just deleting the local row.
+No Discovery/AccountMatch CRUD views live here yet -- reviewing what a
+sync actually found is still a later slice.
+"""
+from __future__ import annotations
+
+from rest_framework import status
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
+from accounts.models import Workspace
+
+from . import oauth
+from .models import EmailAccount
+from .oauth import OAuthConfigError
+from .providers import ProviderError, get_provider
+from .sync_service import sync_account
+
+# Session keys used to carry OAuth CSRF state + which workspace
+# initiated the connect across the redirect to Google and back --
+# there is no other place to put this: the callback request is a
+# fresh top-level navigation from Google, not a follow-up to the
+# connect call a client could pass its own context on.
+_SESSION_STATE_KEY = "gmail_oauth_state"
+_SESSION_WORKSPACE_KEY = "gmail_oauth_workspace_id"
+
+
+class GmailConnectView(APIView):
+    """GET /api/email-accounts/gmail/connect?workspace=<id>
+
+    Starts a Gmail OAuth connect flow: returns the Google consent-
+    screen URL for the client to navigate the user to. Requires
+    `workspace` so the eventual callback knows which of the user's
+    workspaces the resulting EmailAccount belongs to -- EmailAccount
+    is workspace-scoped, not user-scoped, same as every other owned
+    resource in this codebase.
+    """
+
+    def get(self, request):
+        workspace_id = request.query_params.get("workspace")
+        if not workspace_id:
+            return Response(
+                {"detail": "workspace query parameter is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        # Ownership check mirrors WorkspaceViewSet.get_queryset -- a
+        # user should never be able to kick off a connect flow that
+        # lands an EmailAccount in a workspace they don't own.
+        try:
+            workspace = Workspace.objects.get(id=workspace_id, owner=request.user)
+        except (Workspace.DoesNotExist, ValueError):
+            return Response(
+                {"detail": "No such workspace."}, status=status.HTTP_404_NOT_FOUND
+            )
+
+        try:
+            authorization_url, state = oauth.build_authorization_url()
+        except OAuthConfigError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        request.session[_SESSION_STATE_KEY] = state
+        request.session[_SESSION_WORKSPACE_KEY] = workspace.id
+        return Response({"authorization_url": authorization_url})
+
+
+class GmailOAuthCallbackView(APIView):
+    """GET /api/email-accounts/gmail/callback?code=...&state=...
+
+    Google redirects the user's browser here after consent. permission
+    AllowAny -- this is a top-level navigation initiated by Google, not
+    a same-session API call the frontend makes, but the Django session
+    cookie still rides along on that navigation (first-party, top-
+    level), which is what lets this view recover which workspace/state
+    GmailConnectView stashed without trusting anything the query string
+    itself claims about them.
+    """
+
+    permission_classes = []
+    authentication_classes = []
+
+    def get(self, request):
+        error = request.query_params.get("error")
+        if error:
+            return Response(
+                {"detail": f"Gmail authorization was not granted: {error}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        code = request.query_params.get("code")
+        state = request.query_params.get("state")
+        if not code or not state:
+            return Response(
+                {"detail": "Missing code or state on Gmail OAuth callback."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        expected_state = request.session.get(_SESSION_STATE_KEY)
+        workspace_id = request.session.get(_SESSION_WORKSPACE_KEY)
+        if not expected_state or state != expected_state or not workspace_id:
+            # Missing/mismatched state means this request didn't
+            # originate from a GmailConnectView call this session made
+            # -- classic OAuth CSRF, refuse rather than guess.
+            return Response(
+                {"detail": "Invalid or expired OAuth state."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            workspace = Workspace.objects.get(id=workspace_id)
+        except Workspace.DoesNotExist:
+            return Response(
+                {"detail": "Workspace for this connect attempt no longer exists."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            account = oauth.complete_gmail_connection(workspace, code=code, state=state)
+        except OAuthConfigError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        finally:
+            # One-time-use state regardless of outcome -- a failed
+            # exchange shouldn't leave a replayable state hanging
+            # around in the session.
+            request.session.pop(_SESSION_STATE_KEY, None)
+            request.session.pop(_SESSION_WORKSPACE_KEY, None)
+
+        return Response(
+            {"id": account.id, "email": account.email, "status": account.status},
+            status=status.HTTP_200_OK,
+        )
+
+
+class EmailAccountSyncView(APIView):
+    """POST /api/email-accounts/<id>/sync
+
+    Runs one sync_service.sync_account() pass for a single, already-
+    connected EmailAccount and returns its SyncResult as JSON. This is
+    a manual trigger only -- no scheduling, no "sync all accounts,"
+    and nothing calls this on its own; a real background scheduler
+    (Celery/Django-Q) is a later slice, same as
+    docs/DJANGO_BACKEND_HANDOFF.md's Known Gaps section says.
+
+    get_object() is scoped to workspace__owner=request.user, same
+    ownership pattern as every other per-object action in this
+    codebase (see postings/views.py's JobPostingViewSet) -- a 404, not
+    a 403, on another user's account so this endpoint never confirms
+    that an id belongs to someone else.
+    """
+
+    def _get_account(self, request, pk):
+        try:
+            return EmailAccount.objects.get(pk=pk, workspace__owner=request.user)
+        except (EmailAccount.DoesNotExist, ValueError):
+            return None
+
+    def post(self, request, pk=None):
+        account = self._get_account(request, pk)
+        if account is None:
+            return Response({"detail": "No such email account."}, status=status.HTTP_404_NOT_FOUND)
+
+        if account.status == "disconnected":
+            return Response(
+                {"detail": "This account is disconnected. Reconnect it before syncing."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            provider = get_provider(account.provider)
+        except ProviderError as exc:
+            # No provider registered for account.provider yet (e.g. a
+            # legacy mail_app row, or a not-yet-built Outlook/IMAP
+            # provider) -- this is a config/support-matrix gap, not a
+            # per-sync-attempt failure, so it doesn't touch
+            # account.status the way sync_account()'s own
+            # ProviderAuthError handling does.
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        result = sync_account(account, provider)
+        body = {
+            "account_id": result.account_id,
+            "ok": result.ok,
+            "error": result.error,
+            "messages_seen": result.messages_seen,
+            "new_matches": result.new_matches,
+            "new_discoveries": result.new_discoveries,
+            "skipped_existing": result.skipped_existing,
+            "status": account.status,
+        }
+        # A sync that ran but found the account's credentials revoked
+        # (result.ok=False, account now "blocked") is a legitimate,
+        # already-handled outcome of sync_account() itself -- not a
+        # server error -- so this still returns 200, same way
+        # sync_account() itself doesn't raise for that case.
+        return Response(body, status=status.HTTP_200_OK)
+
+
+class EmailAccountDisconnectView(APIView):
+    """POST /api/email-accounts/<id>/disconnect
+
+    Disconnects an EmailAccount: for a Gmail account, revokes the
+    stored grant with Google (best-effort -- see
+    oauth.disconnect_gmail_account's own docstring) and deletes the
+    local GmailCredential row; for any other provider there's no
+    credential model to clean up, so this is just a status flip. In
+    both cases the EmailAccount row itself is kept, not deleted -- its
+    sync history (AccountMatch/Discovery/ThreadIdentifier rows,
+    matched_email_count) stays intact, and oauth.
+    complete_gmail_connection()'s own get_or_create-by-(workspace,
+    email, provider) already knows how to revive a disconnected row on
+    reconnect rather than forking a duplicate.
+
+    Idempotent: disconnecting an already-disconnected account just
+    re-confirms that status rather than erroring, since there's
+    nothing left to revoke or delete the second time.
+    """
+
+    def _get_account(self, request, pk):
+        try:
+            return EmailAccount.objects.get(pk=pk, workspace__owner=request.user)
+        except (EmailAccount.DoesNotExist, ValueError):
+            return None
+
+    def post(self, request, pk=None):
+        account = self._get_account(request, pk)
+        if account is None:
+            return Response({"detail": "No such email account."}, status=status.HTTP_404_NOT_FOUND)
+
+        if account.status != "disconnected":
+            if account.provider == "gmail":
+                oauth.disconnect_gmail_account(account)
+            else:
+                # No credential model exists for any other provider
+                # yet (see providers.py -- Outlook/IMAP aren't built),
+                # so there's nothing to revoke: just flip the status.
+                account.status = "disconnected"
+                account.save(update_fields=["status", "updated_at"])
+
+        return Response({"id": account.id, "status": account.status}, status=status.HTTP_200_OK)

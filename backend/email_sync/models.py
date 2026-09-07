@@ -59,6 +59,56 @@ class EmailAccount(models.Model):
         return self.account_name or self.email
 
 
+class GmailCredential(models.Model):
+    """OAuth tokens for one EmailAccount's Gmail connection (Phase 9
+    OAuth slice, docs/DJANGO_MIGRATION_PLAN.md). Split out from
+    EmailAccount itself -- rather than adding token fields there --
+    for two reasons: EmailAccount's own docstring has said "no
+    credentials of any kind are ever stored here" since Phase 3, and
+    keeping that true means every other reader of EmailAccount (admin,
+    serializers, matching/sync code) never has token material sitting
+    in a queryset it happens to `.select_related()`; and because this
+    table's contents genuinely are different in kind -- a single OAuth
+    grant, one row per account, gone the moment the account is
+    disconnected -- from EmailAccount's own sync bookkeeping fields.
+
+    access_token/refresh_token are stored *encrypted* (via
+    email_sync.oauth's Fernet helpers, keyed by
+    settings.GMAIL_TOKEN_ENCRYPTION_KEY), never in plaintext -- these
+    fields hold ciphertext, not raw tokens. Encrypting the field
+    rather than relying solely on the database's own encryption-at-
+    rest means a database backup/dump/read-replica leak alone still
+    isn't enough to use anyone's mailbox; the encryption key is a
+    separate secret with its own, narrower, blast radius.
+
+    access_token can be blank: Google's `expires_in` for a freshly
+    refreshed token means a caller only strictly needs the refresh
+    token plus the ability to mint new access tokens on demand, and
+    some flows may only hand back a refresh token on first consent.
+    refresh_token is required -- a credential this class can't
+    eventually refresh is useless the moment its short-lived access
+    token expires, and email_sync.oauth's refresh path assumes it's
+    always present.
+    """
+
+    account = models.OneToOneField(
+        EmailAccount, on_delete=models.CASCADE, related_name="gmail_credential"
+    )
+    access_token = models.TextField(blank=True)
+    refresh_token = models.TextField()
+    token_expiry = models.DateTimeField(blank=True, null=True)
+    # Space-separated OAuth scope string, exactly as Google returns it
+    # -- stored (not just assumed from settings.GMAIL_OAUTH_SCOPES) so
+    # a future scope-mismatch check has the actual grant to compare
+    # against, not just what this app most recently asked for.
+    scopes = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self) -> str:
+        return f"Gmail credential for {self.account}"
+
+
 class AccountMatch(models.Model):
     """One email matched to an Application, so the dossier/timeline
     can cite "via which account" without re-fetching the inbox. Only
