@@ -237,6 +237,77 @@ becomes a problem.
 
 ---
 
+## Finding 8 — Attaching an email to an *existing* application crashed mid-flow, and even fixed, saved no evidence PDF
+
+**Symptom (part A — crash):** Using "Pick application…" in Needs Triage to
+attach a Needs-Triage email to an existing item (as opposed to accepting it
+as a brand-new discovery) threw a `ReferenceError` in the browser console
+mid-click. The item's status override *did* get written (the fetch to
+`/api/discoveries/{id}/attach` completed), but the UI never bumped the row
+out of Needs Triage or refreshed the applications/status views, so the app
+looked stuck/broken even though the backend call had actually succeeded.
+
+**Root cause:** `_app/frontend/index.html`'s `quickAttach()` had a stray
+`setResolvingIntent(null)` call left over from an earlier refactor —
+`resolvingIntent`/`setResolvingIntent` isn't a declared state setter
+anywhere in the component. Calling it throws immediately, which aborted
+the rest of `quickAttach()` before it reached the status-override write,
+`refreshApps()`, and `refreshStatus()` calls that follow it.
+
+**Fix applied:** Deleted the stray `setResolvingIntent(null)` line. No
+other code in the file references that name, so this is a clean one-line
+removal — the rest of `quickAttach()` (status override, history entry,
+refreshApps/refreshStatus) already existed and runs correctly once nothing
+throws before it.
+
+**Symptom (part B — missing evidence, found while verifying the fix):**
+Once the crash no longer interrupted the flow, the item's status updated
+correctly, but the source email never showed up as an attached PDF on the
+item — "Attached Documents" count didn't increase.
+
+**Root cause:** `attach_discovery()` (the existing-item path) only ever
+called `ov.add_thread_identifiers()` and `ov.set_discovery_status()` — it
+recorded the match and cleared the row from Needs Triage, but never called
+`_save_email_evidence_pdf()`. `accept_discovery()` (the brand-new-item
+path) has always called that helper. Attaching to an existing application
+was simply never wired up to produce evidence; this is unrelated to the
+Finding-8-part-A crash and would have existed even without it.
+
+**Fix applied** (`_app/api.py`): `attach_discovery()` now calls the same
+`_save_email_evidence_pdf()` helper `accept_discovery()` already used,
+writing an `Email - <subject>.pdf` into the existing item's folder and
+indexing it immediately (documents + documents_fts) so it appears without
+needing a manual rebuild. Best-effort and non-blocking, matching the
+existing-item flow's tolerance for a missing/renamed folder or a Mail.app
+hiccup — a save failure there logs but does not undo the match that
+already succeeded.
+
+**Regression tests** (`tests/test_email_pdf.py`):
+`test_attach_discovery_saves_email_as_pdf_on_existing_item`,
+`test_attach_discovery_still_links_when_pdf_save_fails`. Full suite run
+by the user on their machine: 370/370 passed.
+
+**Not fixed by this change:** matches made via "Pick application…"
+*before* this fix shipped still have no evidence PDF on file. The existing
+"Backfill missing email PDFs" button (Email Sync page) covers this, but
+only for folders with zero existing `Email - …` PDFs, and it needs a live
+Mail.app on the user's machine to re-fetch the body (can't be run from a
+sandboxed Claude session). For the one real case hit this session
+(American Systemes / `willzaeagle@gmail.com`), the actual uploaded
+`FollowUp__Java_Developer_l.pdf` was renamed to the app's convention and
+indexed directly into the working DB rather than waiting on Backfill.
+
+**Branches:** Fixed on `main` (`2621fff` crash, `c4dd50e` evidence-PDF) and
+cherry-picked onto `django-migration` (`810b5c7` crash, `e4fbd7a`
+evidence-PDF). `django-migration`'s `_app/` tree is the same single-user
+FastAPI app as `main`'s — see the scope note at the top of
+`CLAUDE_HANDOFF.md` on that branch — so this bug and fix apply there
+identically. It does **not** apply to that branch's separate `backend/`
+Django/Gmail-OAuth email-sync rewrite, which has its own attach flow and
+its own handoff (`docs/DJANGO_BACKEND_HANDOFF.md`) and was not touched.
+
+---
+
 ## Verification
 
 Findings 4 and 5 were verified against the real testing `overrides.db`

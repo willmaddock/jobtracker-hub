@@ -1343,6 +1343,44 @@ def attach_discovery(discovery_id: int, item_key: str = Form(...)):
         ov.add_thread_identifiers(ov_conn, item_key, [discovery["message_id"]])
     ov.set_discovery_status(ov_conn, discovery_id, "accepted")
 
+    # Mirrors accept_discovery's evidence-PDF save (see
+    # _save_email_evidence_pdf below) -- attaching to an EXISTING item
+    # used to only record the match/thread-id and leave no trace in
+    # Attached Documents, unlike accept's brand-new-item path. Best-effort
+    # and never blocks the attach itself: a missing/moved folder or a
+    # Mail.app hiccup here shouldn't undo the match that already succeeded
+    # above. Indexes the new file directly (same classify_doc_type/
+    # sha256_of/iso_mtime + resync_fts pattern as upload_documents) rather
+    # than a full build(), since the item's folder is already indexed --
+    # only the one new file needs a documents row.
+    row = jt_conn.execute(
+        "SELECT id, source_relpath FROM items WHERE item_key = ?", (item_key,)
+    ).fetchone()
+    if row is not None:
+        root = current_root().resolve()
+        dest_folder = root / row["source_relpath"]
+        if dest_folder.is_dir():
+            account = ov.get_account(ov_conn, discovery["account_id"])
+            before = {f.name for f in dest_folder.iterdir() if f.is_file()}
+            ok = _save_email_evidence_pdf(
+                dest_folder, account, discovery["message_id"],
+                discovery["subject"], discovery["sender"], discovery["received_at"],
+            )
+            new_files = {f.name for f in dest_folder.iterdir() if f.is_file()} - before
+            if ok and new_files:
+                dest = dest_folder / next(iter(new_files))
+                relpath = dest.relative_to(root)
+                jt_conn.execute(
+                    "INSERT INTO documents (item_id, doc_type, filename, relpath, ext, mtime, content_hash, is_source) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        row["id"], classify_doc_type(dest.name), dest.name, str(relpath),
+                        dest.suffix.lower(), iso_mtime(dest), sha256_of(dest), int(is_source_file(dest.name)),
+                    ),
+                )
+                resync_fts(jt_conn)
+                jt_conn.commit()
+
     pending = _discoveries_with_account_email(ov_conn, jt_conn)
     jt_conn.close()
     ov_conn.close()

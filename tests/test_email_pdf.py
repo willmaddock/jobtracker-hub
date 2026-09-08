@@ -190,3 +190,58 @@ def test_backfill_is_idempotent_and_skips_already_saved_pdfs(client, api_module,
 
     acme_folder = linked / "Applications" / "Acme Co" / "Backend Engineer"
     assert len(list(acme_folder.glob("Email - *.pdf"))) == 1
+
+
+# --- attach_discovery evidence PDF (Needs Triage -> existing item) ---------
+# Regression coverage for the gap where /attach linked the email
+# (account_match + thread id + discovery marked accepted) but, unlike
+# /accept, never saved it as a PDF into Attached Documents -- see
+# api.py's attach_discovery docstring/comment for the fix.
+
+def test_attach_discovery_saves_email_as_pdf_on_existing_item(client, api_module, linked, connected_account):
+    discovery = _discover_one(client, api_module, connected_account)
+    item_key = client.get("/api/applications").json()[0]["item_key"]
+    acme_folder = linked / "Applications" / "Acme Co" / "Backend Engineer"
+    assert not list(acme_folder.glob("Email - *.pdf"))
+
+    with patch.object(
+        api_module.mailapp, "get_message_preview",
+        return_value="Unfortunately, we will not be moving forward at this time.",
+    ):
+        resp = client.post(f"/api/discoveries/{discovery['id']}/attach", data={"item_key": item_key})
+    assert resp.status_code == 200
+    assert resp.json()["discoveries"] == []  # no longer pending
+
+    pdfs = list(acme_folder.glob("Email - *.pdf"))
+    assert len(pdfs) == 1
+    assert pdfs[0].read_bytes().startswith(b"%PDF")
+
+    # Indexed immediately (no rebuild needed) -- shows up via the
+    # ordinary documents endpoint just like a drag-and-drop upload would.
+    item_id = client.get("/api/applications").json()[0]["id"]
+    docs = client.get(f"/api/applications/{item_id}/documents").json()
+    assert any(d["filename"] == pdfs[0].name for d in docs)
+
+
+def test_attach_discovery_still_links_when_pdf_save_fails(client, api_module, linked, connected_account):
+    """A Mail.app hiccup fetching the body shouldn't undo the match that
+    already succeeded -- same resilience guarantee as accept_discovery."""
+    discovery = _discover_one(client, api_module, connected_account)
+    item_key = client.get("/api/applications").json()[0]["item_key"]
+
+    with patch.object(
+        api_module.mailapp, "get_message_preview",
+        side_effect=api_module.mailapp.MailAppError("timed out"),
+    ):
+        resp = client.post(f"/api/discoveries/{discovery['id']}/attach", data={"item_key": item_key})
+    assert resp.status_code == 200
+    assert resp.json()["discoveries"] == []
+
+    # A PDF is still produced (get_message_preview failing falls back to
+    # a placeholder body, same as accept_discovery) -- this only fails
+    # to save on a real disk/OS error, not a Mail.app fetch error.
+    acme_folder = linked / "Applications" / "Acme Co" / "Backend Engineer"
+    assert len(list(acme_folder.glob("Email - *.pdf"))) == 1
+
+    _, ov_conn = api_module.get_conns()
+    assert api_module.ov.get_discovery(ov_conn, discovery["id"])["status"] == "accepted"
