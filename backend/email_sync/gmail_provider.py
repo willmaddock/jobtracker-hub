@@ -37,6 +37,7 @@ ThreadIdentifier has on file. Gmail's own id is only ever used
 internally here, to fetch each message's full content.
 """
 from __future__ import annotations
+import time
 
 import base64
 from datetime import datetime, timedelta, timezone as dt_timezone
@@ -55,6 +56,17 @@ from .providers import EmailProvider, FetchedMessage, ProviderAuthError, Provide
 # incremental sync's result set small.
 _MAX_LIST_PAGES = 50
 
+# Retry/backoff for individual messages.get() calls. Only errors that
+# _looks_like_temporary_error would classify as retryable (429, 5xx,
+# or a 403 that's actually a quota/rate-limit reason -- see
+# _is_403_rate_limit) get retried; anything else (e.g. a genuine 401/
+# 403 auth failure) is raised immediately via _raise_classified, same
+# as before this retry loop existed. _MAX_FETCH_RETRIES=3 means up to
+# 2 retries after the initial attempt; _RETRY_BACKOFF_BASE_SECONDS=5
+# with exponential doubling gives backoff waits of 5s, then 10s.
+_MAX_FETCH_RETRIES = 3
+_RETRY_BACKOFF_BASE_SECONDS = 5
+
 # Gmail's after: search operator is date-granularity only. Widening
 # the cutoff by one day guarantees overlap with the previous sync
 # rather than risking a same-day message just before the cutoff being
@@ -65,23 +77,61 @@ _MAX_LIST_PAGES = 50
 _SINCE_OVERLAP = timedelta(days=1)
 
 
+# Gmail's `usageLimits` error domain uses these `reason` values (found
+# in the parsed error body, not the HTTP status line) for quota/rate-
+# limit rejections. All of them come back over HTTP as a 403 -- the
+# same status Gmail also uses for a genuinely expired/revoked/under-
+# scoped grant -- so status alone can't distinguish "this token is no
+# longer valid" from "you're calling too fast, try again shortly."
+# Matched case-insensitively against str(exc), since duck-typed fakes
+# (see test_gmail_provider.py's _FakeHttpError) and the real
+# googleapiclient.errors.HttpError both surface the parsed reason
+# somewhere in their string representation.
+_RATE_LIMIT_REASONS = (
+    "ratelimitexceeded",
+    "userratelimitexceeded",
+    "quotaexceeded",
+    "dailylimitexceeded",
+)
+
+
+def _is_403_rate_limit(exc: Exception) -> bool:
+    """True if a 403 `exc` identifies itself as one of Gmail's quota/
+    rate-limit reasons rather than an actual auth/permission failure --
+    see _RATE_LIMIT_REASONS' own docstring for why status alone can't
+    tell these apart."""
+    message = str(exc).lower()
+    return any(reason in message for reason in _RATE_LIMIT_REASONS)
+
+
 def _looks_like_auth_error(exc: Exception) -> bool:
     """True if `exc` duck-types a googleapiclient HttpError carrying an
-    HTTP 401 or 403 -- Gmail's shape for "this token is no longer
-    valid" (expired/revoked grant, insufficient scope). Duck-typed
-    rather than `isinstance(exc, googleapiclient.errors.HttpError)` so
-    this module never needs to import the google client library
-    itself -- see the module docstring."""
+    HTTP 401, or a 403 that isn't one of Gmail's quota/rate-limit
+    reasons (see _is_403_rate_limit) -- Gmail's shape for "this token
+    is no longer valid" (expired/revoked grant, insufficient scope).
+    Duck-typed rather than `isinstance(exc, googleapiclient.errors.
+    HttpError)` so this module never needs to import the google client
+    library itself -- see the module docstring."""
     status = getattr(getattr(exc, "resp", None), "status", None)
-    return status in (401, 403)
+    if status == 401:
+        return True
+    if status == 403:
+        return not _is_403_rate_limit(exc)
+    return False
 
 
 def _looks_like_temporary_error(exc: Exception) -> bool:
     """True if `exc` duck-types an HttpError carrying a 429 (rate
-    limited) or 5xx (Gmail-side failure) -- both retryable on a later
-    sync without the user reconnecting anything."""
+    limited), a 5xx (Gmail-side failure), or a 403 that's actually one
+    of Gmail's quota/rate-limit reasons (see _is_403_rate_limit) --
+    all retryable on a later sync without the user reconnecting
+    anything."""
     status = getattr(getattr(exc, "resp", None), "status", None)
-    return status == 429 or (isinstance(status, int) and 500 <= status < 600)
+    if status == 429 or (isinstance(status, int) and 500 <= status < 600):
+        return True
+    if status == 403 and _is_403_rate_limit(exc):
+        return True
+    return False
 
 
 def _raise_classified(exc: Exception) -> None:
@@ -258,6 +308,7 @@ class GmailProvider(EmailProvider):
             except Exception as exc:
                 _raise_classified(exc)
                 raise  # pragma: no cover -- _raise_classified always raises
+            time.sleep(0.3)
 
             message_ids.extend(m["id"] for m in response.get("messages", []))
             page_token = response.get("nextPageToken")
@@ -266,16 +317,24 @@ class GmailProvider(EmailProvider):
 
         results: list[FetchedMessage] = []
         for gmail_id in message_ids:
-            try:
-                gmail_message = (
-                    service.users()
-                    .messages()
-                    .get(userId="me", id=gmail_id, format="raw")
-                    .execute()
-                )
-            except Exception as exc:
-                _raise_classified(exc)
-                raise  # pragma: no cover -- _raise_classified always raises
+            gmail_message = None
+            for attempt in range(_MAX_FETCH_RETRIES):
+                try:
+                    gmail_message = (
+                        service.users()
+                        .messages()
+                        .get(userId="me", id=gmail_id, format="raw")
+                        .execute()
+                    )
+                    break
+                except Exception as exc:
+                    is_last_attempt = attempt == _MAX_FETCH_RETRIES - 1
+                    if _looks_like_temporary_error(exc) and not is_last_attempt:
+                        time.sleep(_RETRY_BACKOFF_BASE_SECONDS * (2 ** attempt))
+                        continue
+                    _raise_classified(exc)
+                    raise  # pragma: no cover -- _raise_classified always raises
+            time.sleep(0.3)
 
             fetched = _to_fetched_message(gmail_message)
             if fetched is not None:

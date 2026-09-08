@@ -35,10 +35,12 @@ EmailAccountSyncAllView is what applies that per-user scoping, on the
 list of ids it hands each dispatched task.
 
 Failure handling: sync_account() itself already turns a
-ProviderAuthError into account.status="blocked" plus a non-raising
-SyncResult (see its own docstring) -- that path needs no extra
-handling here. What sync_account_task additionally guards against,
-that the synchronous view doesn't have to worry about, is the account
+ProviderAuthError into account.status="blocked" (and a
+ProviderTemporaryError into no status change at all) plus a
+non-raising SyncResult either way (see sync_service.sync_account()'s
+own docstring) -- that path needs no extra handling here. What
+sync_account_task additionally guards against, that the synchronous
+view doesn't have to worry about, is the account
 or its provider having disappeared/become unregistered in the gap
 between sync_all_accounts_task looking it up and a worker actually
 running this task later (EmailAccount.DoesNotExist -- e.g. the

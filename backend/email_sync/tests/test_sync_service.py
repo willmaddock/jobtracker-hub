@@ -21,7 +21,7 @@ from accounts.models import Workspace
 from applications.models import Application
 
 from ..models import AccountMatch, Discovery, EmailAccount, JobPostingSender, ThreadIdentifier
-from ..providers import EmailProvider, FetchedMessage, ProviderAuthError
+from ..providers import EmailProvider, FetchedMessage, ProviderAuthError, ProviderTemporaryError
 from ..sync_service import sync_account
 
 
@@ -37,17 +37,28 @@ class FakeProvider(EmailProvider):
     classification logic; a provider's only job is "hand back
     messages." `raise_auth_error`, when set, makes fetch_messages()
     raise ProviderAuthError instead, for exercising sync_account()'s
-    error path."""
+    error path. `raise_temporary_error` does the same for
+    ProviderTemporaryError -- a distinct path from ProviderAuthError
+    that must NOT touch account.status (see ProviderTemporaryError's
+    own docstring in providers.py)."""
 
-    def __init__(self, messages: Iterable[FetchedMessage] = (), raise_auth_error: bool = False):
+    def __init__(
+        self,
+        messages: Iterable[FetchedMessage] = (),
+        raise_auth_error: bool = False,
+        raise_temporary_error: bool = False,
+    ):
         self.messages = list(messages)
         self.raise_auth_error = raise_auth_error
+        self.raise_temporary_error = raise_temporary_error
         self.calls: list[tuple[list[str], datetime | None]] = []
 
     def fetch_messages(self, account, terms, since=None):
         self.calls.append((list(terms), since))
         if self.raise_auth_error:
             raise ProviderAuthError("credentials revoked")
+        if self.raise_temporary_error:
+            raise ProviderTemporaryError("rate limited")
         return list(self.messages)
 
 
@@ -307,6 +318,44 @@ class AuthErrorHandlingTests(SyncServiceTestCase):
     def test_auth_error_creates_no_partial_matches(self):
         self._application("Acme Robotics")
         provider = FakeProvider(raise_auth_error=True)
+
+        sync_account(self.account, provider)
+
+        self.assertFalse(AccountMatch.objects.exists())
+        self.assertFalse(Discovery.objects.exists())
+
+
+class TemporaryErrorHandlingTests(SyncServiceTestCase):
+    # Regression coverage: ProviderTemporaryError (rate limiting, a
+    # network timeout, a provider-side 5xx) must be caught right
+    # alongside ProviderAuthError, and reported the same non-raising
+    # way -- but, unlike an auth error, must NOT touch account.status
+    # or imply the account needs reconnecting. Before this was added,
+    # ProviderTemporaryError had no handler in sync_account() at all
+    # and simply propagated out of the Celery task as an unhandled
+    # exception the moment a provider actually raised one (see
+    # gmail_provider.py's 403-rate-limit reclassification).
+    def test_temporary_error_reports_failure_without_blocking_account(self):
+        provider = FakeProvider(raise_temporary_error=True)
+
+        result = sync_account(self.account, provider)
+
+        self.assertFalse(result.ok)
+        self.assertIsNotNone(result.error)
+        self.account.refresh_from_db()
+        self.assertEqual(self.account.status, "connected")
+
+    def test_temporary_error_does_not_raise(self):
+        provider = FakeProvider(raise_temporary_error=True)
+
+        try:
+            sync_account(self.account, provider)
+        except Exception as exc:  # noqa: BLE001 -- the point of this test is that nothing escapes
+            self.fail(f"sync_account() raised {exc!r} instead of returning a failed SyncResult")
+
+    def test_temporary_error_creates_no_partial_matches(self):
+        self._application("Acme Robotics")
+        provider = FakeProvider(raise_temporary_error=True)
 
         sync_account(self.account, provider)
 

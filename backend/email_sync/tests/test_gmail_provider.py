@@ -62,15 +62,19 @@ class _FakeExecutable:
 
 class _FakeHttpError(Exception):
     """Duck-types googleapiclient.errors.HttpError's `.resp.status`
-    shape without importing the real library."""
+    shape without importing the real library. `message`, when given,
+    overrides the default `f"HTTP {status}"` string -- used to
+    simulate a real Gmail 403's parsed-body reason (e.g.
+    "rateLimitExceeded") showing up in str(exc), the same place it'd
+    appear on a genuine googleapiclient.errors.HttpError."""
 
     class _Resp:
         def __init__(self, status: int):
             self.status = status
 
-    def __init__(self, status: int):
+    def __init__(self, status: int, message: str | None = None):
         self.resp = self._Resp(status)
-        super().__init__(f"HTTP {status}")
+        super().__init__(message or f"HTTP {status}")
 
 
 class _FakeMessages:
@@ -247,6 +251,28 @@ class GmailProviderFetchTests(TestCase):
         service = _FakeGmailService(list_exc=_FakeHttpError(403))
         provider = self._provider_for(service)
         with self.assertRaises(ProviderAuthError):
+            list(provider.fetch_messages(self.account, terms=["Acme"]))
+
+    def test_403_rate_limit_on_list_raises_provider_temporary_error(self):
+        # Regression test: Gmail returns HTTP 403 for both an actual
+        # expired/revoked grant AND quota/rate-limit exhaustion
+        # (domain "usageLimits", reason "rateLimitExceeded") -- only
+        # the parsed reason in the body tells them apart. Treating
+        # every 403 as an auth failure would wrongly mark a perfectly
+        # valid account "blocked" for what's really a transient,
+        # retry-later condition.
+        service = _FakeGmailService(
+            list_exc=_FakeHttpError(
+                403,
+                message=(
+                    "<HttpError 403 ... returned \"Quota exceeded for quota metric "
+                    "'Total Query Cost' ...\". Details: \"[{'message': '...', "
+                    "'domain': 'usageLimits', 'reason': 'rateLimitExceeded'}]\">"
+                ),
+            )
+        )
+        provider = self._provider_for(service)
+        with self.assertRaises(ProviderTemporaryError):
             list(provider.fetch_messages(self.account, terms=["Acme"]))
 
     def test_429_on_list_raises_provider_temporary_error(self):

@@ -50,7 +50,7 @@ from .matching import (
     term_matches_wholeword,
 )
 from .models import AccountMatch, Discovery, EmailAccount, JobPostingSender, ThreadIdentifier
-from .providers import EmailProvider, FetchedMessage, ProviderAuthError
+from .providers import EmailProvider, FetchedMessage, ProviderAuthError, ProviderTemporaryError
 
 
 @dataclass
@@ -260,6 +260,17 @@ def sync_account(
     except ProviderAuthError as exc:
         account.status = "blocked"
         account.save(update_fields=["status", "updated_at"])
+        result.ok = False
+        result.error = str(exc)
+        return result
+    except ProviderTemporaryError as exc:
+        # Retryable (rate limiting, a network timeout, a provider-side
+        # 5xx) -- see ProviderTemporaryError's own docstring. Unlike
+        # ProviderAuthError, this must NOT touch account.status: the
+        # credential is fine, nothing here implies the user needs to
+        # reconnect anything, and a later sync (the next scheduled
+        # beat tick, or a manual retry) can simply pick this account
+        # back up on its own.
         result.ok = False
         result.error = str(exc)
         return result
