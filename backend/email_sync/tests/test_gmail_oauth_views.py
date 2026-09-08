@@ -50,6 +50,7 @@ class GmailConnectViewTests(APITestCase):
     def test_returns_authorization_url_and_stashes_session_state(self):
         fake_flow = MagicMock()
         fake_flow.authorization_url.return_value = ("https://accounts.google.com/o/oauth2/auth?x=1", "state-abc")
+        fake_flow.code_verifier = "verifier-abc"
         with patch.object(oauth.Flow, "from_client_config", return_value=fake_flow):
             response = self.client.get(self.url, {"workspace": self.workspace.id})
 
@@ -58,6 +59,7 @@ class GmailConnectViewTests(APITestCase):
         session = self.client.session
         self.assertEqual(session["gmail_oauth_state"], "state-abc")
         self.assertEqual(session["gmail_oauth_workspace_id"], self.workspace.id)
+        self.assertEqual(session["gmail_oauth_code_verifier"], "verifier-abc")
 
     @override_settings(GOOGLE_OAUTH_CLIENT_ID="", GOOGLE_OAUTH_CLIENT_SECRET="")
     def test_returns_503_when_oauth_not_configured(self):
@@ -72,10 +74,11 @@ class GmailOAuthCallbackViewTests(APITestCase):
         self.workspace = Workspace.objects.create(owner=self.user, name="Alice's workspace")
         self.url = reverse("gmail-oauth-callback")
 
-    def _seed_session_state(self, state="state-abc"):
+    def _seed_session_state(self, state="state-abc", code_verifier="verifier-abc"):
         session = self.client.session
         session["gmail_oauth_state"] = state
         session["gmail_oauth_workspace_id"] = self.workspace.id
+        session["gmail_oauth_code_verifier"] = code_verifier
         session.save()
 
     def test_google_error_param_returns_400(self):
@@ -122,9 +125,13 @@ class GmailOAuthCallbackViewTests(APITestCase):
                 workspace=self.workspace, email="alice@gmail.com", provider="gmail", status="connected"
             ).exists()
         )
+        # The stashed PKCE verifier should have been threaded through
+        # to the flow used for the token exchange.
+        self.assertEqual(fake_flow.code_verifier, "verifier-abc")
         session = self.client.session
         self.assertNotIn("gmail_oauth_state", session)
         self.assertNotIn("gmail_oauth_workspace_id", session)
+        self.assertNotIn("gmail_oauth_code_verifier", session)
 
     @override_settings(GOOGLE_OAUTH_CLIENT_ID="", GOOGLE_OAUTH_CLIENT_SECRET="")
     def test_returns_503_when_oauth_not_configured(self):

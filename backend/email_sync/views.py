@@ -42,6 +42,11 @@ from .tasks import sync_account_task
 # connect call a client could pass its own context on.
 _SESSION_STATE_KEY = "gmail_oauth_state"
 _SESSION_WORKSPACE_KEY = "gmail_oauth_workspace_id"
+# PKCE verifier for the in-flight Gmail connect flow -- see
+# oauth.build_flow()'s docstring for why this has to be threaded
+# through the same session round trip as state, rather than left for
+# the callback-time Flow to generate its own.
+_SESSION_VERIFIER_KEY = "gmail_oauth_code_verifier"
 
 # Same purpose as the Gmail session keys above, kept as separate keys
 # (rather than reusing the Gmail ones) so a user could in principle
@@ -80,12 +85,13 @@ class GmailConnectView(APIView):
             )
 
         try:
-            authorization_url, state = oauth.build_authorization_url()
+            authorization_url, state, code_verifier = oauth.build_authorization_url()
         except OAuthConfigError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
         request.session[_SESSION_STATE_KEY] = state
         request.session[_SESSION_WORKSPACE_KEY] = workspace.id
+        request.session[_SESSION_VERIFIER_KEY] = code_verifier
         return Response({"authorization_url": authorization_url})
 
 
@@ -139,16 +145,20 @@ class GmailOAuthCallbackView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        code_verifier = request.session.get(_SESSION_VERIFIER_KEY)
         try:
-            account = oauth.complete_gmail_connection(workspace, code=code, state=state)
+            account = oauth.complete_gmail_connection(
+                workspace, code=code, state=state, code_verifier=code_verifier
+            )
         except OAuthConfigError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
         finally:
             # One-time-use state regardless of outcome -- a failed
-            # exchange shouldn't leave a replayable state hanging
-            # around in the session.
+            # exchange shouldn't leave a replayable state (or PKCE
+            # verifier) hanging around in the session.
             request.session.pop(_SESSION_STATE_KEY, None)
             request.session.pop(_SESSION_WORKSPACE_KEY, None)
+            request.session.pop(_SESSION_VERIFIER_KEY, None)
 
         return Response(
             {"id": account.id, "email": account.email, "status": account.status},

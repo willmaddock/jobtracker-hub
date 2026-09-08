@@ -98,13 +98,15 @@ class BuildAuthorizationUrlTests(TestCase):
     @override_settings(
         GOOGLE_OAUTH_CLIENT_ID="client-id", GOOGLE_OAUTH_CLIENT_SECRET="client-secret"
     )
-    def test_returns_url_and_state_from_flow(self):
+    def test_returns_url_state_and_code_verifier_from_flow(self):
         fake_flow = MagicMock()
         fake_flow.authorization_url.return_value = ("https://accounts.google.com/o/oauth2/auth?...", "state-xyz")
+        fake_flow.code_verifier = "verifier-xyz"
         with patch.object(oauth.Flow, "from_client_config", return_value=fake_flow):
-            url, state = oauth.build_authorization_url()
+            url, state, code_verifier = oauth.build_authorization_url()
 
         self.assertEqual(state, "state-xyz")
+        self.assertEqual(code_verifier, "verifier-xyz")
         self.assertTrue(url.startswith("https://accounts.google.com"))
         fake_flow.authorization_url.assert_called_once_with(
             access_type="offline", prompt="consent", include_granted_scopes="true"
@@ -161,6 +163,32 @@ class CompleteGmailConnectionTests(TestCase):
         self.assertEqual(EmailAccount.objects.filter(email="alice@gmail.com").count(), 1)
         account.refresh_from_db()
         self.assertEqual(account.status, "connected")
+
+    def test_forwards_code_verifier_to_build_flow_for_pkce(self):
+        # Regression test for the PKCE bug: build_authorization_url()'s
+        # flow generates a code_verifier that never round-trips through
+        # the authorization_url or state, so complete_gmail_connection()
+        # must accept it as an explicit argument and hand it to
+        # build_flow() rather than letting a fresh Flow generate (and
+        # therefore mismatch) its own.
+        fake_flow = MagicMock()
+        fake_flow.credentials = _fake_google_credentials()
+        fake_profile_service = MagicMock()
+        fake_profile_service.users.return_value.getProfile.return_value.execute.return_value = {
+            "emailAddress": "alice@gmail.com"
+        }
+
+        with patch.object(
+            oauth.Flow, "from_client_config", return_value=fake_flow
+        ) as fake_from_client_config, patch.object(
+            oauth, "build_gmail_client", return_value=fake_profile_service
+        ):
+            oauth.complete_gmail_connection(
+                self.workspace, code="auth-code", state="s1", code_verifier="verifier-abc"
+            )
+
+        fake_from_client_config.assert_called_once()
+        self.assertEqual(fake_flow.code_verifier, "verifier-abc")
 
 
 class LoadGoogleCredentialsTests(TestCase):
