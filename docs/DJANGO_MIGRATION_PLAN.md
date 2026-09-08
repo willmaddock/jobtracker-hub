@@ -214,11 +214,27 @@ just the current-state summary):
   (`EmailAccountDisconnectView`) best-effort revokes the Gmail grant
   with Google (`oauth.revoke_gmail_token()`) and always deletes the
   local `GmailCredential` row, marking the account `"disconnected"`.
-- **Not started:** Microsoft Graph / generic IMAP providers; the
-  background-task runner (Celery/Redis or Django-Q) — sync now has a
-  manual per-account trigger but nothing scheduled or workspace-wide;
-  any frontend UI for connecting an account, triggering a sync,
-  disconnecting one, or reviewing Discoveries/AccountMatches.
+- **Outlook / Microsoft Graph provider (message-fetching only)** —
+  done. `backend/email_sync/outlook_provider.py` implements
+  `EmailProvider` against Graph's `/me/messages` (`$search`/`$filter`
+  list + pagination via `@odata.nextLink`, `/messages/{id}/$value`
+  for raw MIME, error classification off the HTTP status code).
+  Fully mock-tested, no OAuth of its own — same message-fetching-
+  only split as the Gmail provider.
+- **Outlook OAuth (connect/callback, encrypted token storage, real
+  session_factory)** — done. `backend/email_sync/outlook_oauth.py` +
+  `views.py`/`urls.py`. `OutlookCredential` model (its own Fernet
+  key, `MICROSOFT_TOKEN_ENCRYPTION_KEY`, separate from Gmail's), `GET
+  /api/email-accounts/outlook/{connect,callback}`, registers
+  `get_provider("outlook")` for real use. Disconnect
+  (`outlook_oauth.disconnect_outlook_account()`) is local-only —
+  unlike Google's v2 endpoint, Microsoft's v2.0 flow has no
+  application-callable revoke API (see that module's own docstring).
+- **Not started:** generic IMAP provider; the background-task runner
+  (Celery/Redis or Django-Q) — sync now has a manual per-account
+  trigger but nothing scheduled or workspace-wide; any frontend UI
+  for connecting an account, triggering a sync, disconnecting one, or
+  reviewing Discoveries/AccountMatches.
 
 ## Phase 10 — Production deployment
 

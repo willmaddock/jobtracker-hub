@@ -28,8 +28,14 @@ class EmailAccount(models.Model):
 
     PROVIDER_CHOICES = [
         ("mail_app", "Mail.app"),
-        ("gmail", "Gmail (legacy)"),
-        ("outlook", "Outlook (legacy)"),
+        ("gmail", "Gmail"),
+        # "outlook" rows predate Phase 9 and used to mean "Mail.app
+        # account named Outlook" (see overrides_store._migrate()) --
+        # now that email_sync.outlook_oauth registers a real Outlook/
+        # Microsoft Graph provider under this same name, an "outlook"
+        # EmailAccount means a real OAuth-connected mailbox, same
+        # meaning shift "gmail" already went through above.
+        ("outlook", "Outlook"),
         ("icloud", "iCloud (legacy)"),
         ("imap", "IMAP (legacy)"),
     ]
@@ -107,6 +113,43 @@ class GmailCredential(models.Model):
 
     def __str__(self) -> str:
         return f"Gmail credential for {self.account}"
+
+
+class OutlookCredential(models.Model):
+    """OAuth tokens for one EmailAccount's Outlook/Microsoft Graph
+    connection (Phase 9 second-provider slice,
+    docs/DJANGO_MIGRATION_PLAN.md). Mirrors GmailCredential's shape and
+    reasoning field-for-field -- split out from EmailAccount for the
+    same "no credentials of any kind" reason, encrypted at the field
+    level for the same defense-in-depth reason -- but keyed by its own
+    settings.MICROSOFT_TOKEN_ENCRYPTION_KEY (see email_sync.
+    outlook_oauth's module docstring for why a separate key from
+    Gmail's) via email_sync.outlook_oauth's Fernet helpers.
+
+    access_token can be blank for the same reason GmailCredential's
+    can: a caller that only strictly needs the refresh token plus the
+    ability to mint new access tokens on demand. refresh_token is
+    required -- a credential this class can't eventually refresh is
+    useless the moment its short-lived access token expires, and
+    outlook_oauth's refresh path assumes it's always present.
+    """
+
+    account = models.OneToOneField(
+        EmailAccount, on_delete=models.CASCADE, related_name="outlook_credential"
+    )
+    access_token = models.TextField(blank=True)
+    refresh_token = models.TextField()
+    token_expiry = models.DateTimeField(blank=True, null=True)
+    # Space-separated OAuth scope string, exactly as Microsoft returns
+    # it -- same reasoning as GmailCredential.scopes: stored (not just
+    # assumed from settings.OUTLOOK_OAUTH_SCOPES) so a future scope-
+    # mismatch check has the actual grant to compare against.
+    scopes = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self) -> str:
+        return f"Outlook credential for {self.account}"
 
 
 class AccountMatch(models.Model):

@@ -34,3 +34,11 @@ google-auth==2.57.1
 google-auth-oauthlib==1.4.1
 cryptography>=42.0
 requests>=2.32
+
+# Phase 9 (second provider) -- Outlook/Microsoft Graph
+# (email_sync/outlook_oauth.py, email_sync/outlook_provider.py). No
+# new package beyond what's already pinned above: the Microsoft
+# identity platform's v2.0 authorization-code flow is three plain
+# REST calls (see outlook_oauth.py's own module docstring for why
+# that's `requests` directly rather than the `msal` SDK), and Graph
+# itself is a plain REST API `outlook_provider.py` calls the same way.

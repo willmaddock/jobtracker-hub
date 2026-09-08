@@ -6,6 +6,7 @@ from .models import (
     EmailAccount,
     GmailCredential,
     JobPostingSender,
+    OutlookCredential,
     ThreadIdentifier,
 )
 
@@ -24,6 +25,16 @@ class GmailCredentialAdmin(admin.ModelAdmin):
     # anything but redacted form -- an admin who needs to debug a
     # connection should be able to see *that* a credential exists and
     # when it expires, never the encrypted token material itself.
+    list_display = ("account", "token_expiry", "updated_at")
+    readonly_fields = ("created_at", "updated_at")
+    exclude = ("access_token", "refresh_token")
+    search_fields = ("account__email",)
+
+
+@admin.register(OutlookCredential)
+class OutlookCredentialAdmin(admin.ModelAdmin):
+    # Same redaction rationale as GmailCredentialAdmin: never show
+    # token material, even encrypted, on the admin detail page.
     list_display = ("account", "token_expiry", "updated_at")
     readonly_fields = ("created_at", "updated_at")
     exclude = ("access_token", "refresh_token")

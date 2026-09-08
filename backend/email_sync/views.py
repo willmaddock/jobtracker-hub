@@ -1,6 +1,7 @@
 """
-email_sync views: the Gmail OAuth connect/callback endpoints plus the
-manual "sync now" trigger (Phase 9, docs/DJANGO_MIGRATION_PLAN.md).
+email_sync views: the Gmail and Outlook OAuth connect/callback
+endpoints plus the manual "sync now" trigger (Phase 9,
+docs/DJANGO_MIGRATION_PLAN.md).
 
 The OAuth views return JSON, never an HTTP redirect to a frontend
 route -- there's no frontend route to redirect to yet (no Phase 8
@@ -26,7 +27,7 @@ from rest_framework.views import APIView
 
 from accounts.models import Workspace
 
-from . import oauth
+from . import oauth, outlook_oauth
 from .models import EmailAccount
 from .oauth import OAuthConfigError
 from .providers import ProviderError, get_provider
@@ -39,6 +40,13 @@ from .sync_service import sync_account
 # connect call a client could pass its own context on.
 _SESSION_STATE_KEY = "gmail_oauth_state"
 _SESSION_WORKSPACE_KEY = "gmail_oauth_workspace_id"
+
+# Same purpose as the Gmail session keys above, kept as separate keys
+# (rather than reusing the Gmail ones) so a user could in principle
+# have both a Gmail and an Outlook connect flow in flight in the same
+# session without one clobbering the other's stashed state.
+_OUTLOOK_SESSION_STATE_KEY = "outlook_oauth_state"
+_OUTLOOK_SESSION_WORKSPACE_KEY = "outlook_oauth_workspace_id"
 
 
 class GmailConnectView(APIView):
@@ -146,6 +154,99 @@ class GmailOAuthCallbackView(APIView):
         )
 
 
+class OutlookConnectView(APIView):
+    """GET /api/email-accounts/outlook/connect?workspace=<id>
+
+    Starts an Outlook/Microsoft Graph OAuth connect flow: returns the
+    Microsoft consent-screen URL for the client to navigate the user
+    to. Mirrors GmailConnectView field-for-field -- same workspace-
+    ownership check, same session-stashing of state, same 503 on a
+    missing app registration.
+    """
+
+    def get(self, request):
+        workspace_id = request.query_params.get("workspace")
+        if not workspace_id:
+            return Response(
+                {"detail": "workspace query parameter is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            workspace = Workspace.objects.get(id=workspace_id, owner=request.user)
+        except (Workspace.DoesNotExist, ValueError):
+            return Response(
+                {"detail": "No such workspace."}, status=status.HTTP_404_NOT_FOUND
+            )
+
+        try:
+            authorization_url, state = outlook_oauth.build_authorization_url()
+        except outlook_oauth.OAuthConfigError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        request.session[_OUTLOOK_SESSION_STATE_KEY] = state
+        request.session[_OUTLOOK_SESSION_WORKSPACE_KEY] = workspace.id
+        return Response({"authorization_url": authorization_url})
+
+
+class OutlookOAuthCallbackView(APIView):
+    """GET /api/email-accounts/outlook/callback?code=...&state=...
+
+    Microsoft redirects the user's browser here after consent. Mirrors
+    GmailOAuthCallbackView field-for-field, including the AllowAny
+    permission for the same reason: this is a top-level navigation
+    initiated by Microsoft, not a same-session API call, but the
+    Django session cookie still rides along on that navigation.
+    """
+
+    permission_classes = []
+    authentication_classes = []
+
+    def get(self, request):
+        error = request.query_params.get("error")
+        if error:
+            return Response(
+                {"detail": f"Outlook authorization was not granted: {error}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        code = request.query_params.get("code")
+        state = request.query_params.get("state")
+        if not code or not state:
+            return Response(
+                {"detail": "Missing code or state on Outlook OAuth callback."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        expected_state = request.session.get(_OUTLOOK_SESSION_STATE_KEY)
+        workspace_id = request.session.get(_OUTLOOK_SESSION_WORKSPACE_KEY)
+        if not expected_state or state != expected_state or not workspace_id:
+            return Response(
+                {"detail": "Invalid or expired OAuth state."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            workspace = Workspace.objects.get(id=workspace_id)
+        except Workspace.DoesNotExist:
+            return Response(
+                {"detail": "Workspace for this connect attempt no longer exists."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            account = outlook_oauth.complete_outlook_connection(workspace, code=code, state=state)
+        except outlook_oauth.OAuthConfigError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        finally:
+            request.session.pop(_OUTLOOK_SESSION_STATE_KEY, None)
+            request.session.pop(_OUTLOOK_SESSION_WORKSPACE_KEY, None)
+
+        return Response(
+            {"id": account.id, "email": account.email, "status": account.status},
+            status=status.HTTP_200_OK,
+        )
+
+
 class EmailAccountSyncView(APIView):
     """POST /api/email-accounts/<id>/sync
 
@@ -216,8 +317,11 @@ class EmailAccountDisconnectView(APIView):
     Disconnects an EmailAccount: for a Gmail account, revokes the
     stored grant with Google (best-effort -- see
     oauth.disconnect_gmail_account's own docstring) and deletes the
-    local GmailCredential row; for any other provider there's no
-    credential model to clean up, so this is just a status flip. In
+    local GmailCredential row; for an Outlook account, deletes the
+    local OutlookCredential row (no Microsoft-side revoke call is
+    possible -- see outlook_oauth.disconnect_outlook_account's own
+    docstring for why); for any other provider there's no credential
+    model to clean up, so this is just a status flip. In
     both cases the EmailAccount row itself is kept, not deleted -- its
     sync history (AccountMatch/Discovery/ThreadIdentifier rows,
     matched_email_count) stays intact, and oauth.
@@ -244,10 +348,12 @@ class EmailAccountDisconnectView(APIView):
         if account.status != "disconnected":
             if account.provider == "gmail":
                 oauth.disconnect_gmail_account(account)
+            elif account.provider == "outlook":
+                outlook_oauth.disconnect_outlook_account(account)
             else:
                 # No credential model exists for any other provider
-                # yet (see providers.py -- Outlook/IMAP aren't built),
-                # so there's nothing to revoke: just flip the status.
+                # yet (see providers.py -- IMAP isn't built), so
+                # there's nothing to revoke: just flip the status.
                 account.status = "disconnected"
                 account.save(update_fields=["status", "updated_at"])
 

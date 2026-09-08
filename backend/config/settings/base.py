@@ -218,3 +218,33 @@ GMAIL_TOKEN_ENCRYPTION_KEY = os.environ.get(
 # OAuth consent screen a user sees should never ask for more than
 # reading.
 GMAIL_OAUTH_SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
+
+# Microsoft OAuth / Graph (Phase 9 second-provider slice,
+# docs/DJANGO_MIGRATION_PLAN.md) -- this app's own Azure AD app
+# registration credentials, not any user's mailbox credentials, same
+# split as GOOGLE_OAUTH_CLIENT_ID/SECRET above. Real values must come
+# from the environment in any deployed environment; the empty-string
+# defaults below only let local manage.py test/runserver boot without
+# a real Azure AD app registration configured -- email_sync.
+# outlook_oauth raises a clear error at the moment a connect flow is
+# actually attempted with these unset, rather than failing silently.
+MICROSOFT_OAUTH_CLIENT_ID = os.environ.get('MICROSOFT_OAUTH_CLIENT_ID', '')
+MICROSOFT_OAUTH_CLIENT_SECRET = os.environ.get('MICROSOFT_OAUTH_CLIENT_SECRET', '')
+MICROSOFT_OAUTH_REDIRECT_URI = os.environ.get(
+    'MICROSOFT_OAUTH_REDIRECT_URI', 'http://localhost:8000/api/email-accounts/outlook/callback'
+)
+
+# Symmetric key (cryptography.fernet) OutlookCredential uses to
+# encrypt stored OAuth access/refresh tokens at rest -- deliberately a
+# *separate* key from GMAIL_TOKEN_ENCRYPTION_KEY (see email_sync.
+# outlook_oauth's module docstring for why). SECURITY WARNING: this
+# dev-only fallback key is checked into source control, same caveat as
+# GMAIL_TOKEN_ENCRYPTION_KEY above -- generate a real one the same way
+# (`python -c "from cryptography.fernet import Fernet;
+# print(Fernet.generate_key().decode())"`) and set
+# MICROSOFT_TOKEN_ENCRYPTION_KEY in the environment before this is
+# ever deployed. Rotating this key makes every already-stored Outlook
+# token undecryptable, same caveat as the Gmail key.
+MICROSOFT_TOKEN_ENCRYPTION_KEY = os.environ.get(
+    'MICROSOFT_TOKEN_ENCRYPTION_KEY', 'Pkn_45gin4M7zHTs1htox81DGuwAV7ADpMKtZpQqd-4='
+)

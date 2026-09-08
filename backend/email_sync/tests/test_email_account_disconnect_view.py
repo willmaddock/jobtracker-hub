@@ -22,8 +22,8 @@ from rest_framework.test import APITestCase
 
 from accounts.models import Workspace
 
-from ..models import EmailAccount, GmailCredential
-from .. import oauth
+from ..models import EmailAccount, GmailCredential, OutlookCredential
+from .. import oauth, outlook_oauth
 
 
 class EmailAccountDisconnectViewTests(APITestCase):
@@ -59,6 +59,23 @@ class EmailAccountDisconnectViewTests(APITestCase):
 
     def test_gmail_account_routes_to_oauth_disconnect(self):
         with patch.object(oauth, "disconnect_gmail_account") as mock_disconnect:
+            def _side_effect(account):
+                account.status = "disconnected"
+                account.save(update_fields=["status"])
+            mock_disconnect.side_effect = _side_effect
+
+            response = self.client.post(self.url)
+
+        mock_disconnect.assert_called_once()
+        self.assertEqual(mock_disconnect.call_args[0][0].id, self.account.id)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["status"], "disconnected")
+
+    def test_outlook_account_routes_to_outlook_oauth_disconnect(self):
+        self.account.provider = "outlook"
+        self.account.save(update_fields=["provider"])
+
+        with patch.object(outlook_oauth, "disconnect_outlook_account") as mock_disconnect:
             def _side_effect(account):
                 account.status = "disconnected"
                 account.save(update_fields=["status"])
@@ -107,5 +124,21 @@ class EmailAccountDisconnectViewTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertFalse(GmailCredential.objects.filter(account=self.account).exists())
+        self.account.refresh_from_db()
+        self.assertEqual(self.account.status, "disconnected")
+
+    def test_end_to_end_deletes_real_outlook_credential_row(self):
+        self.account.provider = "outlook"
+        self.account.save(update_fields=["provider"])
+        outlook_oauth._store_credentials(
+            self.account,
+            {"access_token": "a1", "refresh_token": "r1", "expires_in": 3600},
+        )
+        self.assertTrue(OutlookCredential.objects.filter(account=self.account).exists())
+
+        response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertFalse(OutlookCredential.objects.filter(account=self.account).exists())
         self.account.refresh_from_db()
         self.assertEqual(self.account.status, "disconnected")
