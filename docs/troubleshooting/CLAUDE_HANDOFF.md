@@ -2380,3 +2380,73 @@ wanted a clear troubleshooting entry point for future Claude sessions
 ### Latest Returned ZIP
 - Filename: `jobtracker-hub-updated-20260906.zip`
 - Returned/attached to user: see the message this ZIP was attached to.
+
+## Checkpoint — 2026-09-08 (Needs-Triage "attach to existing item" crash + missing evidence PDF)
+
+### What changed
+User hit a real-world bug using "Pick application…" in Needs Triage to
+attach an incoming email (American Systemes rejection follow-up,
+`willzaeagle@gmail.com`) to their existing "American Systemes" item.
+Two separate, sequentially-discovered issues — full writeup in
+`docs/troubleshooting/email-sync/AUDIT_FINDINGS.md` Finding 8:
+
+1. **Crash:** `_app/frontend/index.html`'s `quickAttach()` called a stray
+   `setResolvingIntent(null)` — not a real state setter — which threw and
+   aborted the function before it reached `refreshApps()`/`refreshStatus()`.
+   The backend status-override write had already gone through, so the item
+   silently ended up correct (`manual_status: rejected` + a status-history
+   row) despite the UI erroring and looking stuck. Fixed by deleting the
+   stray line.
+2. **Missing evidence PDF (found while verifying #1):** once the crash no
+   longer interrupted the flow, the status updated but no PDF appeared in
+   Attached Documents. `attach_discovery()` (existing-item path) had never
+   called `_save_email_evidence_pdf()` the way `accept_discovery()`
+   (new-item path) always has — attaching to an existing application was
+   simply never wired to produce evidence. Fixed by having
+   `attach_discovery()` call the same helper, indexed immediately (no
+   rebuild needed).
+
+### Commits
+- `main`: `2621fff` (crash fix), `c4dd50e` (evidence-PDF fix).
+- `django-migration`: `810b5c7` (crash fix, cherry-picked), `e4fbd7a`
+  (evidence-PDF fix, cherry-picked). This branch's `_app/` tree is the
+  same codebase as `main`'s, so both bugs and fixes are identical there —
+  see this file's own scope note (top of file) distinguishing `_app/`
+  from that branch's separate `backend/` Django/Gmail-OAuth rewrite,
+  which was **not** touched and does not have either bug (different attach
+  implementation entirely).
+- **Follow-up not done in this session:** `django-migration` carries its
+  own copies of this file and of `AUDIT_FINDINGS.md` (scoped to `_app/`,
+  per its added note at the top of this file on that branch). Those
+  copies still don't mention Finding 8 / this checkpoint — only `main`'s
+  copies do, since that's the branch this session's zip was working
+  against. If a future session is working on `django-migration`
+  directly, port this checkpoint and Finding 8 over to that branch's own
+  docs too, or they'll look out of date relative to the code they
+  already contain.
+
+### Tests
+Two new regression tests in `tests/test_email_pdf.py`
+(`test_attach_discovery_saves_email_as_pdf_on_existing_item`,
+`test_attach_discovery_still_links_when_pdf_save_fails`), mirroring the
+existing `accept_discovery` coverage. **User ran the full suite on their
+own machine and confirmed 370/370 passing** — this environment had no
+network access to install `fastapi`/`pytest`, so it couldn't run them
+directly; low-risk assessment for the crash fix (clean one-line deletion,
+no other references to the removed name) was made without a local test
+run, but the PDF-save fix's two new tests plus the full suite were both
+independently confirmed green by the user.
+
+### Data repair (this session's working DB only, not application code)
+The one real Needs-Triage email affected by this bug before the fix
+(American Systemes / `FollowUp__Java_Developer_l.pdf`, already uploaded
+by the user separately) was manually renamed to the app's
+`Email - <subject>.pdf` convention, dropped into
+`Applications/American Systemes/`, and indexed into `documents` +
+`documents_fts` using the app's own classification helpers — so it shows
+up in Attached Documents exactly as if the fixed code had produced it.
+This was a one-off repair of the user's working DB, not something the
+Backfill button could do here (needs a live Mail.app on their machine).
+
+### Latest Returned ZIP
+- Filename: see the message this checkpoint's ZIP was attached to.

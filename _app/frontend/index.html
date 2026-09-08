@@ -5468,7 +5468,6 @@ function EmailHubPage({fireToast, setPage, setSelectedKey, refreshStatus, refres
       if (onCountChange) onCountChange(result.discoveries.length);
       setSelected(prev => { const next = new Set(prev); next.delete(discoveryId); return next; });
       setResolvingDiscovery(null);
-      setResolvingIntent(null);
       if (intent) {
         const app = (apps || []).find(a => a.item_key === itemKey);
         // Attach already succeeded at this point -- a failed status bump
