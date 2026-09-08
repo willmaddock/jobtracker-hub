@@ -221,18 +221,100 @@ idempotency, and one end-to-end test against a real encrypted
 
 ---
 
+### Checkpoint — Outlook / Microsoft Graph, the second provider (commit `75f86c2`)
+
+Second `EmailProvider` implementation, mirroring the Gmail slice's own
+split (message-fetching provider / OAuth+credential-storage module /
+views+urls) rather than introducing a new shape:
+
+- `backend/email_sync/outlook_provider.py` — `OutlookProvider`, a real
+  Microsoft Graph `EmailProvider` implementation: `GET /me/messages`
+  with `$search`/`$filter`, `@odata.nextLink` pagination,
+  `/messages/{id}/$value` for the raw MIME source, error
+  classification off the HTTP status code (401/403 → auth, 429/5xx →
+  temporary). Message-fetching only, same as `gmail_provider.py` — no
+  OAuth of its own, takes a `session_factory` the same way
+  `GmailProvider` takes a `service_factory`.
+- `backend/email_sync/outlook_oauth.py` — Microsoft identity platform
+  v2.0 authorization-code flow via plain `requests` (no new
+  dependency — see that module's own docstring on why not `msal`):
+  `OutlookCredential` model (own `MICROSOFT_TOKEN_ENCRYPTION_KEY`
+  Fernet key, separate from Gmail's), `build_authorization_url()`,
+  `complete_outlook_connection()`, `outlook_session_factory()` (the
+  real `session_factory`, with refresh-on-expiry), and
+  `@register_provider("outlook")` wiring. Notably: `disconnect_
+  outlook_account()` is local-only — unlike Google's v2 revoke
+  endpoint, Microsoft's v2.0 flow has no application-callable
+  "revoke this refresh token" API for either personal or work/school
+  accounts, so disconnect deletes the local credential but can't
+  invalidate the grant on Microsoft's side.
+- `views.py`/`urls.py` — `OutlookConnectView`/`OutlookOAuthCallbackView`
+  (`GET /api/email-accounts/outlook/{connect,callback}`), mirroring
+  `GmailConnectView`/`GmailOAuthCallbackView` field-for-field
+  (workspace ownership check, session-stashed CSRF state, same 503 on
+  missing app-registration config). `EmailAccountDisconnectView` now
+  branches three ways: `gmail` → `oauth.disconnect_gmail_account()`,
+  `outlook` → `outlook_oauth.disconnect_outlook_account()`, anything
+  else → plain status flip.
+- `models.py` — `OutlookCredential` (mirrors `GmailCredential` field-
+  for-field), migration `0004_outlookcredential.py`. `EmailAccount.
+  PROVIDER_CHOICES`'s `"outlook"` label changed from `"Outlook
+  (legacy)"` to `"Outlook"` — same meaning-shift `"gmail"` already went
+  through when its own OAuth slice landed.
+- `config/settings/base.py` — `MICROSOFT_OAUTH_CLIENT_ID`/`_SECRET`/
+  `_REDIRECT_URI`, `MICROSOFT_TOKEN_ENCRYPTION_KEY` (own dev-only
+  fallback key, same checked-into-source-control caveat as Gmail's).
+- `admin.py`/`apps.py` — `OutlookCredential` registered (token fields
+  excluded, same redaction as `GmailCredentialAdmin`);
+  `email_sync.outlook_oauth` imported in `AppConfig.ready()` alongside
+  `oauth` so `get_provider("outlook")` resolves regardless of import
+  order.
+- `requirements.txt` — comment-only update; no new package.
+
+**Tests:** 45 new — 15 in `test_outlook_provider.py` (query building,
+fetch/parse, pagination via `@odata.nextLink`, `since`-filtering,
+401/403/429/5xx classification, HTML-only body fallback, missing
+Message-ID/Date handling), 18 in `test_outlook_oauth.py` (encryption
+round-trip, credential storage/update, authorization URL, connect
+flow incl. `mail`-null → `userPrincipalName` fallback and reconnect-
+revives-disconnected-row, access-token load/refresh, session factory,
+provider registration, disconnect), 10 in `test_outlook_oauth_views.py`
+(mirrors `test_gmail_oauth_views.py`'s ownership/session-state/status-
+code coverage), + 2 added to `test_email_account_disconnect_view.py`
+(outlook routing, end-to-end real-`OutlookCredential`-row deletion).
+Full suite: `python manage.py test` → 400/400 passing in-sandbox,
+**then confirmed on the user's own Mac (Python 3.14, Django 6.1.1,
+DRF 3.18.0): 400/400, matching exactly.**
+
+**Known gaps introduced or closed by this checkpoint:** closes the
+"Microsoft Graph / generic IMAP providers — not started" gap for the
+Graph half specifically (IMAP is still not started); introduces the
+same "never validated against a real account" gap Gmail's OAuth slice
+already had, now true for Outlook too (no real Azure AD app
+registration has been created or clicked through) — see §4 below.
+
+**Next action:** see §5 below.
+
+---
+
 ## 4. Known gaps / not yet done
 
-- **Real OAuth end-to-end has never actually happened.** Every test
-  mocks `google_auth_oauthlib.flow.Flow` and
-  `googleapiclient.discovery.build` — nobody has registered a real
-  Google Cloud OAuth client, set `GOOGLE_OAUTH_CLIENT_ID`/
-  `GOOGLE_OAUTH_CLIENT_SECRET` for real, clicked through a real Google
-  consent screen, or confirmed the callback round-trip against Google's
-  actual token endpoint. This is the single biggest unverified piece.
+- **Real OAuth end-to-end has never actually happened, for either
+  provider.** Every test mocks `google_auth_oauthlib.flow.Flow`/
+  `googleapiclient.discovery.build` (Gmail) or `requests.post`/
+  `requests.get` against Microsoft's endpoints (Outlook) — nobody has
+  registered a real Google Cloud OAuth client or a real Azure AD app
+  registration, set `GOOGLE_OAUTH_CLIENT_ID`/`SECRET` or
+  `MICROSOFT_OAUTH_CLIENT_ID`/`SECRET` for real, clicked through a
+  real consent screen for either provider, or confirmed either
+  callback round-trip against the provider's actual token endpoint.
+  This is the single biggest unverified piece, now doubled.
 - **No disconnect/revoke flow.** ~~Deleting a `GmailCredential` row~~
-  — **done, slice 4 above.** `EmailAccountDisconnectView` now revokes
-  the grant with Google (best-effort) and deletes the local row.
+  — **done.** `EmailAccountDisconnectView` revokes the Gmail grant
+  with Google (best-effort) and deletes the local row; for Outlook it
+  deletes the local `OutlookCredential` row only — Microsoft's v2.0
+  flow has no application-callable revoke API for this app to call
+  (see `outlook_oauth.py`'s own module docstring).
 - **No background task runner.** `sync_service.sync_account()` now has
   a manual trigger (`POST /api/email-accounts/<id>/sync`, slice 3
   above), but nothing calls it on a schedule or in response to
@@ -240,43 +322,47 @@ idempotency, and one end-to-end test against a real encrypted
   Django-Q wiring at all yet, and no "sync all of a workspace's
   accounts" bulk endpoint either.
 - **No frontend.** Every endpoint built so far (`gmail/connect`,
-  `gmail/callback`, `<id>/sync`, `<id>/disconnect`) returns JSON;
-  there's no `backend`-served or separate frontend page that calls
-  them yet.
-- **Microsoft Graph / generic IMAP providers** — not started. Gmail is
-  the only real provider, so `EmailAccountDisconnectView`'s non-gmail
-  branch (a plain status flip, no credential model) is exercised by
-  tests but has no real provider to matter for yet.
-- Every checkpoint's test-count claim through slice 4 (disconnect/
-  revoke) is now real-machine-confirmed, not just sandbox —
-  matching.py, sync orchestration, the Gmail provider, Gmail OAuth,
-  the sync-now endpoint, and the disconnect flow have all had their
-  exact sandbox figure independently reproduced on the user's own Mac.
+  `gmail/callback`, `outlook/connect`, `outlook/callback`, `<id>/sync`,
+  `<id>/disconnect`) returns JSON; there's no `backend`-served or
+  separate frontend page that calls them yet.
+- **Generic IMAP provider** — not started. Gmail and Outlook/Microsoft
+  Graph are now both real providers; `EmailAccountDisconnectView`'s
+  "any other provider" branch (a plain status flip, no credential
+  model) is exercised by tests but has no real provider left to matter
+  for except a future IMAP one.
+- Every checkpoint's test-count claim through the Outlook checkpoint
+  above is now real-machine-confirmed, not just sandbox — matching.py,
+  sync orchestration, both providers, both OAuth modules, the sync-now
+  endpoint, and the disconnect flow have all had their exact sandbox
+  figure independently reproduced on the user's own Mac (400/400).
 
 ## 5. Next action
 
 1. Decide whether real OAuth end-to-end validation (a real Google
-   Cloud project, real `GOOGLE_OAUTH_CLIENT_ID`/`SECRET`, a real click-
-   through) happens now or is deferred further — this needs the user's
-   own Google Cloud setup, not something a sandbox can do unprompted.
+   Cloud project + real Azure AD app registration, real client
+   id/secret pairs for both, actual consent-screen click-throughs)
+   happens now or is deferred further — this needs the user's own
+   Google Cloud / Azure setup, not something a sandbox can do
+   unprompted. Doing both providers' validation in the same pass is
+   probably more efficient than two separate sessions, now that both
+   exist.
 2. Pick the next slice: Celery/Redis background scheduling (now that
-   there's both a manual sync entry point and a disconnect flow to
-   build on top of), Microsoft Graph / IMAP providers, or a frontend
-   for any of this. Not yet decided with the user.
+   there's a manual sync entry point and a disconnect flow for two
+   real providers to build on top of), the generic IMAP provider, or a
+   frontend for any of this. Not yet decided with the user.
 3. Separately, worth the user's own attention: the user's `git status`
-   (on branch `django-migration`) shows a mix of unrelated pre-existing
-   changes alongside this track's work — modified `README.md`,
-   `docs/README.md`, `docs/troubleshooting/CLAUDE_HANDOFF.md`, several
+   (on branch `django-migration`) has historically shown a mix of
+   unrelated pre-existing changes alongside this track's work —
+   modified `README.md`, `docs/README.md`,
+   `docs/troubleshooting/CLAUDE_HANDOFF.md`, several
    `backend/*/admin.py`/`models.py`/`services.py` files, and three
    deleted `tests.py` files (`applications/`, `documents/`,
    `postings/` — likely superseded by the `tests/` *packages* that
    already exist as untracked directories per that same status output,
    not an accidental deletion, but worth the user double-checking).
-   `docs/DJANGO_BACKEND_HANDOFF.md` and a large share of `backend/`
-   itself are still untracked entirely. None of that is from this
-   session's work — flagging it because a git history this tangled
-   makes it easy to lose track of what's actually reviewed vs. still
-   pending.
+   Re-check `git status` at the start of the next session rather than
+   assuming this is still accurate — it predates the Outlook
+   checkpoint and may already be resolved.
 
 ## 6. Checkpoint template
 
