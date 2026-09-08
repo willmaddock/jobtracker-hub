@@ -230,11 +230,32 @@ just the current-state summary):
   (`outlook_oauth.disconnect_outlook_account()`) is local-only —
   unlike Google's v2 endpoint, Microsoft's v2.0 flow has no
   application-callable revoke API (see that module's own docstring).
-- **Not started:** generic IMAP provider; the background-task runner
-  (Celery/Redis or Django-Q) — sync now has a manual per-account
-  trigger but nothing scheduled or workspace-wide; any frontend UI
-  for connecting an account, triggering a sync, disconnecting one, or
-  reviewing Discoveries/AccountMatches.
+- **Not started:** the background-task runner (Celery/Redis or
+  Django-Q) — sync now has a manual per-account trigger but nothing
+  scheduled or workspace-wide; any frontend UI for connecting an
+  account, triggering a sync, disconnecting one, or reviewing
+  Discoveries/AccountMatches.
+- **Generic IMAP provider (message-fetching + connect flow)** — done
+  and real-machine-confirmed (`manage.py test` → 450/450 full suite,
+  59/59 for `core` alone, run on the user's own machine — no network
+  access in-sandbox; see `DJANGO_BACKEND_HANDOFF.md` §3/§4).
+  `backend/email_sync/imap_provider.py` implements `EmailProvider`
+  against a real IMAP4 connection (`SEARCH` built as a right-nested
+  binary `OR` chain over `SUBJECT`/`BODY`/`FROM`, `SINCE` date
+  filtering, `FETCH ... (RFC822)` for the raw message). No OAuth to
+  speak of: `backend/email_sync/imap_auth.py`'s `connect_imap_account()`
+  takes host/port/username/password directly and verifies them with a
+  real IMAP login before storing anything, since (unlike the OAuth
+  providers) there's no later sync that would catch a bad credential
+  and flip the account to "blocked." `IMAPCredential` model (its own
+  Fernet key, `IMAP_TOKEN_ENCRYPTION_KEY`), `POST
+  /api/email-accounts/imap/connect` (one view, not a connect/callback
+  pair — there's no redirect to come back from), registers
+  `get_provider("imap")` for real use. Rejects
+  `outlook.com`/`hotmail.com`/`live.com`/`msn.com` up front (Microsoft
+  retired IMAP basic auth there) rather than letting the login fail
+  opaquely. Disconnect (`imap_auth.disconnect_imap_account()`) is
+  local-only, same reasoning as Outlook's.
 
 ## Phase 10 — Production deployment
 

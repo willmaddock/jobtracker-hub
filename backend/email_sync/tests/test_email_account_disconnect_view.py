@@ -22,8 +22,8 @@ from rest_framework.test import APITestCase
 
 from accounts.models import Workspace
 
-from ..models import EmailAccount, GmailCredential, OutlookCredential
-from .. import oauth, outlook_oauth
+from ..models import EmailAccount, GmailCredential, IMAPCredential, OutlookCredential
+from .. import imap_auth, oauth, outlook_oauth
 
 
 class EmailAccountDisconnectViewTests(APITestCase):
@@ -88,6 +88,23 @@ class EmailAccountDisconnectViewTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["status"], "disconnected")
 
+    def test_imap_account_routes_to_imap_disconnect(self):
+        self.account.provider = "imap"
+        self.account.save(update_fields=["provider"])
+
+        with patch.object(imap_auth, "disconnect_imap_account") as mock_disconnect:
+            def _side_effect(account):
+                account.status = "disconnected"
+                account.save(update_fields=["status"])
+            mock_disconnect.side_effect = _side_effect
+
+            response = self.client.post(self.url)
+
+        mock_disconnect.assert_called_once()
+        self.assertEqual(mock_disconnect.call_args[0][0].id, self.account.id)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["status"], "disconnected")
+
     def test_non_gmail_account_just_flips_status(self):
         self.account.provider = "mail_app"
         self.account.save(update_fields=["provider"])
@@ -140,5 +157,24 @@ class EmailAccountDisconnectViewTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertFalse(OutlookCredential.objects.filter(account=self.account).exists())
+        self.account.refresh_from_db()
+        self.assertEqual(self.account.status, "disconnected")
+
+    def test_end_to_end_deletes_real_imap_credential_row(self):
+        self.account.provider = "imap"
+        self.account.save(update_fields=["provider"])
+        IMAPCredential.objects.create(
+            account=self.account,
+            host="imap.example.com",
+            port=993,
+            username="alice@example.com",
+            password=imap_auth._encrypt("app-password"),
+        )
+        self.assertTrue(IMAPCredential.objects.filter(account=self.account).exists())
+
+        response = self.client.post(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertFalse(IMAPCredential.objects.filter(account=self.account).exists())
         self.account.refresh_from_db()
         self.assertEqual(self.account.status, "disconnected")

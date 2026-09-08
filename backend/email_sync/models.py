@@ -152,6 +152,43 @@ class OutlookCredential(models.Model):
         return f"Outlook credential for {self.account}"
 
 
+class IMAPCredential(models.Model):
+    """Login credentials for one EmailAccount's generic IMAP connection
+    (Phase 9 third-provider slice, docs/DJANGO_MIGRATION_PLAN.md).
+    Mirrors GmailCredential/OutlookCredential's split-out-from-
+    EmailAccount reasoning field-for-field -- same "no credentials of
+    any kind" reason, encrypted at the field level for the same
+    defense-in-depth reason -- but keyed by its own settings.
+    IMAP_TOKEN_ENCRYPTION_KEY (see email_sync.imap_auth's module
+    docstring for why a separate key from Gmail/Outlook's) via
+    email_sync.imap_auth's Fernet helpers.
+
+    Unlike GmailCredential/OutlookCredential there is no access/refresh
+    token pair here at all -- generic IMAP authenticates with a single
+    long-lived username + password (RFC 3501 LOGIN), so `password` is
+    the only secret field, and there is nothing to refresh the way an
+    OAuth access token needs to be. `host`/`port`/`username` are
+    stored per-account (not assumed from settings) since, unlike
+    Gmail/Outlook's fixed API endpoints, a generic IMAP account's
+    server details vary account to account.
+    """
+
+    account = models.OneToOneField(
+        EmailAccount, on_delete=models.CASCADE, related_name="imap_credential"
+    )
+    host = models.CharField(max_length=255)
+    port = models.PositiveIntegerField(default=993)
+    # May differ from EmailAccount.email -- some IMAP servers use a
+    # mailbox username distinct from the address mail is delivered to.
+    username = models.CharField(max_length=255)
+    password = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self) -> str:
+        return f"IMAP credential for {self.account}"
+
+
 class AccountMatch(models.Model):
     """One email matched to an Application, so the dossier/timeline
     can cite "via which account" without re-fetching the inbox. Only

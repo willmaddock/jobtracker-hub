@@ -297,10 +297,125 @@ registration has been created or clicked through) — see §4 below.
 
 ---
 
+### Checkpoint — Generic IMAP, the third provider
+
+Third `EmailProvider` implementation, mirroring the Gmail/Outlook
+slices' own split (message-fetching provider / credential-storage
+module / views+urls) rather than introducing a new shape — but with
+one structural difference from both: there is no OAuth authorization
+server for generic IMAP to redirect to, so the "connect" step is a
+single direct POST carrying a username/password (typically an
+app-specific password), verified with a real IMAP login before
+anything is stored, rather than a connect/callback pair.
+
+- `backend/email_sync/imap_provider.py` — `ImapProvider`, a real
+  IMAP4 (RFC 3501) `EmailProvider` implementation: `SEARCH` built as a
+  right-nested binary `OR` chain (IMAP has no native N-way OR the way
+  Gmail's/Graph's query strings do) of `SUBJECT`/`BODY` term matches
+  plus `FROM` matches against the known ATS sender domains, ANDed with
+  a `SINCE` date bound (day-granularity only — IMAP's SINCE has no
+  time-of-day component); `FETCH ... (RFC822)` for the raw message
+  source; a 500-message safety cap per sync pass. Message-fetching
+  only, same as `gmail_provider.py`/`outlook_provider.py` — no
+  connection setup of its own, takes a `client_factory` the same way
+  `GmailProvider`/`OutlookProvider` take a `service_factory`/
+  `session_factory`.
+- `backend/email_sync/imap_auth.py` — the whole connect flow in one
+  module, since there's no separate callback step: `connect_imap_
+  account()` takes host/port/username/password directly, opens a real
+  `imaplib.IMAP4_SSL` connection, logs in, and `SELECT`s INBOX —
+  *before* storing anything, so a typo'd password never leaves a
+  "connected" `EmailAccount` with credentials that don't actually
+  work sitting around (unlike the OAuth providers, there's no later
+  sync that would discover that and flip the account to "blocked";
+  this connect-time check is the only chance to catch it). Rejects
+  `outlook.com`/`hotmail.com`/`live.com`/`msn.com` up front, before
+  attempting any connection — Microsoft retired IMAP basic-auth for
+  those consumer domains, and a LOGIN attempt against them fails in a
+  way that looks just like a wrong password, so the rejection message
+  points at the Outlook OAuth flow instead of letting that play out.
+  `IMAPCredential` model (own `IMAP_TOKEN_ENCRYPTION_KEY` Fernet key,
+  separate from Gmail's and Outlook's) stores host/port/username plus
+  the encrypted password — no access/refresh token pair the way OAuth
+  credentials have, since IMAP basic auth has nothing to refresh.
+  `imap_client_factory()` (the real `client_factory`, opening a fresh
+  connection + INBOX select per call) and `@register_provider("imap")`
+  wiring. `disconnect_imap_account()` is local-only, same reasoning as
+  Outlook's: an app password isn't a grant this app can revoke, only
+  one the user can change or delete on their provider's side.
+- `views.py`/`urls.py` — `ImapConnectView` (`POST /api/email-accounts/
+  imap/connect`, body: `workspace`/`email`/`password`/`host`/`port`
+  [default 993]/`username` [optional, defaults to `email`]) — one
+  view doing what Gmail/Outlook need two for, since there's no
+  redirect to come back from. Same workspace-ownership check as the
+  OAuth connect views; 503 for an unreachable host, 400 for a
+  rejected login or a retired-basic-auth domain. `EmailAccountDisconnectView`
+  now branches four ways: `gmail` → `oauth.disconnect_gmail_account()`,
+  `outlook` → `outlook_oauth.disconnect_outlook_account()`, `imap` →
+  `imap_auth.disconnect_imap_account()`, anything else → plain status
+  flip.
+- `models.py` — `IMAPCredential` (host/port/username/password fields,
+  no token pair), migration `0005_imapcredential.py`.
+- `config/settings/base.py` — `IMAP_TOKEN_ENCRYPTION_KEY` (own
+  dev-only fallback key, same checked-into-source-control caveat as
+  Gmail's/Outlook's).
+- `admin.py`/`apps.py` — `IMAPCredential` registered (password field
+  excluded, same redaction as `GmailCredentialAdmin`/
+  `OutlookCredentialAdmin`; host/port/username shown since they're
+  connection details, not secrets); `email_sync.imap_auth` imported
+  in `AppConfig.ready()` alongside `oauth`/`outlook_oauth` so
+  `get_provider("imap")` resolves regardless of import order.
+- `requirements.txt` — comment-only update; no new package (`imaplib`
+  is standard library, `cryptography` already pinned for Gmail/
+  Outlook's own field-level encryption).
+
+**Tests:** 56 new — 18 in `test_imap_provider.py` (search-criteria
+building incl. the binary-OR nesting and ALL/SINCE-only fallbacks,
+fetch/parse, the 500-message cap, HTML-only body fallback, missing
+Message-ID/Date handling, SEARCH/FETCH failure classification), 24 in
+`test_imap_auth.py` (encryption round-trip, blocked-domain rejection
+incl. case-insensitivity, connect flow incl. verify-before-store
+ordering on every failure path, custom username override, reconnect-
+revives-disconnected-row, credential-row overwrite on reconnect,
+client factory, provider registration, disconnect), 10 in
+`test_imap_connect_view.py` (auth, required-field validation, port
+type validation, ownership, success/failure status codes incl. 503
+for an unreachable host), + 2 added to
+`test_email_account_disconnect_view.py` (imap routing, end-to-end
+real-`IMAPCredential`-row deletion). **Confirmed on the user's real
+machine: `python manage.py test` → 450/450 passing** (full suite;
+this sandbox still has no network access, so this was run outside
+it, not sandbox-first-then-confirmed like the Outlook checkpoint's
+400/400). `python manage.py test core` → 59/59 passing separately.
+One bug surfaced by that real run and fixed before this figure: a
+test's hardcoded expectation for `_or_chain` (`"OR a (OR b c)"`)
+didn't match the actual right-nesting, which always parenthesizes
+the trailing element (`"OR a (OR b (c))"`) — both semantically
+identical IMAP SEARCH syntax, but the test string was wrong. Fixed
+the test and the two docstring examples that made the same
+imprecise claim; the implementation itself was correct and
+untouched.
+
+**Known gaps introduced or closed by this checkpoint:** closes the
+"generic IMAP provider — not started" gap from §4 below, and — as of
+this real 450/450 run — also closes the "never run against a real
+interpreter" gap this checkpoint's own Tests section previously
+flagged. What remains open is the same gap the OAuth providers still
+have: "never validated against a real IMAP mailbox" — no real
+app-specific password has been generated and used against a real
+mail provider (Fastmail, a self-hosted server, Gmail's own
+IMAP-with-app-password path, etc.), the way Gmail/Outlook's OAuth
+flows still haven't been validated against real consent screens
+either.
+
+**Next action:** see §5 below.
+
+---
+
 ## 4. Known gaps / not yet done
 
 - **Real OAuth end-to-end has never actually happened, for either
-  provider.** Every test mocks `google_auth_oauthlib.flow.Flow`/
+  OAuth provider.** Every test mocks `google_auth_oauthlib.flow.Flow`/
   `googleapiclient.discovery.build` (Gmail) or `requests.post`/
   `requests.get` against Microsoft's endpoints (Outlook) — nobody has
   registered a real Google Cloud OAuth client or a real Azure AD app
@@ -308,13 +423,18 @@ registration has been created or clicked through) — see §4 below.
   `MICROSOFT_OAUTH_CLIENT_ID`/`SECRET` for real, clicked through a
   real consent screen for either provider, or confirmed either
   callback round-trip against the provider's actual token endpoint.
-  This is the single biggest unverified piece, now doubled.
+  This is the single biggest unverified piece for those two providers.
+  Generic IMAP has no OAuth step to validate this way, but has its own
+  equivalent gap — see the IMAP entry below.
 - **No disconnect/revoke flow.** ~~Deleting a `GmailCredential` row~~
   — **done.** `EmailAccountDisconnectView` revokes the Gmail grant
   with Google (best-effort) and deletes the local row; for Outlook it
   deletes the local `OutlookCredential` row only — Microsoft's v2.0
   flow has no application-callable revoke API for this app to call
-  (see `outlook_oauth.py`'s own module docstring).
+  (see `outlook_oauth.py`'s own module docstring); for IMAP it deletes
+  the local `IMAPCredential` row only — an app password isn't a grant
+  this app can revoke either (see `imap_auth.py`'s own module
+  docstring).
 - **No background task runner.** `sync_service.sync_account()` now has
   a manual trigger (`POST /api/email-accounts/<id>/sync`, slice 3
   above), but nothing calls it on a schedule or in response to
@@ -322,35 +442,48 @@ registration has been created or clicked through) — see §4 below.
   Django-Q wiring at all yet, and no "sync all of a workspace's
   accounts" bulk endpoint either.
 - **No frontend.** Every endpoint built so far (`gmail/connect`,
-  `gmail/callback`, `outlook/connect`, `outlook/callback`, `<id>/sync`,
-  `<id>/disconnect`) returns JSON; there's no `backend`-served or
-  separate frontend page that calls them yet.
-- **Generic IMAP provider** — not started. Gmail and Outlook/Microsoft
-  Graph are now both real providers; `EmailAccountDisconnectView`'s
-  "any other provider" branch (a plain status flip, no credential
-  model) is exercised by tests but has no real provider left to matter
-  for except a future IMAP one.
+  `gmail/callback`, `outlook/connect`, `outlook/callback`,
+  `imap/connect`, `<id>/sync`, `<id>/disconnect`) returns JSON;
+  there's no `backend`-served or separate frontend page that calls
+  them yet.
+- **Generic IMAP provider** — ~~not started~~ ~~done but
+  compiled-only, never executed~~ **done and real-machine-confirmed:
+  450/450 full suite, 59/59 for `core` alone.** Still never validated
+  against a real IMAP mailbox with a real app-specific password.
+  `EmailAccountDisconnectView`'s "any other provider" branch (a plain
+  status flip, no credential model) now has no real remaining
+  provider to matter for — every provider in `PROVIDER_CHOICES`
+  except the legacy `mail_app`/`icloud` rows now has a real
+  implementation.
 - Every checkpoint's test-count claim through the Outlook checkpoint
-  above is now real-machine-confirmed, not just sandbox — matching.py,
-  sync orchestration, both providers, both OAuth modules, the sync-now
-  endpoint, and the disconnect flow have all had their exact sandbox
-  figure independently reproduced on the user's own Mac (400/400).
+  is real-machine-confirmed, not just sandbox — matching.py, sync
+  orchestration, both OAuth providers, the sync-now endpoint, and the
+  disconnect flow have all had their exact sandbox figure
+  independently reproduced on the user's own Mac (400/400). The IMAP
+  checkpoint above is now real-machine-confirmed too (450/450), just
+  without a sandbox-first run to compare it against — this sandbox
+  still has no network access.
 
 ## 5. Next action
 
-1. Decide whether real OAuth end-to-end validation (a real Google
+1. ~~Run `python manage.py test` for real, in this sandbox, before
+   anything else.~~ **Done, on the user's own machine instead of a
+   sandbox: 450/450.** Remaining validation work is the account-level
+   kind below, not test-execution.
+2. Decide whether real OAuth end-to-end validation (a real Google
    Cloud project + real Azure AD app registration, real client
-   id/secret pairs for both, actual consent-screen click-throughs)
-   happens now or is deferred further — this needs the user's own
-   Google Cloud / Azure setup, not something a sandbox can do
-   unprompted. Doing both providers' validation in the same pass is
-   probably more efficient than two separate sessions, now that both
-   exist.
-2. Pick the next slice: Celery/Redis background scheduling (now that
-   there's a manual sync entry point and a disconnect flow for two
-   real providers to build on top of), the generic IMAP provider, or a
-   frontend for any of this. Not yet decided with the user.
-3. Separately, worth the user's own attention: the user's `git status`
+   id/secret pairs for both, actual consent-screen click-throughs) and
+   a real IMAP mailbox validation (a real app-specific password against
+   a real provider) happen now or are deferred further — these need the
+   user's own accounts/setup, not something a sandbox can do
+   unprompted. Doing all three providers' validation in the same pass
+   is probably more efficient than three separate sessions, now that
+   all three exist.
+3. Pick the next slice: Celery/Redis background scheduling (now that
+   there's a manual sync entry point and a disconnect flow for three
+   real providers to build on top of), or a frontend for any of this.
+   Not yet decided with the user.
+4. Separately, worth the user's own attention: the user's `git status`
    (on branch `django-migration`) has historically shown a mix of
    unrelated pre-existing changes alongside this track's work —
    modified `README.md`, `docs/README.md`,
@@ -361,8 +494,8 @@ registration has been created or clicked through) — see §4 below.
    already exist as untracked directories per that same status output,
    not an accidental deletion, but worth the user double-checking).
    Re-check `git status` at the start of the next session rather than
-   assuming this is still accurate — it predates the Outlook
-   checkpoint and may already be resolved.
+   assuming this is still accurate — it predates the IMAP checkpoint
+   and may already be resolved.
 
 ## 6. Checkpoint template
 

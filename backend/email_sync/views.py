@@ -27,10 +27,11 @@ from rest_framework.views import APIView
 
 from accounts.models import Workspace
 
-from . import oauth, outlook_oauth
+from . import imap_auth, oauth, outlook_oauth
+from .imap_auth import ImapConnectionError
 from .models import EmailAccount
 from .oauth import OAuthConfigError
-from .providers import ProviderError, get_provider
+from .providers import ProviderAuthError, ProviderError, get_provider
 from .sync_service import sync_account
 
 # Session keys used to carry OAuth CSRF state + which workspace
@@ -247,6 +248,92 @@ class OutlookOAuthCallbackView(APIView):
         )
 
 
+class ImapConnectView(APIView):
+    """POST /api/email-accounts/imap/connect
+
+    Body: {"workspace": <id>, "email": "...", "password": "...",
+    "host": "...", "port": 993, "username": "..." (optional, defaults
+    to email)}
+
+    Unlike GmailConnectView/OutlookConnectView, this is not a redirect
+    -into-a-consent-screen flow -- generic IMAP has no authorization
+    server to redirect to, only a username/password the user already
+    has (typically an app-specific password, per imap_auth.py's own
+    module docstring). So this single POST both verifies the
+    credentials with a real IMAP login and, on success, connects the
+    account -- there is no separate callback view the way the OAuth
+    providers need one.
+
+    Ownership check mirrors GmailConnectView/OutlookConnectView: a
+    user should never be able to land an EmailAccount in a workspace
+    they don't own.
+    """
+
+    def post(self, request):
+        workspace_id = request.data.get("workspace")
+        email = request.data.get("email")
+        password = request.data.get("password")
+        host = request.data.get("host")
+        port = request.data.get("port") or 993
+        username = request.data.get("username") or None
+
+        missing = [
+            name
+            for name, value in (
+                ("workspace", workspace_id),
+                ("email", email),
+                ("password", password),
+                ("host", host),
+            )
+            if not value
+        ]
+        if missing:
+            return Response(
+                {"detail": f"Missing required field(s): {', '.join(missing)}."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            port = int(port)
+        except (TypeError, ValueError):
+            return Response(
+                {"detail": "port must be an integer."}, status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            workspace = Workspace.objects.get(id=workspace_id, owner=request.user)
+        except (Workspace.DoesNotExist, ValueError):
+            return Response(
+                {"detail": "No such workspace."}, status=status.HTTP_404_NOT_FOUND
+            )
+
+        try:
+            account = imap_auth.connect_imap_account(
+                workspace,
+                email=email,
+                password=password,
+                host=host,
+                port=port,
+                username=username,
+            )
+        except ImapConnectionError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except ProviderAuthError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except ProviderError as exc:
+            # _reject_if_basic_auth_retired's plain ProviderError (a
+            # domain known to no longer support IMAP basic auth at
+            # all) -- a config/support-matrix gap, not a bad-password
+            # gap, but still a 400: the request as given can never
+            # succeed, regardless of retry.
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(
+            {"id": account.id, "email": account.email, "status": account.status},
+            status=status.HTTP_200_OK,
+        )
+
+
 class EmailAccountSyncView(APIView):
     """POST /api/email-accounts/<id>/sync
 
@@ -320,8 +407,11 @@ class EmailAccountDisconnectView(APIView):
     local GmailCredential row; for an Outlook account, deletes the
     local OutlookCredential row (no Microsoft-side revoke call is
     possible -- see outlook_oauth.disconnect_outlook_account's own
-    docstring for why); for any other provider there's no credential
-    model to clean up, so this is just a status flip. In
+    docstring for why); for an IMAP account, deletes the local
+    IMAPCredential row (no revoke call is possible there either -- see
+    imap_auth.disconnect_imap_account's own docstring for why); for any
+    other provider there's no credential model to clean up, so this is
+    just a status flip. In
     both cases the EmailAccount row itself is kept, not deleted -- its
     sync history (AccountMatch/Discovery/ThreadIdentifier rows,
     matched_email_count) stays intact, and oauth.
@@ -350,10 +440,12 @@ class EmailAccountDisconnectView(APIView):
                 oauth.disconnect_gmail_account(account)
             elif account.provider == "outlook":
                 outlook_oauth.disconnect_outlook_account(account)
+            elif account.provider == "imap":
+                imap_auth.disconnect_imap_account(account)
             else:
                 # No credential model exists for any other provider
-                # yet (see providers.py -- IMAP isn't built), so
-                # there's nothing to revoke: just flip the status.
+                # (e.g. a legacy mail_app/icloud row), so there's
+                # nothing to revoke: just flip the status.
                 account.status = "disconnected"
                 account.save(update_fields=["status", "updated_at"])
 

@@ -5,6 +5,7 @@ from .views import (
     EmailAccountSyncView,
     GmailConnectView,
     GmailOAuthCallbackView,
+    ImapConnectView,
     OutlookConnectView,
     OutlookOAuthCallbackView,
 )
@@ -25,6 +26,11 @@ urlpatterns = [
         "email-accounts/outlook/callback",
         OutlookOAuthCallbackView.as_view(),
         name="outlook-oauth-callback",
+    ),
+    path(
+        "email-accounts/imap/connect",
+        ImapConnectView.as_view(),
+        name="imap-connect",
     ),
     path(
         "email-accounts/<int:pk>/sync",

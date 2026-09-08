@@ -248,3 +248,18 @@ MICROSOFT_OAUTH_REDIRECT_URI = os.environ.get(
 MICROSOFT_TOKEN_ENCRYPTION_KEY = os.environ.get(
     'MICROSOFT_TOKEN_ENCRYPTION_KEY', 'Pkn_45gin4M7zHTs1htox81DGuwAV7ADpMKtZpQqd-4='
 )
+
+# Symmetric key (cryptography.fernet) IMAPCredential uses to encrypt
+# the stored app password at rest -- deliberately a *separate* key
+# from GMAIL_TOKEN_ENCRYPTION_KEY/MICROSOFT_TOKEN_ENCRYPTION_KEY (see
+# email_sync.imap_auth's module docstring for why). SECURITY WARNING:
+# this dev-only fallback key is checked into source control, same
+# caveat as the other two encryption keys above -- generate a real one
+# the same way (`python -c "from cryptography.fernet import Fernet;
+# print(Fernet.generate_key().decode())"`) and set
+# IMAP_TOKEN_ENCRYPTION_KEY in the environment before this is ever
+# deployed. Rotating this key makes every already-stored IMAP password
+# undecryptable, same caveat as the other two keys.
+IMAP_TOKEN_ENCRYPTION_KEY = os.environ.get(
+    'IMAP_TOKEN_ENCRYPTION_KEY', 'FKMi8JI8yo6UB7lC3PoLor_kuv2SAWF5l_rrD0WsoiA='
+)

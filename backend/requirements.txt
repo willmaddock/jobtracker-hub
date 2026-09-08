@@ -42,3 +42,10 @@ requests>=2.32
 # REST calls (see outlook_oauth.py's own module docstring for why
 # that's `requests` directly rather than the `msal` SDK), and Graph
 # itself is a plain REST API `outlook_provider.py` calls the same way.
+
+# Phase 9 (third provider) -- generic IMAP (email_sync/imap_auth.py,
+# email_sync/imap_provider.py). No new package at all: `imaplib` (RFC
+# 3501 client) is part of the Python standard library, and
+# `cryptography` (already pinned above for Gmail/Outlook's own
+# field-level token encryption) covers IMAPCredential.password's
+# encryption too.

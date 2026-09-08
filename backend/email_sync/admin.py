@@ -5,6 +5,7 @@ from .models import (
     Discovery,
     EmailAccount,
     GmailCredential,
+    IMAPCredential,
     JobPostingSender,
     OutlookCredential,
     ThreadIdentifier,
@@ -39,6 +40,19 @@ class OutlookCredentialAdmin(admin.ModelAdmin):
     readonly_fields = ("created_at", "updated_at")
     exclude = ("access_token", "refresh_token")
     search_fields = ("account__email",)
+
+
+@admin.register(IMAPCredential)
+class IMAPCredentialAdmin(admin.ModelAdmin):
+    # Same redaction rationale as GmailCredentialAdmin/
+    # OutlookCredentialAdmin: never show secret material, even
+    # encrypted, on the admin detail page. host/port/username aren't
+    # secrets (they're server connection details, not the credential
+    # itself) so they're safe to surface, unlike password.
+    list_display = ("account", "host", "port", "username", "updated_at")
+    readonly_fields = ("created_at", "updated_at")
+    exclude = ("password",)
+    search_fields = ("account__email", "host", "username")
 
 
 @admin.register(AccountMatch)
