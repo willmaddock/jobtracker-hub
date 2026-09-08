@@ -29,10 +29,16 @@ out/
 *.fdb_latexmk
 *.toc
 
+# --- Secrets -------------------------------------------------------------
+# OAuth client secrets, encryption keys, etc. Never commit this.
+backend/.env
+.env
+
 # --- Python ------------------------------------------------------------
 _app/.venv/
 _app/venv/
 _app/env/
+backend/venv/
 __pycache__/
 *.pyc
 *.pyo
@@ -64,6 +70,12 @@ db.sqlite3
 # Local uploads land here once someone uploads a document; not present yet
 # but will be the first time the app is actually used locally.
 backend/media/
+
+# --- Celery local runtime state --------------------------------------------
+# celerybeat-schedule is Beat's own shelve db for persisting its schedule
+# between restarts -- machine-local runtime state, same as db.sqlite3 above.
+celerybeat-schedule
+celerybeat.pid
 
 # --- Test/coverage artifacts -----------------------------------------------
 .pytest_cache/

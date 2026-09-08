@@ -70,3 +70,4 @@ requests>=2.32
 # above already are.
 celery>=5.4
 redis>=5.0
+python-dotenv==1.2.3

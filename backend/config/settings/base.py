@@ -18,6 +18,24 @@ from pathlib import Path
 # parent than the django-admin default to still point at backend/.
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
+# Load backend/.env into the real process environment so the
+# os.environ.get(...) calls below (GOOGLE_OAUTH_CLIENT_ID, etc.) can
+# actually see values from that file -- a .env file on disk means
+# nothing to Python by itself; something has to parse it, and nothing
+# in this project did until now. This runs before every other
+# os.environ.get() call in this module, and since every entry point
+# (manage.py commands, `celery -A config worker`/`beat`, wsgi/asgi)
+# ends up importing this settings module, loading it here covers all
+# of them from one place rather than needing it repeated in each.
+# Passing an explicit BASE_DIR / '.env' path (rather than calling
+# load_dotenv() with no arguments) means this finds backend/.env
+# based on this file's own location, not the process's current
+# working directory -- so it works the same whether manage.py is run
+# from backend/ or anywhere else.
+from dotenv import load_dotenv  # noqa: E402
+
+load_dotenv(BASE_DIR / '.env')
+
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/

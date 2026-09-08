@@ -27,6 +27,7 @@ hunting and turns it into a dashboard; it never uploads anything anywhere.
 - [Running it](#running-it)
 - [Connecting Mail.app for Email Sync](#connecting-mailapp-for-email-sync)
 - [Running the tests](#running-the-tests)
+- [Running the Django backend locally (dev server + Celery)](#running-the-django-backend-locally-dev-server--celery)
 - [Two local databases, two very different lifetimes](#two-local-databases-two-very-different-lifetimes)
 - [What it does](#what-it-does)
 - [Power-user features](#power-user-features)
@@ -319,6 +320,77 @@ that app's `tests_*.py` / `tests/` directory for the traceback, and
 compare against the model/serializer for the field it's asserting on
 (a field allowing `null=True` on a `CharField` is a common cause of a
 `None` vs `""` mismatch in test assertions).
+
+## Running the Django backend locally (dev server + Celery)
+
+The Gmail/Outlook email-sync OAuth slice (`backend/email_sync/`) needs
+three processes running at once, each in its **own terminal tab**:
+the Django dev server, a Celery worker, and Celery beat (the scheduler
+that periodically dispatches `sync_all_accounts_task`). Redis must
+already be running locally (`redis-server`) — Celery's broker/results
+backend both point at `redis://localhost:6379/0`.
+
+**First-time setup** (once per checkout):
+
+```bash
+cd backend
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+python manage.py migrate
+python manage.py createsuperuser
+```
+
+**Every time you open a new terminal tab for this project**, the venv
+does *not* carry over from another tab — each tab starts fresh, so the
+first two commands below are required before `python`/`celery` will
+resolve at all:
+
+```bash
+# Terminal 1 — Django dev server
+cd backend
+source venv/bin/activate
+python manage.py runserver
+```
+
+```bash
+# Terminal 2 — Celery worker
+cd backend
+source venv/bin/activate
+celery -A config worker -l info
+```
+
+```bash
+# Terminal 3 — Celery beat
+cd backend
+source venv/bin/activate
+celery -A config beat -l info
+```
+
+If a Celery worker logs `OperationalError: no such table: ...`, its
+`db.sqlite3` doesn't have migrations applied — rerun
+`python manage.py migrate` in the server terminal, then restart the
+worker and beat so they stop holding a stale connection.
+
+**Testing the Gmail OAuth connect flow:** it has to happen inside a
+single, continuous **Safari session** — never `curl`. `curl -u
+user:pass ...` authenticates and stores OAuth state in curl's own
+session, not the browser's, so pasting the resulting
+`authorization_url` into Safari lands the Google callback in a session
+that never saw that state, and it's rejected with "Invalid or expired
+OAuth state." Instead:
+
+1. In Safari, visit `http://localhost:8000/admin/` and confirm you're
+   logged in (not shown a login form).
+2. In that **same tab**, navigate to
+   `http://localhost:8000/api/email-accounts/gmail/connect?workspace=<id>`
+   directly in the address bar.
+3. Copy the `authorization_url` field from the JSON response and
+   navigate to it, in that same tab or a new tab (cookies are shared
+   across tabs in one browser profile) — just never via curl.
+4. Walk through Google's consent screen (choose account → past the
+   "Google hasn't verified this app" warning → past the permissions
+   screen) and confirm you land on `/callback` with a 200 response.
 
 ## Two local databases, two very different lifetimes
 
