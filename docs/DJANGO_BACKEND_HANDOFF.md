@@ -535,19 +535,124 @@ real interpreter" gap above.
 
 ---
 
+### Checkpoint — Real Gmail OAuth end-to-end validation, PKCE fix, rate-limit misclassification fix, encryption key rotation (Sep 8, 2026)
+
+First real (non-mocked) validation of any OAuth provider in this
+track: a real Google Cloud OAuth client, a real consent screen, a
+real Gmail account (willzaeagle@gmail.com), and a real sync against
+live Gmail API quota limits. This is exactly the gap §4 called out as
+"the single biggest unverified piece" — and, as expected, exercising
+it for real surfaced bugs the mocked test suite couldn't:
+
+1. **403 rate-limit misclassification.** Gmail returns HTTP 403 both
+   for a genuinely expired/revoked grant and for quota/rate-limit
+   exhaustion (`domain: usageLimits`, `reason: rateLimitExceeded`) --
+   only the parsed response body tells them apart, not the status
+   code alone. `gmail_provider.py`'s `_looks_like_auth_error` treated
+   every 403 as an auth failure, so a real sync against real quota
+   limits was misclassified as "reconnect needed" instead of
+   "retry later." Fixed: `_is_403_rate_limit()` distinguishes the
+   two; `messages.get()` calls now retry with exponential backoff (up
+   to 2 retries, 5s/10s) on temporary errors; `time.sleep(0.3)` pacing
+   added between both `list()` and `get()` calls. `sync_service.py`/
+   `tasks.py` updated so `ProviderTemporaryError` is handled distinctly
+   from `ProviderAuthError` -- it does NOT flip `account.status`.
+2. **PKCE `code_verifier` never actually round-tripped.**
+   `build_authorization_url()`'s `Flow` auto-generates a
+   `code_verifier` that lives only on that in-memory `Flow` object --
+   never encoded into the `authorization_url` or the `state` Google
+   echoes back. The callback-time `build_flow()` call was generating
+   its own fresh, mismatched verifier every time. Fixed: `build_flow`/
+   `build_authorization_url`/`complete_gmail_connection` now accept
+   and thread `code_verifier` explicitly; `GmailConnectView` stashes
+   it in session (`_SESSION_VERIFIER_KEY`) alongside `state`/
+   `workspace_id`; `GmailOAuthCallbackView` pulls it back out, still
+   popped in the `finally` block for one-time use.
+3. **`backend/.env` was never actually loaded.** Nothing called
+   `load_dotenv()` anywhere -- `GOOGLE_OAUTH_CLIENT_ID`/`SECRET` (and
+   all three `*_TOKEN_ENCRYPTION_KEY` settings) silently fell back to
+   `base.py`'s hardcoded defaults regardless of `.env`'s contents.
+   Fixed: `config/settings/base.py` now calls
+   `load_dotenv(BASE_DIR / '.env')` before any other
+   `os.environ.get()` call in the module (`python-dotenv` added to
+   `requirements.txt`).
+4. **Local dev gotcha, now documented in README.md:** the connect flow
+   must happen in one continuous browser session on a single
+   hostname. Starting on `127.0.0.1` and letting Google's callback
+   redirect land on `localhost` (or vice versa) means the session
+   cookie carrying the stashed `state`/`workspace_id`/`code_verifier`
+   never reaches the callback request -- different origins don't share
+   cookies -- surfacing as a spurious "Invalid or expired OAuth state"
+   with nothing actually expired. `curl` can't be used for any leg,
+   same reason.
+
+**Security issue found and fixed, separate from the above:**
+`GMAIL_TOKEN_ENCRYPTION_KEY` (and the equivalent `MICROSOFT_`/`IMAP_`
+keys) had hardcoded dev-only fallback values checked into
+`config/settings/base.py`. Unlike the "checked into source control"
+caveat this doc already carried as an accepted risk, this repository
+is **public** on GitHub -- so the fallback value was live and
+publicly readable, and since `backend/.env` had no override for any
+of the three at the time, it was the actual key encrypting a real
+user's stored Gmail refresh token via `GmailCredential`. Fixed:
+generated real Fernet keys for all three, added to `backend/.env`
+(gitignored -- confirmed via `git log --all --oneline -- backend/.env
+backend/db.sqlite3` returning nothing, ever), reconnected the Gmail
+account so its `GmailCredential` row was rewritten under the new key.
+Confirmed two ways: `GmailCredential.updated_at` matches the reconnect
+timestamp exactly, and `email_sync.oauth._try_decrypt()` successfully
+decrypts the stored `refresh_token` under the current (new) key. The
+hardcoded fallback values remain in `base.py` as a from-scratch-
+checkout bootstrap default, but no longer protect any real credential.
+
+**Tests:** no new suite run as part of this checkpoint itself (this
+was live validation + hotfixes, not new feature work), but the
+retry/backoff and PKCE fixes each shipped with regression tests
+committed alongside: `test_gmail_provider.py`'s
+`test_403_rate_limit_on_list_raises_provider_temporary_error`,
+`test_oauth.py`'s `test_forwards_code_verifier_to_build_flow_for_pkce`,
+`test_sync_service.py`'s `TemporaryErrorHandlingTests`. Full
+`manage.py test` suite not re-run as part of this checkpoint -- do
+this before the next session, since three commits landed without a
+fresh full-suite confirmation.
+
+**Result:** real Gmail account fully connected; a real sync completed
+against real Gmail API quota limits (989 `messages_seen`, 100
+`new_discoveries`, 0 errors); account reconnected post-key-rotation
+with the new encryption key confirmed in active use. Commits `ca620ea`
+(sync fix), `981cde4` (PKCE fix), `8042256` (.env loading + docs +
+gitignore) -- `django-migration`, pushed to `origin`.
+
+**Known gaps introduced or closed by this checkpoint:** closes "real
+OAuth end-to-end has never actually happened" for **Gmail**
+specifically. Outlook still has this gap in full -- no real Azure AD
+app registration has ever been created or clicked through, and its
+`MICROSOFT_TOKEN_ENCRYPTION_KEY`/generic IMAP's
+`IMAP_TOKEN_ENCRYPTION_KEY` still carry the same public-repo-exposed
+hardcoded fallback Gmail's did -- unrotated, because neither provider
+has a real connected account yet to protect. Rotate those *before*
+either provider's own real-account validation happens, not after,
+now that we know this repo is public.
+
+**Next action:** see updated §5.
+
+---
+
 ## 4. Known gaps / not yet done
 
-- **Real OAuth end-to-end has never actually happened, for either
-  OAuth provider.** Every test mocks `google_auth_oauthlib.flow.Flow`/
-  `googleapiclient.discovery.build` (Gmail) or `requests.post`/
-  `requests.get` against Microsoft's endpoints (Outlook) — nobody has
-  registered a real Google Cloud OAuth client or a real Azure AD app
-  registration, set `GOOGLE_OAUTH_CLIENT_ID`/`SECRET` or
-  `MICROSOFT_OAUTH_CLIENT_ID`/`SECRET` for real, clicked through a
-  real consent screen for either provider, or confirmed either
-  callback round-trip against the provider's actual token endpoint.
-  This is the single biggest unverified piece for those two providers.
-  Generic IMAP has no OAuth step to validate this way, but has its own
+- ~~Real OAuth end-to-end has never actually happened, for either
+  OAuth provider.~~ **Gmail: done (Sep 8, 2026)** — see that
+  checkpoint above: a real Google Cloud OAuth client, a real consent
+  screen, a real account, a real callback round-trip against Google's
+  actual token endpoint, and a real sync against live Gmail API quota
+  limits, which is what surfaced the 403-misclassification and PKCE
+  bugs that checkpoint fixes. **Outlook: still fully unvalidated** —
+  every test still mocks `requests.post`/`requests.get` against
+  Microsoft's endpoints; nobody has registered a real Azure AD app
+  registration, set `MICROSOFT_OAUTH_CLIENT_ID`/`SECRET` for real, or
+  clicked through a real consent screen. This is now the single
+  biggest unverified piece remaining for Outlook specifically. Generic
+  IMAP has no OAuth step to validate this way, but has its own
   equivalent gap — see the IMAP entry below.
 - **No disconnect/revoke flow.** ~~Deleting a `GmailCredential` row~~
   — **done.** `EmailAccountDisconnectView` revokes the Gmail grant
@@ -607,15 +712,19 @@ real interpreter" gap above.
    `.delay`-patched unit tests to mean much end-to-end (the unit tests
    themselves don't need a running Redis — only a real worker/beat
    process would).
-2. Decide whether real OAuth end-to-end validation (a real Google
-   Cloud project + real Azure AD app registration, real client
-   id/secret pairs for both, actual consent-screen click-throughs) and
-   a real IMAP mailbox validation (a real app-specific password against
-   a real provider) happen now or are deferred further — these need the
-   user's own accounts/setup, not something a sandbox can do
-   unprompted. Doing all three providers' validation in the same pass
-   is probably more efficient than three separate sessions, now that
-   all three exist.
+2. ~~Decide whether real OAuth end-to-end validation... happens now
+   or is deferred further~~ **Gmail: done (Sep 8, 2026)** — real
+   Google Cloud project, real consent screen, real account, real sync.
+   Still pending: a real Azure AD app registration + real
+   consent-screen click-through for Outlook, and a real IMAP mailbox
+   validation (a real app-specific password against a real provider)
+   — these need the user's own accounts/setup, not something a sandbox
+   can do unprompted. **Before connecting either for real: rotate
+   `MICROSOFT_TOKEN_ENCRYPTION_KEY`/`IMAP_TOKEN_ENCRYPTION_KEY` off
+   their public-repo-exposed hardcoded defaults first** — same issue
+   Gmail's key had, not yet fixed for these two since neither has a
+   real credential to protect yet (see the Sep 8, 2026 checkpoint's
+   security note above).
 3. Once item 1 passes, decide whether to actually run `celery -A
    config worker -l info` and `celery -A config beat -l info` locally
    against a real `redis-server` — that's the only way to confirm the

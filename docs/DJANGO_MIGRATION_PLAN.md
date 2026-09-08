@@ -204,7 +204,13 @@ just the current-state summary):
   service_factory)** — done. `backend/email_sync/oauth.py` +
   `views.py`/`urls.py`. `GmailCredential` model, Fernet field-level
   encryption, `GET /api/email-accounts/gmail/{connect,callback}`,
-  registers `get_provider("gmail")` for real use.
+  registers `get_provider("gmail")` for real use. **Validated
+  end-to-end against a real account Sep 8, 2026** (see
+  `DJANGO_BACKEND_HANDOFF.md`'s corresponding checkpoint) — previously
+  "done" meant code + mocked tests only; that validation pass also
+  found and fixed a 403 rate-limit misclassification bug and a PKCE
+  `code_verifier` bug, and led to rotating the Fernet encryption keys
+  off their public-repo-exposed hardcoded defaults.
 - **Manual "sync now" trigger** — done. `POST
   /api/email-accounts/<id>/sync` (`backend/email_sync/views.py`'s
   `EmailAccountSyncView`) calls `sync_service.sync_account()` for one
