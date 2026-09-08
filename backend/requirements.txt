@@ -49,3 +49,24 @@ requests>=2.32
 # `cryptography` (already pinned above for Gmail/Outlook's own
 # field-level token encryption) covers IMAPCredential.password's
 # encryption too.
+
+# Phase 10 -- background task scheduling (config/celery.py,
+# email_sync/tasks.py), closing the "no background task runner" gap
+# docs/DJANGO_MIGRATION_PLAN.md's Phase 9 Known gaps and
+# docs/DJANGO_BACKEND_HANDOFF.md §4 both flag. Celery workers/beat run
+# as separate processes alongside manage.py runserver (see
+# docs/DJANGO_MIGRATION_PLAN.md Phase 10's "background worker process"
+# bullet); Redis is both the broker and, for now, the result backend
+# -- one fewer moving part than a second Postgres-backed store, and
+# nothing here queries a task's result after the fact yet. Unlike
+# every version above, pinned exactly against a real installed venv
+# this project already had, these two are minimum-version bounds, not
+# exact pins: this sandbox has no network access to install or freeze
+# a real version against this session (same constraint every earlier
+# checkpoint on this track has flagged), so there's nothing real to
+# snapshot here yet. Run `pip install -r requirements.txt` normally,
+# then `pip freeze | grep -iE 'celery|redis'` and replace these two
+# lines with exact pins the same way Django/DRF/the OAuth packages
+# above already are.
+celery>=5.4
+redis>=5.0

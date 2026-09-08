@@ -98,8 +98,32 @@ real Gmail account) — every OAuth-facing test mocks
 - `backend/requirements.txt` — added `requests` explicitly (previously
   only a transitive dependency of the google-* packages;
   `oauth.py`'s revoke call now uses it directly).
-- Full backend suite last stood at **355/355 passing — confirmed on
-  the user's own machine**, matching the sandbox exactly (see §4).
+- Full backend suite last stood at **450/450 passing — confirmed on
+  the user's own machine** (Outlook/IMAP checkpoints; see §3/§4).
+- `backend/config/celery.py` + `config/__init__.py` — the Celery
+  application (`config.celery.app`), configured from Django settings
+  under the `CELERY_` namespace, autodiscovering `<app>/tasks.py`
+  across `INSTALLED_APPS`.
+- `backend/config/settings/base.py` — `CELERY_BROKER_URL`/
+  `CELERY_RESULT_BACKEND` (Redis), serializer settings,
+  `CELERY_TASK_ALWAYS_EAGER` (env-controlled, off by default), and
+  `CELERY_BEAT_SCHEDULE` (a 15-minute `sync_all_accounts_task` entry).
+- `backend/email_sync/tasks.py` — `sync_account_task(account_id)` (the
+  per-account background unit, mirroring `EmailAccountSyncView`'s
+  provider-resolve-then-`sync_account()` sequence) and
+  `sync_all_accounts_task()` (fans out one `sync_account_task.delay()`
+  per currently-connected `EmailAccount`; this is both the Beat
+  schedule's entry point and what the new bulk endpoint below
+  dispatches to).
+- `backend/email_sync/views.py` + `urls.py` — `EmailAccountSyncAllView`:
+  `POST /api/email-accounts/sync-all`, the "sync all of a workspace's
+  accounts" bulk endpoint flagged as missing in §4 below. Scoped to
+  `workspace__owner=request.user`; dispatches, doesn't sync inline.
+- `backend/requirements.txt` — `celery`/`redis` added, as
+  minimum-version bounds rather than exact pins (see that file's own
+  comment on this checkpoint for why — no network access this session
+  to freeze a real install against, same constraint as every earlier
+  checkpoint here).
 
 ## 3. Checkpoint history
 
@@ -412,6 +436,105 @@ either.
 
 ---
 
+### Checkpoint — Celery/Redis background task scheduling
+
+What was built: closes the "no background task runner" gap from §4
+below (docs/DJANGO_MIGRATION_PLAN.md Phase 9/10).
+
+- `config/celery.py` — the Celery application (`app = Celery(...)`),
+  configured via `app.config_from_object('django.conf:settings',
+  namespace='CELERY')` so every Celery setting lives as a
+  `CELERY_`-prefixed Django setting rather than a separate
+  `celeryconfig.py`, and `app.autodiscover_tasks()` so a future
+  `<app>/tasks.py` needs no registration here. `config/__init__.py`
+  exposes it as `config.celery_app`, Celery's own documented
+  Django-integration pattern — `@shared_task` in `email_sync/tasks.py`
+  binds to this app instance without importing `config.celery`
+  itself.
+- `config/settings/base.py` — `CELERY_BROKER_URL`/
+  `CELERY_RESULT_BACKEND` (Redis, both env-overridable, `redis://
+  localhost:6379/0` dev default), JSON serializers,
+  `CELERY_TASK_ALWAYS_EAGER` (env-controlled, `False` by default —
+  real dispatch, not inline execution, is the point), and
+  `CELERY_BEAT_SCHEDULE` with one entry: `sync_all_accounts_task`
+  every 900 seconds. Deliberately a plain number (seconds), not a
+  `celery.schedules.crontab(...)` instance, so this settings module
+  still has no top-level `import celery` — consistent with base.py
+  not importing any other third-party client library at module level
+  either.
+- `email_sync/tasks.py` — `sync_account_task(account_id)`: looks up
+  the `EmailAccount` by id (ids, not instances, cross the broker —
+  Celery arguments are JSON-serialized), resolves its provider, runs
+  `sync_service.sync_account()`, and returns a plain dict in the same
+  shape `EmailAccountSyncView.post()` already returns as JSON.
+  Missing account / disconnected account / unregistered provider are
+  all handled as a non-ok result, not a raised exception — Celery's
+  default retry-on-exception behavior is the wrong shape for "this
+  account will never sync." `sync_all_accounts_task()`: the Beat
+  schedule's entry point — looks up every `status="connected"`
+  `EmailAccount` across every workspace and fans out one
+  `sync_account_task.delay(id)` per account, so one slow/stuck
+  account's sync can't block any other account's turn.
+- `email_sync/views.py` + `urls.py` — `EmailAccountSyncAllView`:
+  `POST /api/email-accounts/sync-all`, the user-triggered counterpart
+  to the Beat schedule. Scoped to `workspace__owner=request.user`;
+  dispatches one `sync_account_task.delay(id)` per the *authenticated
+  user's own* currently-connected accounts and returns immediately
+  with the dispatched ids — deliberately a background dispatch, not a
+  loop calling `sync_account()` inline, so a user with several slow
+  mailboxes doesn't block this one request on all of them in series.
+- `requirements.txt` — `celery`/`redis` added as **minimum-version
+  bounds** (`celery>=5.4`, `redis>=5.0`), not exact pins — unlike
+  every package pinned above this session had no real `pip install`
+  to freeze a version against (no network access in this sandbox,
+  same constraint every earlier checkpoint here has flagged). Run
+  `pip install -r requirements.txt` normally, then replace these two
+  lines with an exact `pip freeze` pin the way Django/DRF/the OAuth
+  packages already are.
+
+**Tests:** 11 new — 5 in `test_tasks.py` (missing account, disconnected
+account, no registered provider, successful sync updates the account
+and returns the right dict shape, a `ProviderAuthError` is reported
+but the task itself doesn't raise) + 2 in the same file for
+`sync_all_accounts_task` (dispatches only `connected` accounts, `.delay`
+patched rather than actually run; dispatches nothing when there are
+none) + 4 in `test_email_account_sync_all_view.py` (auth required, no
+accounts dispatches nothing, only the authenticated user's own
+connected accounts are dispatched — not another user's, not a
+disconnected one — dispatches every one of several). All new files
+pass `py_compile`. **`python manage.py test` has not been run this
+session** — same no-network-access constraint as the IMAP checkpoint's
+first attempt, except this time there's a second, harder blocker: this
+sandbox has neither `celery` nor `redis` installed (nor even `Django`
+itself — confirmed by trying `import django` directly, not assumed),
+and no network to install them, so nothing Celery-related here has
+executed against a real interpreter at all yet, not even a
+Celery-broker-free "task called directly as a function" smoke test.
+Treat this checkpoint as compiled-but-unexecuted until the user runs
+the real suite, same caveat the IMAP checkpoint carried before its own
+450/450 confirmation closed it.
+
+**Known gaps introduced or closed by this checkpoint:** closes "no
+background task runner" and "no 'sync all of a workspace's accounts'
+bulk endpoint" from §4 below. Introduces the same "never run against a
+real interpreter" gap every checkpoint here starts with, now the
+single biggest unverified piece for this slice specifically — bigger
+than the IMAP checkpoint's own unexecuted period, since that one was
+still tested against a real Django/DRF install in-sandbox conceptually
+possible the whole time (just blocked on network for extra packages);
+this one can't even boot `manage.py test` at all without the user's
+own machine, because neither Django nor Celery exist in this sandbox.
+Also introduces: **no real Redis instance has ever been started
+against this code** — every test here calls a task directly as a
+function or patches `.delay`, so the actual broker round-trip
+(`worker` picking up a message `beat` or a view enqueued) has never
+happened, separate from and in addition to the "never run against a
+real interpreter" gap above.
+
+**Next action:** see §5 below.
+
+---
+
 ## 4. Known gaps / not yet done
 
 - **Real OAuth end-to-end has never actually happened, for either
@@ -435,12 +558,17 @@ either.
   the local `IMAPCredential` row only — an app password isn't a grant
   this app can revoke either (see `imap_auth.py`'s own module
   docstring).
-- **No background task runner.** `sync_service.sync_account()` now has
-  a manual trigger (`POST /api/email-accounts/<id>/sync`, slice 3
-  above), but nothing calls it on a schedule or in response to
-  anything other than that direct API call — no Celery/Redis or
-  Django-Q wiring at all yet, and no "sync all of a workspace's
-  accounts" bulk endpoint either.
+- **No background task runner.** ~~`sync_service.sync_account()` now
+  has a manual trigger ... no Celery/Redis or Django-Q wiring at all
+  yet, and no "sync all of a workspace's accounts" bulk endpoint
+  either.~~ **Done** (see the Celery checkpoint above): `config/
+  celery.py` + `email_sync/tasks.py` wire up `sync_account_task`/
+  `sync_all_accounts_task`, a 15-minute `CELERY_BEAT_SCHEDULE` entry,
+  and `POST /api/email-accounts/sync-all` for a user-triggered bulk
+  dispatch. **Compiled-only, never executed** — see that checkpoint's
+  own Tests section; this sandbox has neither Celery, Redis, nor
+  Django installed, so nothing here has run against a real
+  interpreter, let alone a real broker, yet.
 - **No frontend.** Every endpoint built so far (`gmail/connect`,
   `gmail/callback`, `outlook/connect`, `outlook/callback`,
   `imap/connect`, `<id>/sync`, `<id>/disconnect`) returns JSON;
@@ -455,21 +583,30 @@ either.
   provider to matter for — every provider in `PROVIDER_CHOICES`
   except the legacy `mail_app`/`icloud` rows now has a real
   implementation.
-- Every checkpoint's test-count claim through the Outlook checkpoint
-  is real-machine-confirmed, not just sandbox — matching.py, sync
-  orchestration, both OAuth providers, the sync-now endpoint, and the
-  disconnect flow have all had their exact sandbox figure
-  independently reproduced on the user's own Mac (400/400). The IMAP
-  checkpoint above is now real-machine-confirmed too (450/450), just
-  without a sandbox-first run to compare it against — this sandbox
-  still has no network access.
+- Every checkpoint's test-count claim through the IMAP checkpoint is
+  real-machine-confirmed, not just sandbox — matching.py, sync
+  orchestration, both OAuth providers, generic IMAP, the sync-now
+  endpoint, and the disconnect flow have all had their exact figure
+  independently reproduced on the user's own Mac (450/450 as of the
+  IMAP checkpoint). The Celery checkpoint above has **not** gone
+  through any of that yet — it needs `pip install -r requirements.txt`
+  to even get Celery/Redis onto the user's machine before `manage.py
+  test` can run at all, a heavier prerequisite than any earlier
+  checkpoint here (those only needed already-installed Django/DRF plus
+  whatever that checkpoint's own new package was).
 
 ## 5. Next action
 
-1. ~~Run `python manage.py test` for real, in this sandbox, before
-   anything else.~~ **Done, on the user's own machine instead of a
-   sandbox: 450/450.** Remaining validation work is the account-level
-   kind below, not test-execution.
+1. **Run `pip install -r requirements.txt` then `python manage.py
+   test` for real, on the user's own machine, before anything else.**
+   The Celery checkpoint above is compiled-only and has never
+   executed — a heavier ask than any earlier checkpoint's "just run
+   the suite," since `celery`/`redis` need to actually land in the
+   venv first (they weren't there before this checkpoint), and a real
+   `redis-server` needs to be running locally for anything beyond the
+   `.delay`-patched unit tests to mean much end-to-end (the unit tests
+   themselves don't need a running Redis — only a real worker/beat
+   process would).
 2. Decide whether real OAuth end-to-end validation (a real Google
    Cloud project + real Azure AD app registration, real client
    id/secret pairs for both, actual consent-screen click-throughs) and
@@ -479,10 +616,13 @@ either.
    unprompted. Doing all three providers' validation in the same pass
    is probably more efficient than three separate sessions, now that
    all three exist.
-3. Pick the next slice: Celery/Redis background scheduling (now that
-   there's a manual sync entry point and a disconnect flow for three
-   real providers to build on top of), or a frontend for any of this.
-   Not yet decided with the user.
+3. Once item 1 passes, decide whether to actually run `celery -A
+   config worker -l info` and `celery -A config beat -l info` locally
+   against a real `redis-server` — that's the only way to confirm the
+   Beat schedule and `.delay()` dispatch work end-to-end, since no
+   test here exercises a real broker. Separately, a frontend for any
+   of this is still not started and not yet decided with the user
+   either.
 4. Separately, worth the user's own attention: the user's `git status`
    (on branch `django-migration`) has historically shown a mix of
    unrelated pre-existing changes alongside this track's work —

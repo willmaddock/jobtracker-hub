@@ -33,6 +33,7 @@ from .models import EmailAccount
 from .oauth import OAuthConfigError
 from .providers import ProviderAuthError, ProviderError, get_provider
 from .sync_service import sync_account
+from .tasks import sync_account_task
 
 # Session keys used to carry OAuth CSRF state + which workspace
 # initiated the connect across the redirect to Google and back --
@@ -396,6 +397,43 @@ class EmailAccountSyncView(APIView):
         # server error -- so this still returns 200, same way
         # sync_account() itself doesn't raise for that case.
         return Response(body, status=status.HTTP_200_OK)
+
+
+class EmailAccountSyncAllView(APIView):
+    """POST /api/email-accounts/sync-all
+
+    User-triggered counterpart to the sync_all_accounts_task Celery
+    Beat schedule (config/settings/base.py, email_sync/tasks.py):
+    dispatches one sync_account_task.delay(account.id) per currently-
+    connected EmailAccount owned by request.user, across all of their
+    workspaces, and returns immediately with the ids it queued rather
+    than waiting for any of them to finish. This is the "sync all of a
+    workspace's accounts" bulk endpoint flagged as missing in
+    docs/DJANGO_BACKEND_HANDOFF.md §4 -- deliberately a background
+    dispatch, not a loop calling sync_account() inline the way
+    EmailAccountSyncView.post() does for a single account, since a
+    user with several slow/large mailboxes shouldn't have this
+    request block on all of them in series.
+
+    Scoped to workspace__owner=request.user, same ownership pattern as
+    every other per-user action in this module -- a user only ever
+    dispatches syncs for their own accounts, never anyone else's.
+    There's no id in this URL to leak a 404-vs-403 distinction over,
+    unlike EmailAccountSyncView/EmailAccountDisconnectView.
+    """
+
+    def post(self, request):
+        account_ids = list(
+            EmailAccount.objects.filter(
+                workspace__owner=request.user, status="connected"
+            ).values_list("id", flat=True)
+        )
+        for account_id in account_ids:
+            sync_account_task.delay(account_id)
+        return Response(
+            {"dispatched": len(account_ids), "account_ids": account_ids},
+            status=status.HTTP_200_OK,
+        )
 
 
 class EmailAccountDisconnectView(APIView):

@@ -263,3 +263,57 @@ MICROSOFT_TOKEN_ENCRYPTION_KEY = os.environ.get(
 IMAP_TOKEN_ENCRYPTION_KEY = os.environ.get(
     'IMAP_TOKEN_ENCRYPTION_KEY', 'FKMi8JI8yo6UB7lC3PoLor_kuv2SAWF5l_rrD0WsoiA='
 )
+
+
+# Celery / background task scheduling (Phase 10 -- closes the "no
+# background task runner" gap docs/DJANGO_MIGRATION_PLAN.md's Phase 9
+# Known gaps and docs/DJANGO_BACKEND_HANDOFF.md §4 both flag). See
+# config/celery.py for the Celery app itself and email_sync/tasks.py
+# for what actually runs on this schedule.
+#
+# Redis is used as both broker and result backend -- one fewer moving
+# part than a second Postgres-backed result store, and nothing in
+# this app queries a task's result after the fact yet (the manual
+# sync-now endpoint already returns SyncResult synchronously in its
+# own request/response cycle; every Celery path here is fire-and-
+# forget from the caller's side). Real deployments should set
+# CELERY_BROKER_URL/CELERY_RESULT_BACKEND from the environment same as
+# every other credential/connection setting above; the localhost
+# default only lets local dev point at a `redis-server` running on
+# its default port with zero extra config.
+CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', 'redis://localhost:6379/0')
+CELERY_RESULT_BACKEND = os.environ.get('CELERY_RESULT_BACKEND', CELERY_BROKER_URL)
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = TIME_ZONE
+
+# Runs a task inline, synchronously, with no broker/worker process at
+# all when true -- this sandbox (and possibly the user's own machine,
+# until a real `redis-server` is running) has no broker available, so
+# this is what lets `manage.py test`/`manage.py runserver` still work
+# without one. Tests that need to exercise real `.delay()` dispatch
+# (email_sync/tests/test_email_account_sync_all_view.py,
+# test_tasks.py's sync_all_accounts_task tests) still explicitly patch
+# the `.delay` call rather than relying on this flag, so it's safe to
+# leave at its real-deployment default (False) here and only flip it
+# via the environment for a throwaway local run.
+CELERY_TASK_ALWAYS_EAGER = os.environ.get('CELERY_TASK_ALWAYS_EAGER', 'False') == 'True'
+CELERY_TASK_EAGER_PROPAGATES = True
+
+# A plain number here is seconds (equivalent to
+# `datetime.timedelta(seconds=900)`) rather than a `celery.schedules.
+# crontab(...)` instance deliberately -- it keeps this settings module
+# free of any top-level `import celery`, consistent with base.py not
+# importing any other third-party package's code at module level
+# either (every other integration above is env-var-only until the
+# moment a real connect flow needs the actual client library). Wanting
+# a calendar-aligned schedule instead of a fixed interval is a one-line
+# change to `from celery.schedules import crontab` plus this value the
+# day that's actually needed.
+CELERY_BEAT_SCHEDULE = {
+    'sync-all-connected-email-accounts': {
+        'task': 'email_sync.tasks.sync_all_accounts_task',
+        'schedule': 900.0,  # every 15 minutes
+    },
+}

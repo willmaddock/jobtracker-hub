@@ -230,11 +230,20 @@ just the current-state summary):
   (`outlook_oauth.disconnect_outlook_account()`) is local-only —
   unlike Google's v2 endpoint, Microsoft's v2.0 flow has no
   application-callable revoke API (see that module's own docstring).
-- **Not started:** the background-task runner (Celery/Redis or
-  Django-Q) — sync now has a manual per-account trigger but nothing
-  scheduled or workspace-wide; any frontend UI for connecting an
+- **Background-task runner** — ~~not started~~ **done, compiled-only,
+  never executed** (docs/DJANGO_BACKEND_HANDOFF.md's Celery checkpoint
+  and its own §4/§5). `backend/config/celery.py` + `email_sync/
+  tasks.py`: `sync_account_task`/`sync_all_accounts_task` (Celery,
+  Redis as broker+result backend), a 15-minute `CELERY_BEAT_SCHEDULE`
+  entry, and `POST /api/email-accounts/sync-all` for a user-triggered
+  bulk dispatch across all of a workspace's connected accounts. This
+  sandbox has neither Django, Celery, nor Redis installed and no
+  network to get them, so nothing here has run against a real
+  interpreter or a real broker yet — a heavier unverified gap than any
+  provider checkpoint above, all of which at least had Django/DRF
+  already available in-sandbox. Frontend UI for connecting an
   account, triggering a sync, disconnecting one, or reviewing
-  Discoveries/AccountMatches.
+  Discoveries/AccountMatches is still not started either.
 - **Generic IMAP provider (message-fetching + connect flow)** — done
   and real-machine-confirmed (`manage.py test` → 450/450 full suite,
   59/59 for `core` alone, run on the user's own machine — no network

@@ -2,6 +2,7 @@ from django.urls import path
 
 from .views import (
     EmailAccountDisconnectView,
+    EmailAccountSyncAllView,
     EmailAccountSyncView,
     GmailConnectView,
     GmailOAuthCallbackView,
@@ -36,6 +37,11 @@ urlpatterns = [
         "email-accounts/<int:pk>/sync",
         EmailAccountSyncView.as_view(),
         name="email-account-sync",
+    ),
+    path(
+        "email-accounts/sync-all",
+        EmailAccountSyncAllView.as_view(),
+        name="email-account-sync-all",
     ),
     path(
         "email-accounts/<int:pk>/disconnect",
