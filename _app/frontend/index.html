@@ -596,6 +596,11 @@ const IMPORT_NOTICE_KEY = "jth_import_notice";
 // the backend reports stale_siblings_found > 0, and folded into the same
 // post-reload toast rather than getting a second toast slot of its own.
 const STALE_SIBLINGS_KEY = "jth_stale_siblings";
+// Pipeline's "Sort by" choice, saved locally only. Defaults to "company"
+// (Company A–Z) on first-ever load; any change the person makes after that
+// persists across navigating to other pages, full page reloads, and
+// backend index rebuilds alike, since none of those touch localStorage.
+const PIPELINE_SORT_KEY = "jth_pipeline_sort";
 
 // Advisory only -- never gates behavior. The folder-warning toast uses this
 // to suggest a browser known (from real testing against this app -- see
@@ -2637,7 +2642,13 @@ function PipelinePage({apps, meta, docsByItemId, ensureDocs, dossierByItemId, en
   const [view, setView] = useState("list");
   const [statusFilter, setStatusFilter] = useState(new Set(statusOrder));
   const [showArchived, setShowArchived] = useState(false);
-  const [sortBy, setSortBy] = useState("company");
+  const [sortBy, setSortBy] = useState(() => {
+    try { return localStorage.getItem(PIPELINE_SORT_KEY) || "company"; } catch(e) { return "company"; }
+  });
+  const updateSortBy = useCallback((next) => {
+    setSortBy(next);
+    try { localStorage.setItem(PIPELINE_SORT_KEY, next); } catch(e) { /* best-effort */ }
+  }, []);
 
   const q = (searchQuery || "").trim().toLowerCase();
   const sorters = {
@@ -2730,7 +2741,7 @@ function PipelinePage({apps, meta, docsByItemId, ensureDocs, dossierByItemId, en
         ))}
         <label style={{display:"flex", alignItems:"center", gap:6, color:"var(--text-soft)", fontSize:12}}>
           Sort by
-          <select className="btn subtle" style={{padding:"4px 8px"}} value={sortBy} onChange={e => setSortBy(e.target.value)}>
+          <select className="btn subtle" style={{padding:"4px 8px"}} value={sortBy} onChange={e => updateSortBy(e.target.value)}>
             <option value="days_quiet">Days quiet</option>
             <option value="company">Company A–Z</option>
             <option value="next_action">Next action date</option>
