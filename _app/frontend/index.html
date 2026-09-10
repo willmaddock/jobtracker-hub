@@ -5009,12 +5009,19 @@ function ResolveDiscoveryModal({discovery, apps, onClose, onPick, onCreate, atta
   );
 }
 
-function EmailHubPage({fireToast, setPage, setSelectedKey, refreshStatus, refreshApps, onCountChange, apps}){
+function EmailHubPage({fireToast, setPage, setSelectedKey, refreshStatus, refreshApps, onCountChange, apps,
+  scanning, syncingAll, syncing, whitelistingAllKnown, addingManualSender, opBusy, syncVersion,
+  scan, syncOne, syncAll, onWhitelistAndCheckInboxNow, whitelistAllKnownSenders}){
   // ---- connected accounts (same calls AccountsSection used to make) ----
+  // scanning/syncingAll/syncing/whitelistingAllKnown/addingManualSender and
+  // the scan/syncOne/syncAll/whitelist* functions are now owned by App and
+  // passed down as props -- see the comment above their definitions there.
+  // Keeping them local here was what let a scan() or syncAll() in flight
+  // get silently orphaned whenever this page unmounted (navigating to a
+  // different sidebar page), since this component's own state and
+  // in-flight promise both got torn down together.
   const [accounts, setAccounts] = useState(null);
   const [acctError, setAcctError] = useState(null);
-  const [syncing, setSyncing] = useState(null);
-  const [syncingAll, setSyncingAll] = useState(false);
   const [picker, setPicker] = useState(null);
   const [pickerLoading, setPickerLoading] = useState(false);
   const [connecting, setConnecting] = useState(null);
@@ -5052,26 +5059,6 @@ function EmailHubPage({fireToast, setPage, setSelectedKey, refreshStatus, refres
     setConnectingAll(false);
   };
 
-  const syncOne = async (id) => {
-    setSyncing(id); setAcctError(null);
-    try { await apiPost(`/api/accounts/${id}/sync`, {}); await loadAccounts(); }
-    catch (e) { setAcctError(String(e.message || e)); }
-    finally { setSyncing(null); }
-  };
-
-  const syncAll = async () => {
-    if (!accounts || accounts.length === 0) return;
-    setSyncingAll(true); setAcctError(null);
-    for (const a of accounts) {
-      setSyncing(a.id);
-      try { await apiPost(`/api/accounts/${a.id}/sync`, {}); }
-      catch (e) { /* one account's failure shouldn't stop the rest */ }
-    }
-    setSyncing(null);
-    await loadAccounts();
-    setSyncingAll(false);
-  };
-
   const disconnect = async (id) => {
     if (!window.confirm("Disconnect this account? Matched emails already linked to applications stay put.")) return;
     try { await apiDelete(`/api/accounts/${id}`); await loadAccounts(); }
@@ -5105,7 +5092,6 @@ function EmailHubPage({fireToast, setPage, setSelectedKey, refreshStatus, refres
   // ---- discoveries queue (same calls DiscoveriesSection used to make) ----
   const [discoveries, setDiscoveries] = useState(null);
   const [discError, setDiscError] = useState(null);
-  const [scanning, setScanning] = useState(false);
   const [backfilling, setBackfilling] = useState(false);
   // Last backfill's per-item results, so the button's "Saved N PDFs" toast
   // isn't the only trace of what happened -- kept until dismissed or the
@@ -5218,7 +5204,11 @@ function EmailHubPage({fireToast, setPage, setSelectedKey, refreshStatus, refres
     } finally { setSavingJobId(null); }
   };
 
-  useEffect(() => { loadAccounts(); loadDiscoveries(); loadJobPostings(); }, []);
+  // Depends on syncVersion (bumped by App whenever a hoisted scan/sync/
+  // whitelist op finishes, including ones that ran while this page was
+  // unmounted) as well as the initial mount, so returning to this page
+  // always shows the result of whatever ran in the background.
+  useEffect(() => { loadAccounts(); loadDiscoveries(); loadJobPostings(); }, [syncVersion]);
 
   const toggleExpand = async (id) => {
     if (expandedId === id) { setExpandedId(null); return; }
@@ -5234,27 +5224,6 @@ function EmailHubPage({fireToast, setPage, setSelectedKey, refreshStatus, refres
       } catch (e) { setBodies(prev => ({ ...prev, [id]: null })); }
       finally { setBodyLoadingId(null); }
     }
-  };
-
-  const scan = async () => {
-    setScanning(true); setDiscError(null);
-    try {
-      const accts = await apiGet("/api/accounts");
-      for (const a of accts) {
-        try { await apiPost(`/api/accounts/${a.id}/discover`, {}); }
-        catch (e) { /* one blocked/erroring account shouldn't stop the rest */ }
-      }
-      await loadDiscoveries();
-      await loadJobPostings();
-      let backfillResult = null;
-      try { backfillResult = await apiPost("/api/discoveries/backfill-email-pdfs", {}); }
-      catch (e) { /* non-critical */ }
-      if (backfillResult && backfillResult.saved > 0) {
-        if (refreshApps) await refreshApps();
-        if (fireToast) fireToast(`Saved ${backfillResult.saved} missing email PDF${backfillResult.saved === 1 ? "" : "s"}.`);
-      }
-    } catch (e) { setDiscError(String(e.message || e)); }
-    finally { setScanning(false); }
   };
 
   const backfillEmailPdfs = async () => {
@@ -5408,56 +5377,17 @@ function EmailHubPage({fireToast, setPage, setSelectedKey, refreshStatus, refres
   // whitelist an address directly, then immediately check the inbox for
   // its mail in one step (previously two separate buttons/clicks).
   const [manualSender, setManualSender] = useState("");
-  const [addingManualSender, setAddingManualSender] = useState(false);
-  // Whitelist every entry in KNOWN_JOB_ALERT_SENDERS in one click instead
-  // of walking through them one at a time (fill field, whitelist, repeat
-  // x6). One scan at the end, not one per sender.
-  const [whitelistingAllKnown, setWhitelistingAllKnown] = useState(false);
 
-  // Combined version of the two steps above: whitelist the typed sender,
-  // then immediately run the same scan `scan()` below runs from the
-  // toolbar -- one click instead of "add sender" then hunt for "Check
-  // inbox now". `scan` is defined further down (it needs accts loaded
-  // first) but is stable across renders, so calling it here is safe.
+  // Thin local wrapper around the hoisted onWhitelistAndCheckInboxNow prop:
+  // clears the (locally-owned) text field up front, since the hoisted
+  // version has no access to this component's manualSender state and
+  // needs to keep working correctly even if this component unmounts
+  // mid-request.
   const whitelistAndCheckInboxNow = async () => {
     const sender = manualSender.trim();
     if (!sender) return;
-    setAddingManualSender(true); setDiscError(null);
-    try {
-      const form = new FormData();
-      form.append("sender", sender);
-      const result = await uploadFormData(`${API_BASE}/api/discoveries/sender-classification`, form);
-      setDiscoveries(result.discoveries);
-      if (onCountChange) onCountChange(result.discoveries.length);
-      setManualSender("");
-      await scan();
-      if (fireToast) fireToast(`Whitelisted "${sender}" and checked the inbox for its mail.`);
-    } catch (e) { setDiscError(String(e.message || e)); }
-    finally { setAddingManualSender(false); }
-  };
-
-  // "Whitelist all known senders" -- same idea as whitelistAndCheckInboxNow
-  // above but for every entry in KNOWN_JOB_ALERT_SENDERS at once, so the
-  // user isn't clicking each chip then re-typing/whitelisting individually.
-  // Sequential (not Promise.all) so a single failure is easy to attribute
-  // to one sender, then a single scan() at the end covers all of them.
-  const whitelistAllKnownSenders = async () => {
-    setWhitelistingAllKnown(true); setDiscError(null);
-    try {
-      let latest = null;
-      for (const k of KNOWN_JOB_ALERT_SENDERS) {
-        const form = new FormData();
-        form.append("sender", k.domain);
-        latest = await uploadFormData(`${API_BASE}/api/discoveries/sender-classification`, form);
-      }
-      if (latest) {
-        setDiscoveries(latest.discoveries);
-        if (onCountChange) onCountChange(latest.discoveries.length);
-      }
-      await scan();
-      if (fireToast) fireToast(`Whitelisted all ${KNOWN_JOB_ALERT_SENDERS.length} known senders and checked the inbox.`);
-    } catch (e) { setDiscError(String(e.message || e)); }
-    finally { setWhitelistingAllKnown(false); }
+    setManualSender("");
+    await onWhitelistAndCheckInboxNow(sender);
   };
 
 
@@ -5630,7 +5560,8 @@ function EmailHubPage({fireToast, setPage, setSelectedKey, refreshStatus, refres
       {discError && <div className="warning-banner" style={{marginTop:8}}>{discError}</div>}
 
       <div style={{display:"flex", gap:8, flexWrap:"wrap", alignItems:"center", marginTop:12, marginBottom:14}}>
-        <button className="btn" style={{fontSize:12, padding:"6px 12px"}} disabled={scanning} onClick={scan}>
+        <button className="btn" style={{fontSize:12, padding:"6px 12px"}} disabled={opBusy} onClick={scan}
+          title={syncingAll ? "Sync all is in progress -- wait for it to finish first." : undefined}>
           {scanning ? "Checking…" : <><Icon name="refresh" size={13} style={{marginRight:4, verticalAlign:"-2px"}}/>Check inbox now</>}
         </button>
         <button className="btn" style={{fontSize:12, padding:"6px 12px"}} disabled={backfilling} onClick={backfillEmailPdfs}
@@ -5762,7 +5693,7 @@ function EmailHubPage({fireToast, setPage, setSelectedKey, refreshStatus, refres
                     </div>
                     <div className="doc-actions">
                       <button className="btn" style={{fontSize:11.5, padding:"5px 10px"}}
-                        disabled={syncing === a.id} onClick={() => syncOne(a.id)}>
+                        disabled={syncing === a.id || opBusy} onClick={() => syncOne(a.id)}>
                         {syncing === a.id ? "Syncing…" : "Sync now"}
                       </button>
                       <button className="btn" style={{fontSize:11.5, padding:"5px 10px"}} onClick={() => disconnect(a.id)}>
@@ -5777,7 +5708,8 @@ function EmailHubPage({fireToast, setPage, setSelectedKey, refreshStatus, refres
           <div style={{display:"flex", gap:8, flexWrap:"wrap", alignItems:"center"}}>
             {accounts.length > 1 && (
               <button className="btn" style={{fontSize:12, padding:"6px 12px"}}
-                disabled={syncingAll || syncing != null} onClick={syncAll}>
+                disabled={opBusy || syncing != null} onClick={syncAll}
+                title={scanning ? "Check inbox is in progress -- wait for it to finish first." : undefined}>
                 {syncingAll ? "Syncing all…" : <><Icon name="refresh" size={13} style={{marginRight:4, verticalAlign:"-2px"}}/>Sync all</>}
               </button>
             )}
@@ -5852,7 +5784,7 @@ function EmailHubPage({fireToast, setPage, setSelectedKey, refreshStatus, refres
           </button>
         ))}
         <button type="button" className="btn primary" style={{fontSize:11.5, padding:"4px 9px", marginLeft:4}}
-          disabled={whitelistingAllKnown || scanning} onClick={whitelistAllKnownSenders}
+          disabled={whitelistingAllKnown || opBusy} onClick={whitelistAllKnownSenders}
           title="Whitelist every known sender above and check the inbox for their mail, in one step">
           {whitelistingAllKnown ? "Whitelisting all…" : "Whitelist all known senders"}
         </button>
@@ -5860,10 +5792,10 @@ function EmailHubPage({fireToast, setPage, setSelectedKey, refreshStatus, refres
       <div style={{display:"flex", gap:8, flexWrap:"wrap", alignItems:"center", marginTop:8}}>
         <input type="text" placeholder="jobalerts-noreply@linkedin.com" value={manualSender}
           onChange={e => setManualSender(e.target.value)}
-          onKeyDown={e => { if (e.key === "Enter" && !addingManualSender) whitelistAndCheckInboxNow(); }}
+          onKeyDown={e => { if (e.key === "Enter" && !addingManualSender && !opBusy) whitelistAndCheckInboxNow(); }}
           style={{fontSize:12.5, padding:"6px 10px", borderRadius:8, border:"1px solid var(--border)", background:"var(--panel)", color:"var(--text)", minWidth:260}} />
         <button className="btn primary" style={{fontSize:12, padding:"6px 12px"}}
-          disabled={!manualSender.trim() || addingManualSender || scanning} onClick={whitelistAndCheckInboxNow}
+          disabled={!manualSender.trim() || addingManualSender || opBusy} onClick={whitelistAndCheckInboxNow}
           title="For a sender whose mail always looks like a job-alert digest (LinkedIn Job Alerts, Handshake, Built In, etc.) -- these never produce a review card on their own, since digest-shaped subjects are excluded from scanning by default. This whitelists the address and checks the inbox for its mail in one step.">
           {addingManualSender ? "Whitelisting…" : scanning ? "Checking…" : "Whitelist & check inbox now"}
         </button>
@@ -6740,6 +6672,117 @@ function App(){
     return () => { cancelled = true; };
   }, []);
 
+  // ---- Email Sync's long-running background ops, hoisted out of
+  // EmailHubPage. That page unmounts whenever the user switches sidebar
+  // pages (see `page === "email"` below) -- when it did, an in-flight
+  // scan()/syncAll() loop kept hitting the server, but its completion
+  // callbacks (setScanning(false), etc.) landed on a dead component and
+  // were silently dropped, so the button reset to its idle label on
+  // return with no memory anything had run. Living here instead means
+  // these survive navigation like any other top-level state.
+  // `emailSyncVersion` is bumped whenever one of these finishes, so
+  // EmailHubPage (if mounted) knows to reload its accounts/discoveries/
+  // job-postings lists even on a run it didn't itself kick off.
+  const [emailScanning, setEmailScanning] = useState(false);
+  const [emailSyncingAll, setEmailSyncingAll] = useState(false);
+  const [emailSyncingId, setEmailSyncingId] = useState(null);
+  const [emailWhitelistingAllKnown, setEmailWhitelistingAllKnown] = useState(false);
+  const [emailAddingManualSender, setEmailAddingManualSender] = useState(false);
+  const [emailSyncVersion, setEmailSyncVersion] = useState(0);
+  const bumpEmailSyncVersion = useCallback(() => setEmailSyncVersion(v => v + 1), []);
+
+  // scanning and syncingAll used to be independent flags that didn't
+  // check each other, so nothing stopped both loops from running
+  // concurrently against the same accounts. They now share one
+  // "something's running" gate.
+  const emailOpBusy = emailScanning || emailSyncingAll;
+
+  const emailScan = useCallback(async () => {
+    if (emailOpBusy) return;
+    setEmailScanning(true);
+    try {
+      const accts = await apiGet("/api/accounts");
+      for (const a of accts) {
+        try { await apiPost(`/api/accounts/${a.id}/discover`, {}); }
+        catch (e) { /* one blocked/erroring account shouldn't stop the rest */ }
+      }
+      let backfillResult = null;
+      try { backfillResult = await apiPost("/api/discoveries/backfill-email-pdfs", {}); }
+      catch (e) { /* non-critical */ }
+      if (backfillResult && backfillResult.saved > 0) {
+        await refreshApps();
+        fireToast(`Saved ${backfillResult.saved} missing email PDF${backfillResult.saved === 1 ? "" : "s"}.`);
+      }
+    } catch (e) {
+      fireToast(String(e.message || e));
+    } finally {
+      setEmailScanning(false);
+      bumpEmailSyncVersion();
+    }
+  }, [emailOpBusy, refreshApps, fireToast, bumpEmailSyncVersion]);
+
+  const emailSyncOne = useCallback(async (id) => {
+    setEmailSyncingId(id);
+    try { await apiPost(`/api/accounts/${id}/sync`, {}); }
+    catch (e) { fireToast(String(e.message || e)); }
+    finally { setEmailSyncingId(null); bumpEmailSyncVersion(); }
+  }, [fireToast, bumpEmailSyncVersion]);
+
+  const emailSyncAll = useCallback(async () => {
+    if (emailOpBusy) return;
+    setEmailSyncingAll(true);
+    try {
+      const accts = await apiGet("/api/accounts");
+      for (const a of accts) {
+        setEmailSyncingId(a.id);
+        try { await apiPost(`/api/accounts/${a.id}/sync`, {}); }
+        catch (e) { /* one account's failure shouldn't stop the rest */ }
+      }
+    } catch (e) {
+      fireToast(String(e.message || e));
+    } finally {
+      setEmailSyncingId(null);
+      setEmailSyncingAll(false);
+      bumpEmailSyncVersion();
+    }
+  }, [emailOpBusy, fireToast, bumpEmailSyncVersion]);
+
+  const emailWhitelistAndCheckInboxNow = useCallback(async (sender) => {
+    const trimmed = (sender || "").trim();
+    if (!trimmed) return;
+    setEmailAddingManualSender(true);
+    try {
+      const form = new FormData();
+      form.append("sender", trimmed);
+      await uploadFormData(`${API_BASE}/api/discoveries/sender-classification`, form);
+      bumpEmailSyncVersion();
+      await emailScan();
+      fireToast(`Whitelisted "${trimmed}" and checked the inbox for its mail.`);
+    } catch (e) {
+      fireToast(String(e.message || e));
+    } finally {
+      setEmailAddingManualSender(false);
+    }
+  }, [emailScan, fireToast, bumpEmailSyncVersion]);
+
+  const emailWhitelistAllKnownSenders = useCallback(async () => {
+    setEmailWhitelistingAllKnown(true);
+    try {
+      for (const k of KNOWN_JOB_ALERT_SENDERS) {
+        const form = new FormData();
+        form.append("sender", k.domain);
+        await uploadFormData(`${API_BASE}/api/discoveries/sender-classification`, form);
+      }
+      bumpEmailSyncVersion();
+      await emailScan();
+      fireToast(`Whitelisted all ${KNOWN_JOB_ALERT_SENDERS.length} known senders and checked the inbox.`);
+    } catch (e) {
+      fireToast(String(e.message || e));
+    } finally {
+      setEmailWhitelistingAllKnown(false);
+    }
+  }, [emailScan, fireToast, bumpEmailSyncVersion]);
+
   // Global hotkeys: ⌘K/Ctrl+K opens the command palette; Esc closes
   // whatever's on top (palette > viewer > settings), in that priority order.
   useEffect(() => {
@@ -6831,7 +6874,13 @@ function App(){
           )}
           {page === "email" && (
             <EmailHubPage fireToast={fireToast} setPage={setPage} setSelectedKey={setSelectedKey}
-              refreshStatus={refreshStatus} refreshApps={refreshApps} onCountChange={setEmailCount} apps={apps} />
+              refreshStatus={refreshStatus} refreshApps={refreshApps} onCountChange={setEmailCount} apps={apps}
+              scanning={emailScanning} syncingAll={emailSyncingAll} syncing={emailSyncingId}
+              whitelistingAllKnown={emailWhitelistingAllKnown} addingManualSender={emailAddingManualSender}
+              opBusy={emailOpBusy} syncVersion={emailSyncVersion}
+              scan={emailScan} syncOne={emailSyncOne} syncAll={emailSyncAll}
+              onWhitelistAndCheckInboxNow={emailWhitelistAndCheckInboxNow}
+              whitelistAllKnownSenders={emailWhitelistAllKnownSenders} />
           )}
           {page === "insights" && <InsightsPage apps={apps} meta={meta} themeTick={theme.applied} />}
           {page === "hub" && <SearchHubPage />}
