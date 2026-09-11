@@ -2386,24 +2386,32 @@ def save_override(app_id: int, req: OverrideRequest):
     before writing, so your notes/status survive an index rebuild even
     though the id itself doesn't (see item_key_for)."""
     jt_conn, ov_conn = get_conns()
-    item_key = item_key_for(jt_conn, app_id)
+    try:
+        item_key = item_key_for(jt_conn, app_id)
 
-    fields = compute_override_fields(req.model_fields_set, req.model_dump(), req.reset_status)
-    ov.upsert_override(ov_conn, item_key, **fields)
+        fields = compute_override_fields(
+            req.model_fields_set,
+            req.model_dump(),
+            req.reset_status,
+        )
+        ov.upsert_override(ov_conn, item_key, **fields)
 
-    # Item 7: log a status_history row whenever manual_status actually
-    # changed -- see resolve_effective_status's docstring.
-    if "manual_status" in fields:
-        item_row = jt_conn.execute("SELECT status FROM items WHERE id = ?", (app_id,)).fetchone()
-        auto_status = item_row["status"] if item_row else "unknown"
-        effective_status = resolve_effective_status(fields, auto_status)
-        ov.append_status_history(ov_conn, item_key, effective_status)
+        # Item 7: log a status_history row whenever manual_status actually
+        # changed -- see resolve_effective_status's docstring.
+        if "manual_status" in fields:
+            item_row = jt_conn.execute(
+                "SELECT status FROM items WHERE id = ?",
+                (app_id,),
+            ).fetchone()
+            auto_status = item_row["status"] if item_row else "unknown"
+            effective_status = resolve_effective_status(fields, auto_status)
+            ov.append_status_history(ov_conn, item_key, effective_status)
 
-    jt_conn.close()
-    ov_conn.close()
-    return {"ok": True, "id": app_id}
-
-
+        return {"ok": True, "id": app_id}
+    finally:
+        # Always release both connections, including failed override writes.
+        jt_conn.close()
+        ov_conn.close()
 @app.post("/api/applications/bulk-override")
 def bulk_override(req: BulkOverrideRequest):
     """Apply the same override fields to many items at once — powers the

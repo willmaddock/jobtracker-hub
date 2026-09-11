@@ -357,6 +357,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.commit()
 
 
+_SCHEMA_READY: set[str] = set()  # db paths whose schema/migration has already run this process
+
+
 def get_conn(db_path: Path) -> sqlite3.Connection:
     # overrides.db now lives inside the workspace's own root (see
     # workspace.py's _portable_ov_db_path), which — unlike this app's own
@@ -376,8 +379,24 @@ def get_conn(db_path: Path) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout=30000")
     _ensure_wal_mode(conn)
-    conn.executescript(SCHEMA)
-    _migrate(conn)
+    # executescript(SCHEMA) and _migrate() are idempotent but each still
+    # needs a brief write lock (a no-op CREATE TABLE IF NOT EXISTS or
+    # ALTER-TABLE-column-check is still a DDL attempt as far as SQLite's
+    # locking is concerned). api.py's get_conns() opens a brand-new
+    # connection on *every* request, so re-running this on every single
+    # call adds a redundant write-lock acquisition to every API call --
+    # harmless in isolation, but it stacks up fast during a burst (a
+    # "Check inbox now" sweep across several accounts, a backfill, and a
+    # few Needs-Attention edits landing within the same second or two),
+    # and was a contributor to "database is locked" surfacing on
+    # unrelated /override calls during exactly that kind of burst. Since
+    # the schema can't change out from under a running process, only do
+    # this once per db path per process.
+    key = str(db_path)
+    if key not in _SCHEMA_READY:
+        conn.executescript(SCHEMA)
+        _migrate(conn)
+        _SCHEMA_READY.add(key)
     return conn
 
 
@@ -435,6 +454,26 @@ def get_all_overrides(conn: sqlite3.Connection) -> dict[str, dict]:
     return {r["item_key"]: dict(r) for r in conn.execute("SELECT * FROM item_overrides")}
 
 
+def _execute_with_retry(conn: sqlite3.Connection, sql: str, params: dict, attempts: int = 4) -> None:
+    """Runs one write statement, retrying on "database is locked" with a
+    short backoff before giving up. busy_timeout=30000 (set in get_conn())
+    already makes SQLite itself retry internally for up to 30s, so this
+    is a second-line safety net for the case that already outlasts that --
+    e.g. a "Check inbox now" sweep across several accounts plus a backfill
+    landing in the same window as a Needs-Attention edit -- rather than
+    the first line of defense. Only "database is locked" is retried;
+    anything else raises immediately."""
+    for attempt in range(attempts):
+        try:
+            conn.execute(sql, params)
+            conn.commit()
+            return
+        except sqlite3.OperationalError as e:
+            if "locked" not in str(e).lower() or attempt == attempts - 1:
+                raise
+            time.sleep(0.3 * (attempt + 1))
+
+
 def upsert_override(conn: sqlite3.Connection, item_key: str, **fields) -> None:
     """Merge `fields` into any existing override row for this item_key."""
     existing = get_override(conn, item_key)
@@ -450,7 +489,8 @@ def upsert_override(conn: sqlite3.Connection, item_key: str, **fields) -> None:
         "activity_override": existing.get("activity_override"),
         **fields,
     }
-    conn.execute(
+    _execute_with_retry(
+        conn,
         """
         INSERT INTO item_overrides
             (item_key, manual_status, notes, date_applied, date_applied_source, next_action, next_action_date, archived, snoozed_until, activity_override, updated_at)
@@ -481,7 +521,6 @@ def upsert_override(conn: sqlite3.Connection, item_key: str, **fields) -> None:
             "updated_at": now_iso(),
         },
     )
-    conn.commit()
 
 
 # --- company aliases (merge tool) --------------------------------------------

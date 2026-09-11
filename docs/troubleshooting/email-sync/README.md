@@ -12,6 +12,7 @@ point doesn't require reading the full living handoff first.
 | Job Postings cards have no "Open job" link | [`AUDIT_FINDINGS.md`](AUDIT_FINDINGS.md) Finding 4 (and Finding 6, a second regression of the same symptom) |
 | "Couldn't load the original email" on some/all discoveries | [`AUDIT_FINDINGS.md`](AUDIT_FINDINGS.md) Finding 5 |
 | Intermittent "database is locked" right after launch | [`AUDIT_FINDINGS.md`](AUDIT_FINDINGS.md) Finding 7 |
+| "database is locked" on `/override` saves well after startup, surviving `busy_timeout` + retries | [`AUDIT_FINDINGS.md`](AUDIT_FINDINGS.md) Finding 9 (root cause still open) |
 | A tracker's existing data has stale `posting_url = NULL` rows from before a fix | `scripts/troubleshooting/backfill_job_posting_urls.py` |
 | Flood of bogus account matches from short role-term over-matching (e.g. "IT", "PM") | `scripts/troubleshooting/cleanup_bogus_account_matches.py` |
 | `extract_posting_urls()` finds zero/wrong links for a specific real email | `scripts/troubleshooting/debug_extract_urls.py`, then `debug_raw_source.py` if that finds zero raw URLs too |
