@@ -2382,55 +2382,62 @@ def save_override(app_id: int, req: OverrideRequest):
     before writing, so your notes/status survive an index rebuild even
     though the id itself doesn't (see item_key_for)."""
     jt_conn, ov_conn = get_conns()
-    item_key = item_key_for(jt_conn, app_id)
+    try:
+        item_key = item_key_for(jt_conn, app_id)
 
-    # Use model_fields_set (not `is not None`) so an explicitly-sent null
-    # (e.g. "Mark followed up" clearing next_action/next_action_date) is
-    # actually applied instead of being indistinguishable from "field not
-    # sent at all" and silently dropped by upsert_override's merge.
-    fields: dict = {}
-    if req.reset_status:
-        fields["manual_status"] = None
-    elif "manual_status" in req.model_fields_set:
-        fields["manual_status"] = req.manual_status
-    if "notes" in req.model_fields_set:
-        fields["notes"] = req.notes
-    if "date_applied" in req.model_fields_set:
-        fields["date_applied"] = req.date_applied
-        # A date_applied write that doesn't also carry a source is a manual
-        # retype (or a clear) -- any provenance label from an earlier
-        # detected-date accept is now stale, so drop it here rather than
-        # leaving a "Detected from ..." caption pointing at a date the user
-        # just overwrote by hand. When the caller DOES send a source (accepting
-        # a suggestion), the branch below applies it instead of this default.
-        fields["date_applied_source"] = None
-    if "date_applied_source" in req.model_fields_set:
-        fields["date_applied_source"] = req.date_applied_source
-    if "next_action" in req.model_fields_set:
-        fields["next_action"] = req.next_action
-    if "next_action_date" in req.model_fields_set:
-        fields["next_action_date"] = req.next_action_date
-    if "archived" in req.model_fields_set:
-        fields["archived"] = int(req.archived) if req.archived is not None else 0
-    if "snoozed_until" in req.model_fields_set:
-        fields["snoozed_until"] = req.snoozed_until
-    if "activity_override" in req.model_fields_set:
-        fields["activity_override"] = req.activity_override
-    ov.upsert_override(ov_conn, item_key, **fields)
+        # Use model_fields_set (not `is not None`) so an explicitly-sent null
+        # (e.g. "Mark followed up" clearing next_action/next_action_date) is
+        # actually applied instead of being indistinguishable from "field not
+        # sent at all" and silently dropped by upsert_override's merge.
+        fields: dict = {}
+        if req.reset_status:
+            fields["manual_status"] = None
+        elif "manual_status" in req.model_fields_set:
+            fields["manual_status"] = req.manual_status
+        if "notes" in req.model_fields_set:
+            fields["notes"] = req.notes
+        if "date_applied" in req.model_fields_set:
+            fields["date_applied"] = req.date_applied
+            # A date_applied write that doesn't also carry a source is a manual
+            # retype (or a clear) -- any provenance label from an earlier
+            # detected-date accept is now stale, so drop it here rather than
+            # leaving a "Detected from ..." caption pointing at a date the user
+            # just overwrote by hand. When the caller DOES send a source (accepting
+            # a suggestion), the branch below applies it instead of this default.
+            fields["date_applied_source"] = None
+        if "date_applied_source" in req.model_fields_set:
+            fields["date_applied_source"] = req.date_applied_source
+        if "next_action" in req.model_fields_set:
+            fields["next_action"] = req.next_action
+        if "next_action_date" in req.model_fields_set:
+            fields["next_action_date"] = req.next_action_date
+        if "archived" in req.model_fields_set:
+            fields["archived"] = int(req.archived) if req.archived is not None else 0
+        if "snoozed_until" in req.model_fields_set:
+            fields["snoozed_until"] = req.snoozed_until
+        if "activity_override" in req.model_fields_set:
+            fields["activity_override"] = req.activity_override
+        ov.upsert_override(ov_conn, item_key, **fields)
 
-    # Item 7: log a status_history row whenever manual_status actually
-    # changes (set OR cleared via reset_status) -- the resulting EFFECTIVE
-    # status is what gets logged, not the raw manual_status field, so a
-    # reset-to-auto is still a findable transition (see overrides_store.py).
-    if "manual_status" in fields:
-        item_row = jt_conn.execute("SELECT status FROM items WHERE id = ?", (app_id,)).fetchone()
-        auto_status = item_row["status"] if item_row else "unknown"
-        effective_status = fields["manual_status"] or auto_status
-        ov.append_status_history(ov_conn, item_key, effective_status)
+        # Item 7: log a status_history row whenever manual_status actually
+        # changes (set OR cleared via reset_status) -- the resulting EFFECTIVE
+        # status is what gets logged, not the raw manual_status field, so a
+        # reset-to-auto is still a findable transition (see overrides_store.py).
+        if "manual_status" in fields:
+            item_row = jt_conn.execute("SELECT status FROM items WHERE id = ?", (app_id,)).fetchone()
+            auto_status = item_row["status"] if item_row else "unknown"
+            effective_status = fields["manual_status"] or auto_status
+            ov.append_status_history(ov_conn, item_key, effective_status)
 
-    jt_conn.close()
-    ov_conn.close()
-    return {"ok": True, "id": app_id}
+        return {"ok": True, "id": app_id}
+    finally:
+        # Always release both connections, even if upsert_override raised
+        # (e.g. "database is locked" after exhausting its own retries) --
+        # previously this only ran on the success path, so a failed save
+        # leaked an open connection every time it happened, on top of
+        # returning the 500 to the user.
+        jt_conn.close()
+        ov_conn.close()
 
 
 @app.post("/api/applications/bulk-override")

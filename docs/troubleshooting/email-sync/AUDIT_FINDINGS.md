@@ -308,6 +308,66 @@ its own handoff (`docs/DJANGO_BACKEND_HANDOFF.md`) and was not touched.
 
 ---
 
+## Finding 9 — "database is locked" on `/override` saves, persisting well past `busy_timeout` (root cause still open)
+
+**Symptom:** `POST /api/applications/{id}/override` intermittently returns
+`500 sqlite3.OperationalError: database is locked` from inside
+`upsert_override()` → `_execute_with_retry()`, across several different
+item IDs in the same run. Unlike Finding 7, this isn't confined to the
+first few requests after startup — it was observed well into a session,
+after `get_conns()` had already been called successfully many times.
+
+**What's different from Finding 7:** Finding 7's race is bounded by
+design — `busy_timeout=30000` plus `_execute_with_retry()`'s own backoff
+(4 attempts) should together absorb any ordinary in-process contention
+long before either gives up. In the session that surfaced this finding,
+the lock survived *both* of those, repeatedly. That duration doesn't
+match contention between two of this app's own SQLite connections —
+something else was holding the file.
+
+**Fixed this session (real bugs, but partial mitigations — see below):**
+- `_app/overrides_store.py` `get_conn()`: implements the fix Finding 7
+  explicitly flagged as *not* done — `executescript(SCHEMA)` and
+  `_migrate()` no longer re-run on every request. They're idempotent but
+  each still briefly needs a write lock; re-acquiring it on every single
+  API call added up during request bursts. Now gated by `_SCHEMA_READY`
+  (a per-process set of already-migrated db paths), so it only runs once
+  per db path per process.
+- `_app/api.py` `save_override()`: `jt_conn`/`ov_conn` are now closed in
+  a `finally` block. Previously they were only closed on the success
+  path — every failed save (including every "database is locked" 500)
+  leaked both connections. An accumulating pile of open, uncommitted
+  connections against the same file is exactly the kind of thing that
+  can make a lock outlast what a single well-behaved writer would
+  produce, so this is a plausible contributor even though it wasn't
+  confirmed as *the* root cause.
+
+**Investigated and ruled out:** iCloud Drive's "Desktop & Documents
+Folders" sync was suspected, since the project lives under
+`~/Documents/GitHub/jobtracker-hub` and that sync daemon is a
+well-documented cause of exactly this symptom (long OS-level file holds
+outside SQLite's control). Checked directly in System Settings on the
+affected Mac — the toggle is off. Ruled out.
+
+**Still open — not root-caused.** The two fixes above are real
+inefficiency fixes but neither was confirmed to be the actual cause of a
+lock outlasting both `busy_timeout` and the retry loop. **Next step
+(handed to the user, not yet done):** the moment "database is locked"
+appears in the `uvicorn` terminal, run `lsof | grep overrides.db` in a
+second terminal to see every process currently holding the file open —
+PID and process name will say definitively whether it's a second
+Python/uvicorn process, Spotlight's `mdworker`, `backupd` (Time Machine),
+or something else. Do this before making further code changes here;
+guessing again without that data isn't worth it.
+
+**Regression tests:** none added this session — the two fixes above are
+untested by `tests/test_audit_findings.py` or `tests/test_overrides_store.py`
+as of this writing. Worth adding once the underlying cause is confirmed,
+so the fix that actually matters gets a real regression pin instead of
+being inferred from a code diff.
+
+---
+
 ## Verification
 
 Findings 4 and 5 were verified against the real testing `overrides.db`

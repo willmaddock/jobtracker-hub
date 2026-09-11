@@ -2448,3 +2448,56 @@ Backfill button could do here (needs a live Mail.app on their machine).
 
 ### Latest Returned ZIP
 - Filename: see the message this checkpoint's ZIP was attached to.
+
+## Checkpoint — 2026-09-10 ("database is locked" on `/override` saves — investigation, two partial fixes, root cause still open)
+
+### What changed
+User hit repeated `500 sqlite3.OperationalError: database is locked` on
+`POST /api/applications/{id}/override` across several item IDs in one
+run, surviving both SQLite's 30s `busy_timeout` and
+`_execute_with_retry()`'s own backoff — full writeup in
+`docs/troubleshooting/email-sync/AUDIT_FINDINGS.md` Finding 9. Two real
+fixes applied, but neither confirmed as the actual root cause:
+
+1. `_app/overrides_store.py` `get_conn()` now skips
+   `executescript(SCHEMA)` / `_migrate()` after the first call per db
+   path per process (gated by `_SCHEMA_READY`) — this is the exact
+   follow-up Finding 7 flagged as not done ("`get_conns()` still opens a
+   fresh connection and re-runs schema/migration statements on every
+   request").
+2. `_app/api.py` `save_override()` now closes `jt_conn`/`ov_conn` in a
+   `finally` block. Previously only closed on the success path, so every
+   failed save (every 500 above) leaked both connections.
+
+**Investigated and ruled out:** iCloud Drive "Desktop & Documents
+Folders" sync (project lives under `~/Documents/GitHub/`, a known
+trigger for this exact symptom) — checked in System Settings on the
+affected Mac, toggle is off. Not the cause.
+
+**Still open.** The lock duration observed doesn't match ordinary
+in-process contention that `busy_timeout` + the retry loop should
+already absorb. Next step handed to the user: catch it live with
+`lsof | grep overrides.db` the moment the error appears, to identify the
+actual holding process before any more code changes. Do not treat this
+checkpoint's two fixes as having closed the underlying issue.
+
+### Commits
+Not yet committed as of this checkpoint — `_app/api.py` and
+`_app/overrides_store.py` are modified but uncommitted in `git status`.
+
+### Tests
+None added this session for either fix above — flagging here so it
+isn't lost, same as Finding 9 does.
+
+### Video review (informational, not a finding)
+User also asked about a possible UI delay, visible in a screen recording
+from this session. Frame-by-frame review found the longest static
+stretch (~14s) was the user reading a "Move to..." dropdown on the Needs
+Attention board, not a stalled request — the item count had already
+updated the instant the action was taken. No confirmed hang was found in
+the portions reviewed. Not written up as a finding since nothing
+reproducible was confirmed; noted here only so a future session doesn't
+re-investigate the same clip from scratch.
+
+### Latest Returned ZIP
+- Not yet generated as of this checkpoint.
