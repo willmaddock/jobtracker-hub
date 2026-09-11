@@ -522,6 +522,9 @@
   .modal{width:460px;max-width:92vw;max-height:85vh;overflow-y:auto;background:var(--panel-glass);-webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px);border:1px solid var(--border);border-radius:14px;padding:24px;box-shadow:0 20px 60px #0006;}
   .modal h2{margin:0 0 4px;font-size:16px;color:var(--text-strong);}
   .modal-foot{display:flex;justify-content:flex-end;gap:8px;margin-top:18px;}
+  /* ---------- card detail drawer (Needs Attention board -- click a card to open) ---------- */
+  .drawer-backdrop{position:fixed;inset:0;background:#00000066;-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px);z-index:60;}
+  .drawer{position:fixed;top:0;right:0;bottom:0;width:640px;max-width:94vw;overflow-y:auto;background:var(--panel-glass);-webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px);border-left:1px solid var(--border);padding:24px 26px;box-shadow:-20px 0 60px #0006;z-index:61;}
   .close-x{position:absolute;top:14px;right:16px;background:none;border:none;color:var(--text-soft);font-size:16px;}
 
   .theme-switch{display:flex;border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-top:10px;}
@@ -732,9 +735,9 @@ const THEME_ICONS = {
   dark: <Icon name="dark" size={14}/>,
 };
 const DEFAULT_STATUS_COLORS = {
-  applied: "#3B82F6", interviewing: "#F59E0B", rejected: "#EF4444", drafted: "#9aa4b2", unknown: "#5b6472",
+  applied: "#3B82F6", interviewing: "#F59E0B", ghosted: "#a78bfa", rejected: "#EF4444", drafted: "#9aa4b2", unknown: "#5b6472",
 };
-const DEFAULT_STATUS_ORDER = ["drafted","applied","interviewing","rejected","unknown"];
+const DEFAULT_STATUS_ORDER = ["drafted","applied","interviewing","ghosted","rejected","unknown"];
 // Curated, not scanned from any mailbox -- domains confirmed against
 // this app's own posting-extraction code (_PROVIDER_SENDER_HINTS in
 // posting_extract.py, which has real fixture emails backing linkedin.com,
@@ -2777,13 +2780,46 @@ function PipelinePage({apps, meta, docsByItemId, ensureDocs, dossierByItemId, en
 }
 
 /* =========================== ATTENTION PAGE (with batch operations) =========================== */
-function AttentionPage({apps, meta, docsByItemId, ensureDocs, onSaveOverride, onBulkOverride, onOpen, onView, active}){
+// Actions a Needs-Attention item can be triaged into, shared by the List
+// row buttons, the Board's drop columns, and the Board's mobile/no-drag
+// <select> fallback -- one definition so the three surfaces can't drift.
+const ATTENTION_ACTIONS = [
+  {
+    id: "followed_up", label: "Mark followed up",
+    hint: "Clears the due next action and counts this as activity, resetting the days-quiet countdown to 0.",
+    fields: () => ({next_action:null, next_action_date:null, activity_override: new Date().toISOString().slice(0,10)}),
+  },
+  {
+    id: "reset", label: "Reset activity clock",
+    hint: "Keeps date applied as-is — just resets the days-quiet countdown to 0 (e.g. after an interview or a call).",
+    fields: () => ({activity_override: new Date().toISOString().slice(0,10)}),
+  },
+  {
+    id: "snoozed", label: "Snooze 7 days",
+    hint: "Hides this from Needs Attention for a week without changing anything else.",
+    fields: () => { const d = new Date(); d.setDate(d.getDate()+7); return {snoozed_until:d.toISOString().slice(0,10)}; },
+  },
+  {
+    id: "ghosted", label: "Ghosted",
+    hint: "The employer never responded, even after a follow-up. Sets status to Ghosted and removes this from Needs Attention for good.",
+    fields: () => ({manual_status:"ghosted"}),
+  },
+  {
+    id: "archived", label: "Archive", danger: true,
+    hint: "Hides this without labeling why — use Ghosted instead when silence is the actual reason.",
+    fields: () => ({archived:true}),
+  },
+];
+
+function AttentionPage({apps, meta, docsByItemId, ensureDocs, dossierByItemId, ensureDossier, onSaveOverride, onBulkOverride, onOpen, onView, onFixType, onUpload, onRename, onDelete, active, fireToast}){
   const attn = useMemo(() => apps.filter(a => !a.archived && !a.is_snoozed && (a.is_stale || a.next_action_due))
     .sort((a,b) => (b.next_action_due?1:0)-(a.next_action_due?1:0) || (b.days_since_activity||0)-(a.days_since_activity||0)), [apps]);
 
+  const [view, setView] = useState("list");
   const [selected, setSelected] = useState(() => new Set());
   const [focusedKey, setFocusedKey] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [openId, setOpenId] = useState(null);
 
   const toggleOne = (id) => setSelected(prev => {
     const next = new Set(prev);
@@ -2799,13 +2835,40 @@ function AttentionPage({apps, meta, docsByItemId, ensureDocs, onSaveOverride, on
     const pdf = docs.find(isPdf);
     if (pdf) onView(pdf);
   }, [docsByItemId, ensureDocs, onView]);
-  useListNav({enabled: active, items: attn, selectedKey: focusedKey, onSelect: selectFocus, onEnter: openFirstDoc});
+  useListNav({enabled: active && view === "list", items: attn, selectedKey: focusedKey, onSelect: selectFocus, onEnter: openFirstDoc});
 
   const runBulk = async (fields) => {
     setBusy(true);
     try { await onBulkOverride(Array.from(selected), fields); setSelected(new Set()); }
     finally { setBusy(false); }
   };
+
+  // Shared by the List row's card body and every Board card -- opens the
+  // full dossier (timeline, contacts, documents) in a right-hand drawer,
+  // fetching docs/dossier lazily the same way Pipeline's split view does.
+  const openDetail = useCallback((a) => {
+    ensureDocs(a.id); ensureDossier(a.id); setOpenId(a.id);
+  }, [ensureDocs, ensureDossier]);
+  const openApp = attn.find(a => a.id === openId) || apps.find(a => a.id === openId) || null;
+
+  const viewToggle = (
+    <div style={{display:"flex", background:"var(--panel)", border:"1px solid var(--border)", borderRadius:8, overflow:"hidden", width:"fit-content", marginBottom:16}}>
+      <button className="btn subtle" style={{border:"none", borderRadius:0, background: view==="list" ? "var(--border)":"transparent"}} onClick={() => setView("list")}>List</button>
+      <button className="btn subtle" style={{border:"none", borderRadius:0, background: view==="board" ? "var(--border)":"transparent"}} onClick={() => setView("board")}>Board (drag to triage)</button>
+    </div>
+  );
+
+  const drawer = openApp && (
+    <>
+      <div className="drawer-backdrop" onClick={() => setOpenId(null)} />
+      <div className="drawer">
+        <button className="close-x" aria-label="Close" onClick={() => setOpenId(null)}>{<Icon name="close"/>}</button>
+        <DetailPane app={openApp} meta={meta} docs={docsByItemId[openApp.id] || []} dossier={dossierByItemId[openApp.id]}
+          onSaveOverride={onSaveOverride} onOpen={onOpen} onView={onView} onFixType={onFixType} onUpload={onUpload}
+          onRename={onRename} onDelete={onDelete} query="" fireToast={fireToast} />
+      </div>
+    </>
+  );
 
   if (attn.length === 0) {
     return (
@@ -2823,56 +2886,134 @@ function AttentionPage({apps, meta, docsByItemId, ensureDocs, onSaveOverride, on
       <p className="page-sub">21+ days since applied/interviewing, or 14+ days untouched while drafted/unknown, plus due next actions. Nothing is ever deleted — dismiss with Archive if it doesn't need action. (<span className="kbd">j</span>/<span className="kbd">k</span> to move focus, <span className="kbd">Enter</span> to preview a document.)</p>
       <p className="page-sub">{attn.length} item(s)</p>
 
-      {selected.size > 0 && (
-        <div className="bulk-bar">
-          <span className="count">{selected.size} selected</span>
-          <button className="btn primary small" disabled={busy} onClick={() => runBulk({manual_status:"applied"})}>Bulk Move to Applied</button>
-          <button className="btn small" disabled={busy} onClick={() => runBulk({manual_status:"rejected"})}>Bulk Mark Rejected</button>
-          <button className="btn danger-outline small" disabled={busy} onClick={() => runBulk({archived:true})}>Bulk Archive</button>
-          <button className="btn subtle small" onClick={() => setSelected(new Set())}>Clear</button>
-        </div>
+      {viewToggle}
+
+      {view === "board" ? (
+        <AttentionBoard apps={attn} meta={meta} onSaveOverride={onSaveOverride} onOpenDetail={openDetail} openId={openId} />
+      ) : (
+        <>
+          {selected.size > 0 && (
+            <div className="bulk-bar">
+              <span className="count">{selected.size} selected</span>
+              <button className="btn primary small" disabled={busy} onClick={() => runBulk({manual_status:"applied"})}>Bulk Move to Applied</button>
+              <button className="btn small" disabled={busy} onClick={() => runBulk({manual_status:"rejected"})}>Bulk Mark Rejected</button>
+              <button className="btn danger-outline small" disabled={busy} onClick={() => runBulk({archived:true})}>Bulk Archive</button>
+              <button className="btn subtle small" onClick={() => setSelected(new Set())}>Clear</button>
+            </div>
+          )}
+
+          <label style={{display:"flex", alignItems:"center", gap:8, color:"var(--text-soft)", fontSize:12, margin:"0 0 10px"}}>
+            <input type="checkbox" className="select-checkbox" checked={selected.size === attn.length} onChange={toggleAll} /> Select all
+          </label>
+
+          {attn.map(app => {
+            const reasons = [];
+            if (app.next_action_due) reasons.push(`next action due: ${app.next_action}`);
+            if (app.is_stale) reasons.push(`${app.days_since_activity} days quiet${app.activity_is_reset ? " (since reset)" : ""}`);
+            return (
+              <div className={"list-card" + (focusedKey===app.id ? " focused":"")} key={app.id} onClick={() => { setFocusedKey(app.id); openDetail(app); }}>
+                <input type="checkbox" className="select-checkbox" checked={selected.has(app.id)}
+                  onChange={() => toggleOne(app.id)} onClick={e => e.stopPropagation()} />
+                <div className="list-card-body">
+                  <div className="list-card-top">
+                    <div className="list-card-title">{app.effective_company}{roleSuffix(app)}</div>
+                    <div style={{textAlign:"right"}}>
+                      <StatusBadge status={app.effective_status} manual={!!app.manual_status} colors={meta.status_colors} icons={meta.status_icons} />
+                      <div className="stale-tag" style={{marginTop:4}}>{reasons.join(" \u00b7 ")}</div>
+                    </div>
+                  </div>
+                  <details className="doc-expander" onToggle={() => ensureDocs(app.id)} onClick={e => e.stopPropagation()}>
+                    <summary>Documents</summary>
+                    <div style={{marginTop:10}}>
+                      <DocGrid docs={docsByItemId[app.id] || []} docTypeLabels={meta.doc_type_labels} onOpen={onOpen} onView={onView} />
+                    </div>
+                  </details>
+                  <div className="list-card-actions" onClick={e => e.stopPropagation()}>
+                    {ATTENTION_ACTIONS.map(a => (
+                      <button key={a.id} className={"btn" + (a.danger ? " danger-outline" : "")} title={a.hint}
+                        onClick={() => onSaveOverride(app.id, a.fields())}>{a.label}</button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </>
       )}
 
-      <label style={{display:"flex", alignItems:"center", gap:8, color:"var(--text-soft)", fontSize:12, margin:"0 0 10px"}}>
-        <input type="checkbox" className="select-checkbox" checked={selected.size === attn.length} onChange={toggleAll} /> Select all
-      </label>
+      {drawer}
+    </div>
+  );
+}
 
-      {attn.map(app => {
-        const reasons = [];
-        if (app.next_action_due) reasons.push(`next action due: ${app.next_action}`);
-        if (app.is_stale) reasons.push(`${app.days_since_activity} days quiet${app.activity_is_reset ? " (since reset)" : ""}`);
-        return (
-          <div className={"list-card" + (focusedKey===app.id ? " focused":"")} key={app.id} onClick={() => setFocusedKey(app.id)}>
-            <input type="checkbox" className="select-checkbox" checked={selected.has(app.id)}
-              onChange={() => toggleOne(app.id)} onClick={e => e.stopPropagation()} />
-            <div className="list-card-body">
-              <div className="list-card-top">
-                <div className="list-card-title">{app.effective_company}{roleSuffix(app)}</div>
-                <div style={{textAlign:"right"}}>
-                  <StatusBadge status={app.effective_status} manual={!!app.manual_status} colors={meta.status_colors} icons={meta.status_icons} />
-                  <div className="stale-tag" style={{marginTop:4}}>{reasons.join(" \u00b7 ")}</div>
-                </div>
+/* =========================== NEEDS ATTENTION: BOARD (triage via drag) =========================== */
+// Unlike Pipeline's status Kanban, only the first column holds persistent
+// cards -- the rest are action targets, not stored states (mirrors the
+// List view's row buttons; see ATTENTION_ACTIONS above). Dropping a card
+// on one runs that override and the card leaves the board once the apps
+// list refreshes, same as clicking its List-view button would.
+function AttentionBoard({apps, meta, onSaveOverride, onOpenDetail, openId}){
+  const [dragId, setDragId] = useState(null);
+  const [overCol, setOverCol] = useState(null);
+
+  const runAction = (app, actionId) => {
+    const action = ATTENTION_ACTIONS.find(a => a.id === actionId);
+    if (action) onSaveOverride(app.id, action.fields());
+  };
+
+  const handleDrop = (actionId) => (e) => {
+    e.preventDefault();
+    setOverCol(null);
+    const raw = e.dataTransfer.getData("text/plain") || dragId;
+    const id = Number(raw);
+    const app = apps.find(a => a.id === id);
+    if (app) runAction(app, actionId);
+    setDragId(null);
+  };
+
+  return (
+    <div className="kanban">
+      <div className={"kanban-col" + (overCol === "__incoming" ? " drag-over" : "")}
+        onDragOver={e => e.preventDefault()}>
+        <div className="kanban-col-head" style={{borderColor:"var(--border)", color:"var(--text-soft)"}}>
+          Needs Attention &middot; {apps.length}
+        </div>
+        <div className="kanban-cards">
+          {apps.map(app => (
+            <div key={app.id}
+              className={"kanban-card" + (app.is_stale ? " stale":"") + (dragId===app.id ? " dragging":"") + (openId===app.id ? " selected":"")}
+              draggable
+              onDragStart={e => { e.dataTransfer.setData("text/plain", String(app.id)); e.dataTransfer.effectAllowed = "move"; setDragId(app.id); }}
+              onDragEnd={() => { setDragId(null); setOverCol(null); }}
+              onClick={() => onOpenDetail(app)}>
+              <div className="kanban-card-title">{app.effective_company}{roleSuffix(app)}</div>
+              <div className="kanban-card-role">
+                {app.next_action_due ? `Due: ${app.next_action||"follow up"}` : `${app.days_since_activity}d quiet`}
+                {app.is_stale ? <Icon name="attention" size={11} style={{marginLeft:4, verticalAlign:"-1px"}}/> : ""}
               </div>
-              <details className="doc-expander" onToggle={() => ensureDocs(app.id)}>
-                <summary>Documents</summary>
-                <div style={{marginTop:10}}>
-                  <DocGrid docs={docsByItemId[app.id] || []} docTypeLabels={meta.doc_type_labels} onOpen={onOpen} onView={onView} />
-                </div>
-              </details>
-              <div className="list-card-actions">
-                <button className="btn" onClick={() => onSaveOverride(app.id, {next_action:null, next_action_date:null})}>Mark followed up</button>
-                <button className="btn" title="Keeps date applied as-is — just resets the days-quiet countdown to 0 (e.g. after an interview or a call)."
-                  onClick={() => onSaveOverride(app.id, {activity_override: new Date().toISOString().slice(0,10)})}>Reset activity clock</button>
-                <button className="btn" onClick={() => {
-                  const d = new Date(); d.setDate(d.getDate()+7);
-                  onSaveOverride(app.id, {snoozed_until:d.toISOString().slice(0,10)});
-                }}>Snooze 7 days</button>
-                <button className="btn danger-outline" onClick={() => onSaveOverride(app.id, {archived:true})}>Archive</button>
-              </div>
+              <select className="kanban-move" value="" onChange={e => e.target.value && runAction(app, e.target.value)} onClick={e => e.stopPropagation()}>
+                <option value="" disabled>Move to…</option>
+                {ATTENTION_ACTIONS.map(a => <option key={a.id} value={a.id}>{a.label}</option>)}
+              </select>
             </div>
+          ))}
+          {apps.length===0 && <div className="kanban-empty-col">All triaged.</div>}
+        </div>
+      </div>
+
+      {ATTENTION_ACTIONS.map(action => (
+        <div key={action.id} className={"kanban-col" + (overCol === action.id ? " drag-over" : "")}
+          onDragOver={e => { e.preventDefault(); setOverCol(action.id); }}
+          onDragLeave={() => setOverCol(c => c === action.id ? null : c)}
+          onDrop={handleDrop(action.id)}>
+          <div className="kanban-col-head" style={{borderColor: action.danger ? "#EF444466" : "var(--accent-soft)", color: action.danger ? "#EF4444" : undefined}} title={action.hint}>
+            {action.label}
           </div>
-        );
-      })}
+          <div className="kanban-cards">
+            <div className="kanban-empty-col">Drop a card here.</div>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -3620,7 +3761,7 @@ function BenchmarkNote({label, value, range}){
 }
 
 function StatusFunnel({byStatus, total}){
-  const order = [["drafted","Drafted"],["applied","Applied"],["interviewing","Interviewing"],["rejected","Rejected"],["unknown","Unknown"]];
+  const order = [["drafted","Drafted"],["applied","Applied"],["interviewing","Interviewing"],["ghosted","Ghosted"],["rejected","Rejected"],["unknown","Unknown"]];
   const colors = DEFAULT_STATUS_COLORS;
   return (
     <div className="chart-card">
@@ -3694,6 +3835,10 @@ function InsightsPage({apps, meta, themeTick}){
         <div className="metric-card">
           <div className="num">{m.interview_rate.toFixed(0)}%</div><div className="lbl">Interview rate</div>
           <BenchmarkNote label="application-to-interview rate" value={m.interview_rate} range={BENCHMARKS.interview_rate} />
+        </div>
+        <div className="metric-card">
+          <div className="num">{m.ghosted_rate.toFixed(0)}%</div><div className="lbl">Ghosted rate</div>
+          <span style={{fontSize:11.5, color:"var(--text-soft)", display:"block", marginTop:4}}>of applications sent, marked Ghosted after follow-up went unanswered</span>
         </div>
       </div>
       {m.avg_response_days != null ? (
@@ -6850,7 +6995,10 @@ function App(){
           )}
           {page === "attention" && (
             <AttentionPage apps={apps} meta={meta} docsByItemId={docsByItemId} ensureDocs={ensureDocs}
-              onSaveOverride={saveOverride} onBulkOverride={bulkOverride} onOpen={openFile} onView={openViewer} active={page==="attention"} />
+              dossierByItemId={dossierByItemId} ensureDossier={ensureDossier}
+              onSaveOverride={saveOverride} onBulkOverride={bulkOverride} onOpen={openFile} onView={openViewer}
+              onFixType={setFixTypeDoc} onUpload={uploadDocuments} onRename={setRenameDoc} onDelete={requestDelete}
+              active={page==="attention"} fireToast={fireToast} />
           )}
           {page === "browse" && (
             <div>
