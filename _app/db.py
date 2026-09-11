@@ -20,11 +20,12 @@ import overrides_store as ov
 APP_DIR = Path(__file__).resolve().parent
 DEFAULT_ROOT = APP_DIR.parent
 
-STATUS_ORDER = ["drafted", "applied", "interviewing", "rejected", "unknown"]
+STATUS_ORDER = ["drafted", "applied", "interviewing", "ghosted", "rejected", "unknown"]
 
 STATUS_COLORS = {
     "applied": "#4a9eff",
     "interviewing": "#3ddc84",
+    "ghosted": "#a78bfa",
     "rejected": "#ff5c5c",
     "drafted": "#9aa4b2",
     "unknown": "#5b6472",
@@ -33,6 +34,7 @@ STATUS_COLORS = {
 STATUS_ICONS = {
     "applied": "🔵",
     "interviewing": "🟢",
+    "ghosted": "🟣",
     "rejected": "🔴",
     "drafted": "⚪",
     "unknown": "⚫",
@@ -194,10 +196,19 @@ def compute_metrics(apps: list[dict]) -> dict:
         by_status[a["effective_status"]] = by_status.get(a["effective_status"], 0) + 1
 
     # "Responded" = got any signal back at all (interview or rejection).
+    # Ghosted counts as sent-but-silent, same as a quiet "applied" — it's
+    # included in the sent pool so it doesn't inflate response_rate, but it
+    # gets its own rate below so it's visible as a distinct outcome.
     responded = by_status.get("interviewing", 0) + by_status.get("rejected", 0)
-    sent = by_status.get("applied", 0) + by_status.get("interviewing", 0) + by_status.get("rejected", 0)
+    sent = (
+        by_status.get("applied", 0)
+        + by_status.get("interviewing", 0)
+        + by_status.get("ghosted", 0)
+        + by_status.get("rejected", 0)
+    )
     response_rate = (responded / sent * 100) if sent else 0.0
     interview_rate = (by_status.get("interviewing", 0) / sent * 100) if sent else 0.0
+    ghosted_rate = (by_status.get("ghosted", 0) / sent * 100) if sent else 0.0
 
     # Time-to-response, for items where we have both a date_applied and a
     # last_activity after it (best-effort — only meaningful when date_applied
@@ -216,6 +227,7 @@ def compute_metrics(apps: list[dict]) -> dict:
         "by_status": by_status,
         "response_rate": response_rate,
         "interview_rate": interview_rate,
+        "ghosted_rate": ghosted_rate,
         "avg_response_days": avg_response_days,
         "lag_sample_size": len(lags),
     }
