@@ -3,7 +3,15 @@
 Status: approved architectural baseline, 2026-09-11.
 
 These are accepted **target decisions**, not claims that implementation is
-complete. See [current migration status](DJANGO_MIGRATION_STATUS.md) for the
+complete. Accepted Topics 1–9 detailed contracts are recorded in
+[Foundations](DJANGO_MIGRATION_FOUNDATIONS.md). Code and migrations establish what
+is implemented; this Decision Record owns product/architecture boundaries,
+Foundations owns their detailed contracts, and Status owns implementation/readiness.
+The plan and historical handoffs/troubleshooting are supporting context, subordinate
+where stale or conflicting. Surface apparent contradictions for review rather than
+silently rewriting either authoritative document.
+
+See [current migration status](DJANGO_MIGRATION_STATUS.md) for the
 implementation checkpoint and [migration plan](DJANGO_MIGRATION_PLAN.md) for
 broader historical context. The approval baseline is `django-migration` at
 `ecd1727`, before implementation of the newly accepted decisions.
@@ -327,7 +335,8 @@ synchronization is out of scope for initial migration.
 - Cutover changes write authority; rollback copies do not imply synchronization.
 - Automated verification and operational/end-to-end evidence are separate gates.
 - Lifecycle ownership, reconciliation keys, export representation, task contracts,
-  and timestamp selection still need detailed designs within these decisions.
+  and timestamp selection have accepted detailed contracts in
+  [Foundations](DJANGO_MIGRATION_FOUNDATIONS.md); implementation remains pending.
 
 ## Migration blockers created or clarified
 
@@ -350,8 +359,8 @@ sync, and a desktop wrapper are not migration blockers.
 ## Recommended implementation sequence
 
 1. Publish decisions and a concise current status, separating evidence from intent.
-2. Specify foundational schemas/contracts: lifecycle ownership, reconciliation,
-   timestamps, membership, and export representation.
+2. Foundational contracts are accepted in [Foundations](DJANGO_MIGRATION_FOUNDATIONS.md).
+   Review the documentation checkpoint before separately authorizing implementation.
 3. Establish explicit workspace/authentication foundations and frontend API client.
 4. Implement identity, categories, timestamps, Trash/restore/cleanup, and retained
    source relationships.

@@ -1,13 +1,16 @@
 # Django migration: current status
 
-Maintained checkpoint: 2026-09-11, documentation baseline established.
+Maintained checkpoint: 2026-09-12, accepted foundational design consolidated; documentation only.
 
 ## 1. Scope and source of truth
 
-- Code determines implementation. [Decisions](DJANGO_MIGRATION_DECISIONS.md)
-  determine the accepted target; this document records the maintained checkpoint.
+- Code and migrations establish implementation. [Decisions](DJANGO_MIGRATION_DECISIONS.md)
+  owns accepted product/architecture boundaries; [Foundations](DJANGO_MIGRATION_FOUNDATIONS.md)
+  owns accepted detailed contracts; this document owns current implementation,
+  verification, and readiness. Apparent conflicts must be surfaced for review,
+  never silently resolved by rewriting an authoritative document.
 - The [plan](DJANGO_MIGRATION_PLAN.md) supplies broader context. Handoffs/specs
-  are historical or behavioral evidence, not automatically current instructions.
+  are supporting historical/behavioral evidence, subordinate where stale or conflicting.
 - Keep four states separate: **accepted/designed**, **implemented**,
   **automated-test verified**, and **operationally/end-to-end validated**.
   Acceptance is not implementation; passing component tests is not cutover proof.
@@ -19,6 +22,7 @@ Maintained checkpoint: 2026-09-11, documentation baseline established.
 | Item | Baseline |
 |---|---|
 | Branch | `django-migration` |
+| Documentation checkpoint entering consolidation | `a96cdf9` — Establish Django migration decision baseline |
 | Implementation baseline commit | `ecd1727` — Merge main into django-migration |
 | Legacy suite | 370 passed |
 | Django full suite | 466 passed |
@@ -27,8 +31,10 @@ Maintained checkpoint: 2026-09-11, documentation baseline established.
 Test results were supplied and confirmed by the user for `ecd1727`, **before
 implementation of the newly accepted decisions**. They supersede older counts
 in README/handoffs. No tests were rerun for this documentation-only checkpoint.
-The checkout was clean at the start of this pass; only the three new baseline
-documentation/instruction files are authorized changes. No commit/push is made.
+The checkout was clean entering consolidation at `a96cdf9`. This edit only records
+accepted Topics 1–9 in Foundations and updates authority/status links. No new
+implementation, fresh application tests, or operational validation occurred.
+Commit/push state is separate from this implementation/readiness claim.
 
 ## 3. Accepted target summary
 
@@ -111,20 +117,23 @@ No newly accepted capability is marked verified merely because it is designed.
 
 ## 7. Current implementation phase
 
-Architecture decisions and repository instructions are established. **Target
-implementation has not resumed.** Existing backend components remain at the
-audit baseline; the next phase is foundational schema/contract design within
-the accepted decisions, not a claim that historical numbered phases are done.
+Decisions 1–10 and foundational Topics 1–9, including final refinements, are
+accepted. **Implementation of those foundations has not begun/resumed.** Existing
+backend components remain at the audit baseline. This checkpoint is documentation
+consolidation only, not completion of historical numbered implementation phases.
+Evidence regeneration replacement versus supersession still requires an explicit
+decision before that behavior is implemented; other remaining implementation and
+operational details are listed in Foundations.
 
 ## 8. Next recommended implementation actions
 
-1. Specify lifecycle ownership/restore rules, timestamps, category membership,
-   reconciliation identities, and export/task contracts.
-2. Establish explicit workspace/auth foundations and the small frontend client.
-3. Implement schema/lifecycle foundations, derivation, and parity corrections.
-4. Connect core browser workflows, then retained email/review/postings/evidence.
-5. Develop import/export alongside models; rehearse representative workspaces.
-6. Validate production operations and cutover gates before retiring legacy.
+1. Record this documentation checkpoint.
+2. Separately authorize and plan the first implementation slice under Decisions and Foundations.
+3. Establish explicit workspace/auth foundations and the small frontend client.
+4. Implement schema/lifecycle foundations, derivation, and parity corrections.
+5. Connect core browser workflows, then retained email/review/postings/evidence.
+6. Develop import/export alongside models; rehearse representative workspaces.
+7. Validate production operations and cutover gates before retiring legacy.
 
 Use the [Decision Record sequence](DJANGO_MIGRATION_DECISIONS.md#recommended-implementation-sequence)
 for detail. Future work remains scoped to the user's authorized task.
@@ -164,3 +173,8 @@ checkpoint, the durable Decision Record, and root AGENTS.md only. Historical
 handoffs remain unchanged and may still contain stale counts, ZIP workflows,
 commit references, and incorrect completion claims. No application changes or
 new operational validation are represented by this checkpoint.
+
+2026-09-12: consolidated accepted Topics 1–9 in Foundations and narrowly updated
+Decisions, Status, and AGENTS authority/navigation. Implementation and all existing
+cutover/retirement gates remain pending. Historical suite results above were not
+rerun; this documentation edit adds no operational evidence.

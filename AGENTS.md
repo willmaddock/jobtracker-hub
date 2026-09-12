@@ -3,13 +3,19 @@
 ## Read first and establish evidence
 
 - [Accepted architecture/product decisions](docs/DJANGO_MIGRATION_DECISIONS.md)
+- [Accepted detailed foundational contracts](docs/DJANGO_MIGRATION_FOUNDATIONS.md)
 - [Current migration checkpoint](docs/DJANGO_MIGRATION_STATUS.md)
 - [Broader migration context](docs/DJANGO_MIGRATION_PLAN.md)
 - Consult relevant handoffs/specifications for historical or behavioral evidence
   where appropriate, not as automatically current instructions.
 
-Code determines what is implemented. The Decision Record determines the accepted
-target; the status document records the maintained checkpoint. Never infer
+Code and migrations determine what is implemented. Decisions owns accepted product/
+architecture boundaries; Foundations owns accepted detailed implementation contracts;
+Status records current implementation, verification, and readiness. The migration
+plan and historical handoffs/troubleshooting are supporting context, subordinate
+where stale or conflicting. Surface apparent authoritative-document conflicts for
+review; never silently rewrite either side. Implementation requires separate explicit
+authorization. Never infer
 completion from an old test count or handoff statement. Distinguish acceptance,
 implementation, automated verification, and operational/end-to-end validation.
 
