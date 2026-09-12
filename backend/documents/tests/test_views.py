@@ -50,7 +50,7 @@ class RenameDocumentTests(DocumentAPITestCase):
     def test_renames_and_reclassifies(self):
         self.client.login(username="alice", password="pw123456")
         response = self.client.post(
-            reverse("document-rename", args=[self.document.id]),
+            reverse("document-rename", args=[self.workspace.pk, self.document.id]),
             {"new_filename": "cover-letter.pdf"},
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -61,7 +61,7 @@ class RenameDocumentTests(DocumentAPITestCase):
     def test_unchanged_name_is_a_noop(self):
         self.client.login(username="alice", password="pw123456")
         response = self.client.post(
-            reverse("document-rename", args=[self.document.id]),
+            reverse("document-rename", args=[self.workspace.pk, self.document.id]),
             {"new_filename": "resume.pdf"},
         )
         self.assertTrue(response.data["unchanged"])
@@ -69,7 +69,7 @@ class RenameDocumentTests(DocumentAPITestCase):
     def test_rejects_path_separators(self):
         self.client.login(username="alice", password="pw123456")
         response = self.client.post(
-            reverse("document-rename", args=[self.document.id]),
+            reverse("document-rename", args=[self.workspace.pk, self.document.id]),
             {"new_filename": "sub/resume.pdf"},
         )
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
@@ -77,7 +77,7 @@ class RenameDocumentTests(DocumentAPITestCase):
     def test_cannot_rename_another_users_document(self):
         self.client.login(username="alice", password="pw123456")
         response = self.client.post(
-            reverse("document-rename", args=[self.other_document.id]),
+            reverse("document-rename", args=[self.workspace.pk, self.other_document.id]),
             {"new_filename": "x.pdf"},
         )
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
@@ -87,7 +87,7 @@ class OverrideDocumentTests(DocumentAPITestCase):
     def test_sets_doc_type_override(self):
         self.client.login(username="alice", password="pw123456")
         response = self.client.post(
-            reverse("document-override", args=[self.document.id]),
+            reverse("document-override", args=[self.workspace.pk, self.document.id]),
             {"doc_type_override": "cover_letter"},
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -100,7 +100,7 @@ class OverrideDocumentTests(DocumentAPITestCase):
         DocumentOverride.objects.create(document=self.document, doc_type_override="cover_letter")
         self.client.login(username="alice", password="pw123456")
         response = self.client.post(
-            reverse("document-override", args=[self.document.id]), {"doc_type_override": ""}
+            reverse("document-override", args=[self.workspace.pk, self.document.id]), {"doc_type_override": ""}
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertFalse(DocumentOverride.objects.filter(document=self.document).exists())
@@ -108,7 +108,7 @@ class OverrideDocumentTests(DocumentAPITestCase):
     def test_cannot_override_another_users_document(self):
         self.client.login(username="alice", password="pw123456")
         response = self.client.post(
-            reverse("document-override", args=[self.other_document.id]),
+            reverse("document-override", args=[self.workspace.pk, self.other_document.id]),
             {"doc_type_override": "resume"},
         )
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)

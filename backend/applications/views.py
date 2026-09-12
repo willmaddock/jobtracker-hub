@@ -1,9 +1,9 @@
 """applications views.
 
 Phase 8 (docs/DJANGO_MIGRATION_PLAN.md) -- DRF viewset for the
-"applications" section of the Phase 0 endpoint inventory. Every
-action is scoped to workspace__owner=request.user, same pattern as
-postings/views.py's JobPostingViewSet.
+"applications" section of the Phase 0 endpoint inventory. Normal workflows
+use the owner-authorized Workspace in the route. Existing deletion endpoints
+remain isolated in LegacyApplicationDeletionViewSet.
 
 create() still doesn't create a folder or accept file uploads inline
 (see postings/views.py's apply() for the same deliberate
@@ -38,7 +38,7 @@ from django.db import IntegrityError, transaction
 from django.utils import timezone
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.response import Response
 
 from .dossier import assemble_dossier
@@ -65,17 +65,19 @@ from email_sync.models import AccountMatch
 # slice2 recommendation) needs these -- documents/views.py imports
 # Application the same direction, so this is a one-way dependency,
 # not a cycle.
-from documents.models import Document
+from documents.models import Document, DocumentExtraction
 from documents.serializers import DocumentSerializer, DocumentUploadSerializer
-from documents.services import classify_doc_type, duplicate_counts, sha256_of
+from core.workspace_scope import WorkspaceScopedMixin, scoped_duplicate_counts
+
+from documents.services import classify_doc_type, sha256_of
 
 _VALID_STATUSES = [choice[0] for choice in Application.STATUS_CHOICES]
 
 
-class ApplicationViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
+class ApplicationViewSet(WorkspaceScopedMixin, mixins.ListModelMixin, viewsets.GenericViewSet):
     def get_queryset(self):
         return (
-            Application.objects.filter(workspace__owner=self.request.user)
+            Application.objects.filter(workspace=self.get_workspace())
             .select_related("override")
             .order_by("-created_at")
         )
@@ -97,7 +99,7 @@ class ApplicationViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
         try:
             with transaction.atomic():
                 application = Application.objects.create(
-                    workspace=data["workspace"],
+                    workspace=self.get_workspace(),
                     section=data.get("section", "applications"),
                     company=data["company"],
                     role_label=data.get("role_label", ""),
@@ -120,7 +122,7 @@ class ApplicationViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
         return Response(ApplicationSerializer(application).data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=["get", "post"])
-    def documents(self, request, pk=None):
+    def documents(self, request, pk=None, **kwargs):
         """GET lists this application's documents; POST uploads one
         or more new ones. Same URL for both, matching the original's
         single `/api/applications/{item_id}/documents` route for
@@ -138,10 +140,10 @@ class ApplicationViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
         """
         application = self.get_object()
         if request.method == "GET":
-            documents = application.documents.select_related("override").order_by(
+            documents = application.documents.filter(workspace=self.get_workspace()).select_related("override").order_by(
                 "doc_type", "filename"
             )
-            counts = duplicate_counts(
+            counts = scoped_duplicate_counts(
                 application.workspace, [d.content_hash for d in documents]
             )
             serializer = DocumentSerializer(
@@ -170,14 +172,14 @@ class ApplicationViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
             )
             created.append(document)
 
-        counts = duplicate_counts(
+        counts = scoped_duplicate_counts(
             application.workspace, [d.content_hash for d in created]
         )
         serializer = DocumentSerializer(created, many=True, context={"duplicate_counts": counts})
         return Response({"ok": True, "documents": serializer.data}, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=["get"])
-    def dossier(self, request, pk=None):
+    def dossier(self, request, pk=None, **kwargs):
         """GET /api/applications/{id}/dossier -- see this module's
         docstring and applications/dossier.assemble_dossier() for the
         extraction/tiebreak rules.
@@ -216,7 +218,18 @@ class ApplicationViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
         flag.
         """
         application = self.get_object()
-        documents = application.documents.select_related("override")
+        documents = application.documents.filter(workspace=self.get_workspace()).select_related("override")
+        # A populated intermediate database may contain inconsistent cache
+        # provenance. Reject before extraction/autofill rather than reusing it.
+        caches = DocumentExtraction.objects.filter(
+            workspace=self.get_workspace(),
+            content_hash__in=[document.content_hash for document in documents if document.content_hash],
+            document__isnull=False,
+        )
+        if caches.exclude(document__workspace=self.get_workspace()).exists() or caches.exclude(
+            document__application__workspace=self.get_workspace()
+        ).exists():
+            raise NotFound()
         result = assemble_dossier(documents)
 
         override = getattr(application, "override", None)
@@ -247,7 +260,7 @@ class ApplicationViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
         result["current_status_date_known"] = status_change is not None
 
         matches = (
-            AccountMatch.objects.filter(application=application)
+            AccountMatch.objects.filter(application=application, account__workspace=self.get_workspace())
             .select_related("account")
             .order_by("-received_at")
         )
@@ -266,7 +279,7 @@ class ApplicationViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
         return Response(result)
 
     @action(detail=True, methods=["post"])
-    def override(self, request, pk=None):
+    def override(self, request, pk=None, **kwargs):
         """Uses the numeric Application.id in the URL -- no item_key
         round-trip to worry about, since Application.id has been the
         real identity since Phase 3 (see core/exceptions.py's
@@ -290,14 +303,8 @@ class ApplicationViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
         return Response({"ok": True, "id": application.id})
 
     @action(detail=False, methods=["post"], url_path="bulk-override")
-    def bulk_override(self, request):
-        """Apply the same override fields to many applications at
-        once -- powers Needs Attention's multi-select bulk actions.
-        Ids the caller doesn't own are silently skipped (excluded by
-        get_queryset()'s ownership filter) rather than erroring the
-        whole batch, matching the original's "id not found -> skip"
-        behavior for a nonexistent id.
-        """
+    def bulk_override(self, request, **kwargs):
+        """Validate all selected-Workspace targets before atomically applying overrides."""
         serializer = BulkOverrideWriteSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = dict(serializer.validated_data)
@@ -305,21 +312,32 @@ class ApplicationViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
         reset_status = data.pop("reset_status", False)
         fields_set = set(data.keys())
         fields = compute_bulk_override_fields(fields_set, data, reset_status)
-        updated = 0
-        for application in self.get_queryset().filter(id__in=item_ids):
-            if fields:
-                Override.objects.update_or_create(application=application, defaults=fields)
-            if "manual_status" in fields:
-                effective_status = resolve_effective_status(fields, application.status)
-                StatusHistory.objects.create(
-                    application=application, status=effective_status,
-                    changed_at=timezone.now(), source="manual",
-                )
-            updated += 1
-        return Response({"ok": True, "count": updated})
+        with transaction.atomic():
+            targets = list(Application.objects.filter(
+                workspace=self.get_workspace(), id__in=item_ids).order_by("pk").select_for_update())
+            if {app.pk for app in targets} != set(item_ids):
+                raise NotFound()
+            for application in targets:
+                if fields:
+                    Override.objects.update_or_create(application=application, defaults=fields)
+                if "manual_status" in fields:
+                    effective_status = resolve_effective_status(fields, application.status)
+                    StatusHistory.objects.create(
+                        application=application, status=effective_status,
+                        changed_at=timezone.now(), source="manual",
+                    )
+        return Response({"ok": True, "count": len(targets)})
+
+
+class LegacyApplicationDeletionViewSet(viewsets.GenericViewSet):
+    """Existing deletion only; no canonical Trash contract is introduced here."""
+
+    serializer_class = ApplicationSerializer
+    def get_queryset(self):
+        return Application.objects.filter(workspace__owner=self.request.user).select_related("override")
 
     @action(detail=True, methods=["post"])
-    def delete(self, request, pk=None):
+    def delete(self, request, pk=None, **kwargs):
         """Permanently removes one application. Works whether it's
         archived or not -- same as the original, single delete has no
         archived precondition (only bulk-delete below re-verifies
@@ -335,7 +353,7 @@ class ApplicationViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
         return Response({"ok": True, "id": application_id})
 
     @action(detail=False, methods=["post"], url_path="bulk-delete")
-    def bulk_delete(self, request):
+    def bulk_delete(self, request, **kwargs):
         """Re-verifies server-side that every id is actually archived
         before touching it, same as the original -- the frontend only
         offers this from the Archived list, but that's a UI-level

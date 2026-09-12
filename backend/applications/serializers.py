@@ -18,8 +18,6 @@ from __future__ import annotations
 
 from rest_framework import serializers
 
-from accounts.models import Workspace
-
 from .models import Application, Override
 
 
@@ -71,22 +69,11 @@ class ApplicationCreateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Application
-        fields = ["workspace", "company", "role_label", "status", "section"]
+        fields = ["company", "role_label", "status", "section"]
         extra_kwargs = {
             "role_label": {"required": False, "allow_blank": True, "default": ""},
             "section": {"required": False, "default": "applications"},
         }
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        request = self.context.get("request")
-        if request is not None:
-            # Ownership check for free: a workspace id the caller
-            # doesn't own simply isn't in this queryset, so DRF's
-            # PrimaryKeyRelatedField reports it as "does not exist"
-            # (400) rather than needing a separate permission check.
-            self.fields["workspace"].queryset = Workspace.objects.filter(owner=request.user)
-
 
 class OverrideWriteSerializer(serializers.Serializer):
     """POST /api/applications/{id}/override body. Every field left
@@ -118,7 +105,7 @@ class BulkOverrideWriteSerializer(serializers.Serializer):
     date_applied, or date_applied_source for a bulk action).
     """
 
-    item_ids = serializers.ListField(child=serializers.IntegerField(), allow_empty=False)
+    item_ids = serializers.ListField(child=serializers.IntegerField(), allow_empty=False, max_length=1000)
     manual_status = serializers.CharField(required=False, allow_null=True, allow_blank=True)
     reset_status = serializers.BooleanField(required=False, default=False)
     archived = serializers.BooleanField(required=False, allow_null=True)

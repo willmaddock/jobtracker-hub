@@ -90,7 +90,7 @@ class DossierAPITestCase(APITestCase):
 
     def _get_dossier(self, application=None):
         application = application or self.application
-        return self.client.get(reverse("application-dossier", args=[application.id]))
+        return self.client.get(reverse("application-dossier", args=[self.workspace.pk, application.id]))
 
 
 class OwnershipTests(DossierAPITestCase):

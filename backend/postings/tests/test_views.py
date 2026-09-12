@@ -52,10 +52,10 @@ class JobPostingAPITestCase(APITestCase):
         )
 
     def list_url(self):
-        return reverse("job-posting-list")
+        return reverse("job-posting-list", args=[self.workspace.pk])
 
     def detail_action_url(self, posting_id, action_name):
-        return reverse(f"job-posting-{action_name}", args=[posting_id])
+        return reverse(f"job-posting-{action_name}", args=[self.workspace.pk, posting_id])
 
 
 class UnauthenticatedAccessTests(JobPostingAPITestCase):

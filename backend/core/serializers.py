@@ -83,24 +83,14 @@ class ManageSerializer(serializers.Serializer):
 
 
 class MergeSerializer(serializers.Serializer):
-    """POST /api/manage/merge body -- `names` (every raw company name
-    involved, canonical included) all get aliased to `canonical`,
-    same as _app/api.py's merge(): the canonical name itself is
-    skipped so it never aliases to itself. `workspace` is validated
-    for ownership by the view (core/views.py's _get_owned_workspace),
-    the same way CategoryOverrideView/CategoryDeleteView validate it
-    outside their own write serializers -- so this only checks shape
-    (a plain id), not ownership.
-    """
+    """Company alias values; the view assigns Workspace from the canonical route."""
 
     names = serializers.ListField(child=serializers.CharField(), allow_empty=False)
     canonical = serializers.CharField()
-    workspace = serializers.IntegerField()
 
 
 class UnmergeSerializer(serializers.Serializer):
     alias = serializers.CharField()
-    workspace = serializers.IntegerField()
 
 
 class HubSettingsSerializer(serializers.ModelSerializer):

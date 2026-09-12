@@ -38,12 +38,12 @@ class ApplicationsAPITestCase(APITestCase):
 
 class ListApplicationsTests(ApplicationsAPITestCase):
     def test_requires_auth(self):
-        response = self.client.get(reverse("application-list"))
+        response = self.client.get(reverse("application-list", args=[self.workspace.pk]))
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_lists_only_own_applications(self):
         self.client.login(username="alice", password="pw123456")
-        response = self.client.get(reverse("application-list"))
+        response = self.client.get(reverse("application-list", args=[self.workspace.pk]))
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         ids = [item["id"] for item in response.data]
         self.assertIn(self.application.id, ids)
@@ -53,7 +53,7 @@ class ListApplicationsTests(ApplicationsAPITestCase):
         self.application.status = "applied"
         self.application.save()
         self.client.login(username="alice", password="pw123456")
-        response = self.client.get(reverse("application-list"))
+        response = self.client.get(reverse("application-list", args=[self.workspace.pk]))
         row = next(item for item in response.data if item["id"] == self.application.id)
         self.assertEqual(row["effective_status"], "applied")
 
@@ -62,7 +62,7 @@ class ListApplicationsTests(ApplicationsAPITestCase):
         self.application.save()
         Override.objects.create(application=self.application, manual_status="interviewing")
         self.client.login(username="alice", password="pw123456")
-        response = self.client.get(reverse("application-list"))
+        response = self.client.get(reverse("application-list", args=[self.workspace.pk]))
         row = next(item for item in response.data if item["id"] == self.application.id)
         self.assertEqual(row["effective_status"], "interviewing")
 
@@ -71,8 +71,8 @@ class CreateApplicationTests(ApplicationsAPITestCase):
     def test_create_minimal(self):
         self.client.login(username="alice", password="pw123456")
         response = self.client.post(
-            reverse("application-list"),
-            {"workspace": self.workspace.id, "company": "Globex", "role_label": "PM"},
+            reverse("application-list", args=[self.workspace.pk]),
+            {"company": "Globex", "role_label": "PM"},
         )
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(response.data["company"], "Globex")
@@ -80,8 +80,8 @@ class CreateApplicationTests(ApplicationsAPITestCase):
     def test_create_with_status_writes_override_and_history(self):
         self.client.login(username="alice", password="pw123456")
         response = self.client.post(
-            reverse("application-list"),
-            {"workspace": self.workspace.id, "company": "Globex", "role_label": "PM", "status": "interviewing"},
+            reverse("application-list", args=[self.workspace.pk]),
+            {"company": "Globex", "role_label": "PM", "status": "interviewing"},
         )
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         app_id = response.data["id"]
@@ -92,24 +92,24 @@ class CreateApplicationTests(ApplicationsAPITestCase):
     def test_create_with_invalid_status_is_rejected(self):
         self.client.login(username="alice", password="pw123456")
         response = self.client.post(
-            reverse("application-list"),
-            {"workspace": self.workspace.id, "company": "Globex", "role_label": "PM", "status": "bogus"},
+            reverse("application-list", args=[self.workspace.pk]),
+            {"company": "Globex", "role_label": "PM", "status": "bogus"},
         )
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
     def test_duplicate_company_role_in_same_workspace_is_rejected(self):
         self.client.login(username="alice", password="pw123456")
         response = self.client.post(
-            reverse("application-list"),
-            {"workspace": self.workspace.id, "company": "Acme Robotics", "role_label": "Backend Engineer"},
+            reverse("application-list", args=[self.workspace.pk]),
+            {"company": "Acme Robotics", "role_label": "Backend Engineer"},
         )
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
     def test_create_with_custom_section_becomes_a_category(self):
         self.client.login(username="alice", password="pw123456")
         response = self.client.post(
-            reverse("application-list"),
-            {"workspace": self.workspace.id, "company": "AWS", "section": "credentials"},
+            reverse("application-list", args=[self.workspace.pk]),
+            {"company": "AWS", "section": "credentials"},
         )
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(response.data["section"], "credentials")
@@ -117,7 +117,7 @@ class CreateApplicationTests(ApplicationsAPITestCase):
     def test_cannot_create_in_another_users_workspace(self):
         self.client.login(username="alice", password="pw123456")
         response = self.client.post(
-            reverse("application-list"),
+            reverse("application-list", args=[self.workspace.pk]),
             {"workspace": self.other_workspace.id, "company": "Globex", "role_label": "PM"},
         )
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
@@ -127,7 +127,7 @@ class OverrideApplicationTests(ApplicationsAPITestCase):
     def test_sets_notes(self):
         self.client.login(username="alice", password="pw123456")
         response = self.client.post(
-            reverse("application-override", args=[self.application.id]), {"notes": "called back"}
+            reverse("application-override", args=[self.workspace.pk, self.application.id]), {"notes": "called back"}
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(Override.objects.get(application=self.application).notes, "called back")
@@ -136,7 +136,7 @@ class OverrideApplicationTests(ApplicationsAPITestCase):
         Override.objects.create(application=self.application, notes="original")
         self.client.login(username="alice", password="pw123456")
         self.client.post(
-            reverse("application-override", args=[self.application.id]), {"next_action": "follow up"}
+            reverse("application-override", args=[self.workspace.pk, self.application.id]), {"next_action": "follow up"}
         )
         override = Override.objects.get(application=self.application)
         self.assertEqual(override.notes, "original")
@@ -145,7 +145,7 @@ class OverrideApplicationTests(ApplicationsAPITestCase):
     def test_manual_status_logs_status_history(self):
         self.client.login(username="alice", password="pw123456")
         self.client.post(
-            reverse("application-override", args=[self.application.id]), {"manual_status": "interviewing"}
+            reverse("application-override", args=[self.workspace.pk, self.application.id]), {"manual_status": "interviewing"}
         )
         self.assertTrue(
             StatusHistory.objects.filter(application=self.application, status="interviewing").exists()
@@ -157,7 +157,7 @@ class OverrideApplicationTests(ApplicationsAPITestCase):
         self.application.save()
         self.client.login(username="alice", password="pw123456")
         self.client.post(
-            reverse("application-override", args=[self.application.id]), {"reset_status": True}
+            reverse("application-override", args=[self.workspace.pk, self.application.id]), {"reset_status": True}
         )
         override = Override.objects.get(application=self.application)
         self.assertIsNone(override.manual_status)
@@ -171,7 +171,7 @@ class OverrideApplicationTests(ApplicationsAPITestCase):
         )
         self.client.login(username="alice", password="pw123456")
         self.client.post(
-            reverse("application-override", args=[self.application.id]), {"date_applied": "2026-02-01"}
+            reverse("application-override", args=[self.workspace.pk, self.application.id]), {"date_applied": "2026-02-01"}
         )
         override = Override.objects.get(application=self.application)
         self.assertEqual(str(override.date_applied), "2026-02-01")
@@ -180,7 +180,7 @@ class OverrideApplicationTests(ApplicationsAPITestCase):
     def test_cannot_override_another_users_application(self):
         self.client.login(username="alice", password="pw123456")
         response = self.client.post(
-            reverse("application-override", args=[self.other_application.id]), {"notes": "x"}
+            reverse("application-override", args=[self.workspace.pk, self.other_application.id]), {"notes": "x"}
         )
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
@@ -192,7 +192,7 @@ class BulkOverrideApplicationTests(ApplicationsAPITestCase):
         )
         self.client.login(username="alice", password="pw123456")
         response = self.client.post(
-            reverse("application-bulk-override"),
+            reverse("application-bulk-override", args=[self.workspace.pk]),
             {"item_ids": [self.application.id, second.id], "archived": True},
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -207,7 +207,7 @@ class BulkOverrideApplicationTests(ApplicationsAPITestCase):
         """
         self.client.login(username="alice", password="pw123456")
         response = self.client.post(
-            reverse("application-bulk-override"),
+            reverse("application-bulk-override", args=[self.workspace.pk]),
             {"item_ids": [self.application.id], "notes": "should be ignored", "archived": True},
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -215,14 +215,15 @@ class BulkOverrideApplicationTests(ApplicationsAPITestCase):
         self.assertTrue(override.archived)
         self.assertIsNone(override.notes)
 
-    def test_skips_ids_from_another_users_workspace(self):
+    def test_rejects_ids_from_another_users_workspace(self):
         self.client.login(username="alice", password="pw123456")
         response = self.client.post(
-            reverse("application-bulk-override"),
+            reverse("application-bulk-override", args=[self.workspace.pk]),
             {"item_ids": [self.application.id, self.other_application.id], "archived": True},
         )
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data["count"], 1)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertFalse(Override.objects.exists())
+        self.assertFalse(StatusHistory.objects.exists())
         self.assertFalse(hasattr(self.other_application, "override") and self.other_application.override.archived)
 
 

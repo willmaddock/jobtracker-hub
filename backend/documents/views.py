@@ -47,6 +47,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from core.workspace_scope import WorkspaceScopedMixin, scoped_duplicate_counts
 from accounts.models import Workspace
 from applications.models import Application
 
@@ -58,13 +59,13 @@ from .serializers import (
     DocumentRenameSerializer,
     DocumentSerializer,
 )
-from .services import classify_doc_type, duplicate_counts
+from .services import classify_doc_type
 
 RESERVED_CATEGORY_SECTIONS = {"applications"}
 
 
-class DocumentViewSet(mixins.RetrieveModelMixin, viewsets.GenericViewSet):
-    """rename / delete / override for a single Document, all reached
+class DocumentViewSet(WorkspaceScopedMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
+    """Metadata / rename / override for a single Document, all reached
     by its real id (see serializers.py's module docstring on why this
     drops the original's relpath identity). No list route here --
     listing is always scoped to one application, so it lives on
@@ -75,16 +76,16 @@ class DocumentViewSet(mixins.RetrieveModelMixin, viewsets.GenericViewSet):
     serializer_class = DocumentSerializer
 
     def get_queryset(self):
-        return Document.objects.filter(workspace__owner=self.request.user).select_related(
+        return Document.objects.filter(workspace=self.get_workspace(), application__workspace=self.get_workspace()).select_related(
             "override", "application"
         )
 
     def _serialize(self, document: Document) -> dict:
-        counts = duplicate_counts(document.workspace, [document.content_hash])
+        counts = scoped_duplicate_counts(document.workspace, [document.content_hash])
         return DocumentSerializer(document, context={"duplicate_counts": counts}).data
 
     @action(detail=True, methods=["post"])
-    def rename(self, request, pk=None):
+    def rename(self, request, pk=None, **kwargs):
         """Renames the file in place. doc_type is recomputed from the
         new filename via the same classify_doc_type rules used at
         upload time -- a rename is usually exactly how you'd fix a
@@ -107,7 +108,7 @@ class DocumentViewSet(mixins.RetrieveModelMixin, viewsets.GenericViewSet):
         return Response(self._serialize(document))
 
     @action(detail=True, methods=["post"])
-    def override(self, request, pk=None):
+    def override(self, request, pk=None, **kwargs):
         """Manual doc-type correction for a file the filename-based
         classifier can't disambiguate on its own. Never touches the
         stored file itself.
@@ -124,8 +125,17 @@ class DocumentViewSet(mixins.RetrieveModelMixin, viewsets.GenericViewSet):
             DocumentOverride.objects.filter(document=document).delete()
         return Response(self._serialize(document))
 
+
+class LegacyDocumentDeletionViewSet(viewsets.GenericViewSet):
+    """Preserves the existing deletion endpoint independently of scoped actions."""
+
+    serializer_class = DocumentSerializer
+    def get_queryset(self):
+        return Document.objects.filter(workspace__owner=self.request.user).select_related(
+            "override", "application")
+
     @action(detail=True, methods=["post"])
-    def delete(self, request, pk=None):
+    def delete(self, request, pk=None, **kwargs):
         """Deletes both the storage object and the Document row --
         the original moved the file to the OS Trash (recoverable);
         there's no equivalent "trash" tier for object storage here,
@@ -152,8 +162,8 @@ def _category_rows(workspace) -> list[dict]:
     rows = []
     for section, app_ids in sorted(grouped.items()):
         doc_count = sum(
-            application.documents.count()
-            for application in Application.objects.filter(id__in=app_ids)
+            application.documents.filter(workspace=workspace).count()
+            for application in Application.objects.filter(workspace=workspace, id__in=app_ids)
         )
         rows.append({
             "section": section,
@@ -164,48 +174,26 @@ def _category_rows(workspace) -> list[dict]:
     return rows
 
 
-class CategoryListView(APIView):
+class CategoryListView(WorkspaceScopedMixin, APIView):
     """GET /api/categories -- every non-reserved section currently in
     use in this workspace, with item/doc counts and archive state.
     """
 
     permission_classes = [IsAuthenticated]
 
-    def get(self, request):
-        rows = _category_rows_for(request)
+    def get(self, request, **kwargs):
+        rows = _category_rows(self.get_workspace())
         serializer = CategorySerializer(rows, many=True)
         return Response(serializer.data)
 
 
-def _category_rows_for(request):
-    # Categories are workspace-scoped like everything else, but this
-    # endpoint (unlike applications/postings) has no single-workspace
-    # URL segment to key off of -- it aggregates across every
-    # workspace the caller owns, one row per (workspace, section)
-    # collapsed the same way the frontend already expects a flat
-    # category list.
-    rows: list[dict] = []
-    for workspace in Workspace.objects.filter(owner=request.user):
-        rows.extend(_category_rows(workspace))
-    return rows
-
-
-class CategoryOverrideView(APIView):
-    """POST /api/categories/{section}/override -- archive/unarchive
-    a category. `workspace_id` is required in the body since section
-    ids aren't globally unique (two workspaces can both have a
-    "leads" category) -- same ownership-scoping requirement every
-    other write in this codebase has, just spelled out explicitly
-    here instead of coming from a URL segment.
-    """
+class CategoryOverrideView(WorkspaceScopedMixin, APIView):
+    """Archive the existing section-derived adapter in the route's Workspace."""
 
     permission_classes = [IsAuthenticated]
 
-    def post(self, request, section):
-        workspace_id = request.data.get("workspace")
-        workspace = Workspace.objects.filter(owner=request.user, id=workspace_id).first()
-        if workspace is None:
-            raise ValidationError({"workspace": "Required and must be a workspace you own."})
+    def post(self, request, section, **kwargs):
+        workspace = self.get_workspace()
 
         serializer = CategoryOverrideWriteSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)

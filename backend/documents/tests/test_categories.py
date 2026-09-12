@@ -34,7 +34,7 @@ class CategoryAPITestCase(APITestCase):
 class ListCategoriesTests(CategoryAPITestCase):
     def test_excludes_applications_section(self):
         self.client.login(username="alice", password="pw123456")
-        response = self.client.get(reverse("category-list"))
+        response = self.client.get(reverse("category-list", args=[self.workspace.pk]))
         sections = [row["section"] for row in response.data]
         self.assertNotIn("applications", sections)
         self.assertIn("credentials", sections)
@@ -42,7 +42,7 @@ class ListCategoriesTests(CategoryAPITestCase):
 
     def test_only_shows_own_workspace_categories(self):
         self.client.login(username="alice", password="pw123456")
-        response = self.client.get(reverse("category-list"))
+        response = self.client.get(reverse("category-list", args=[self.workspace.pk]))
         # Bob's "credentials" category has its own row too, but alice's
         # request should never reflect Bob's counts.
         credentials_row = next(row for row in response.data if row["section"] == "credentials")
@@ -53,8 +53,8 @@ class CategoryOverrideTests(CategoryAPITestCase):
     def test_archives_a_category(self):
         self.client.login(username="alice", password="pw123456")
         response = self.client.post(
-            reverse("category-override", args=["credentials"]),
-            {"workspace": self.workspace.id, "archived": True},
+            reverse("category-override", args=[self.workspace.pk, "credentials"]),
+            {"archived": True},
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertTrue(
@@ -64,15 +64,15 @@ class CategoryOverrideTests(CategoryAPITestCase):
     def test_404_for_empty_category(self):
         self.client.login(username="alice", password="pw123456")
         response = self.client.post(
-            reverse("category-override", args=["misc"]),
-            {"workspace": self.workspace.id, "archived": True},
+            reverse("category-override", args=[self.workspace.pk, "misc"]),
+            {"archived": True},
         )
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
     def test_rejects_workspace_not_owned(self):
         self.client.login(username="alice", password="pw123456")
         response = self.client.post(
-            reverse("category-override", args=["credentials"]),
+            reverse("category-override", args=[self.workspace.pk, "credentials"]),
             {"workspace": self.other_workspace.id, "archived": True},
         )
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)

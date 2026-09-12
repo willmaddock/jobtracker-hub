@@ -1,6 +1,6 @@
 # Django migration: current status
 
-Maintained checkpoint: 2026-09-12, accepted foundational design consolidated; documentation only.
+Maintained checkpoint: 2026-09-12, Workspace Scoping Core — Backend Only implemented and automated-test verified.
 
 ## 1. Scope and source of truth
 
@@ -22,19 +22,28 @@ Maintained checkpoint: 2026-09-12, accepted foundational design consolidated; do
 | Item | Baseline |
 |---|---|
 | Branch | `django-migration` |
-| Documentation checkpoint entering consolidation | `a96cdf9` — Establish Django migration decision baseline |
-| Implementation baseline commit | `ecd1727` — Merge main into django-migration |
+| Base commit for this implementation | `8108a9f` — Consolidate Django migration foundations |
 | Legacy suite | 370 passed |
-| Django full suite | 466 passed |
-| Django core suite | 59 passed (subset, not additional to full suite) |
+| Django full suite | 491 passed |
+| Workspace scope and cross-cutting tests | 52 passed (subset) |
+| Application views, documents, dossier tests | 44 passed (subset) |
+| Document views, categories, posting views tests | 31 passed (subset) |
+| Django system check | No issues |
 
-Test results were supplied and confirmed by the user for `ecd1727`, **before
-implementation of the newly accepted decisions**. They supersede older counts
-in README/handoffs. No tests were rerun for this documentation-only checkpoint.
-The checkout was clean entering consolidation at `a96cdf9`. This edit only records
-accepted Topics 1–9 in Foundations and updates authority/status links. No new
-implementation, fresh application tests, or operational validation occurred.
-Commit/push state is separate from this implementation/readiness claim.
+These results were freshly obtained for the Workspace Scoping Core implementation,
+including format-suffix compatibility. The legacy suite reported two deprecation
+warnings. The standalone workspace-scope module passed 25 tests; targeted counts
+are subsets of the full Django suite. `git diff --check` passed.
+
+No schema migration was created. `makemigrations --check --dry-run` remains blocked
+by pre-existing `email_sync` provider-choice drift (proposed
+`0006_alter_emailaccount_provider.py`), independently reproduced at clean `8108a9f`.
+That check was not rerun for the format-suffix correction; the drift was not changed.
+Browser, OAuth, Celery, storage-security, and production validation remain outstanding.
+Commit/push state is separate from implementation/readiness.
+
+Historical user-confirmed results at `ecd1727` were 370 legacy, 466 full Django,
+and 59 core tests. They describe the earlier audit baseline, not this checkpoint.
 
 ## 3. Accepted target summary
 
@@ -63,8 +72,10 @@ All ten decisions are approved; full boundaries and consequences live in the
   fixes do not propagate between architectures automatically.
 - `desktop/`: pywebview launcher still starts legacy FastAPI.
 - Django has owned workspaces, stable IDs/FKs, admin, file storage abstraction,
-  provider integrations, Celery tasks, and Redis configuration. Most read views
-  aggregate all owned workspaces. Production settings still inherit SQLite.
+  provider integrations, Celery tasks, and Redis configuration. Included synchronous
+  core/application/document/posting APIs now require a selected workspace in the
+  URL. Email APIs and legacy deletion paths remain outside this slice.
+  Production settings still inherit SQLite.
 - Environments: `.venv/` for legacy tests; `backend/venv/` for Django. Manifests:
   `_app/requirements.txt`, `requirements-dev.txt`, `desktop/requirements.txt`,
   and `backend/requirements.txt`.
@@ -72,20 +83,20 @@ All ten decisions are approved; full boundaries and consequences live in the
 ## 5. Functional migration matrix
 
 All target behavior below is **accepted**. Implementation is assessed against
-code at `ecd1727`. “Baseline coverage” means tests for existing components are
-included in the user-confirmed 466-test Django suite, not complete target parity.
+the audit at `ecd1727`, updated below for Workspace Scoping Core. “Baseline coverage”
+means existing component tests, not complete target parity; current counts are in §2.
 No newly accepted capability is marked verified merely because it is designed.
 
 | Area | Implemented now | Automated verification | Operational/end-to-end evidence |
 |---|---|---|---|
-| Auth/workspaces | Login/logout/me, owned workspace CRUD; explicit selected-workspace reads incomplete | Baseline coverage; target tab/scoping flows pending | Product onboarding/cutover pending |
+| Auth/workspaces | Login/logout/me, owned workspace CRUD; included core APIs use explicit URL workspace and ownership checks; auth infrastructure unchanged | Same-user/cross-user backend isolation covered; browser/tab flows pending | Product onboarding/cutover pending |
 | Frontend/desktop | Legacy UI/runtime only; no Django product integration/client | Legacy baseline; Django UI acceptance pending | Browser replacement pending |
 | Applications/overrides | Create/list/overrides/history; path uniqueness still restricts repeats | Baseline coverage; repeats/warnings/history parity pending | Integrated workflow pending |
 | Derivation/dossier | PDF/TXT extraction, dossier/date evidence; no document-to-application status/activity recalculation | Existing extraction/dossier coverage; derivation pending | Target timestamp/import behavior pending |
 | Categories | Section-derived groups and archive/delete, no named category model | Existing section-category coverage only | Target category workflow pending |
 | Documents/files | Upload/list/type correction/metadata rename; storage URL; permanent individual delete | Existing API/extraction coverage | Production storage/previews pending |
 | Trash/recovery | No application-managed Trash; parent deletion lacks object cleanup | Target lifecycle unimplemented/unverified | Restore/permanent cleanup pending |
-| Search/dashboards/settings | APIs exist; owner-wide reads; search differs; Ghosted missing | Existing core coverage (59 tests); target parity pending | Frontend integration pending |
+| Search/dashboards/settings | Included reads, counts, search, section adapters, merges, and settings scoped to URL workspace; search parity and Ghosted still pending | Scoped isolation coverage; broader target parity pending | Frontend integration pending |
 | Provider connections | Gmail/Outlook/IMAP connect/sync/disconnect; encrypted credentials | Baseline provider/view coverage, mocked external seams | Historical Gmail OAuth/live-sync checkpoint; complete target flows unvalidated; Outlook/IMAP live validation unestablished |
 | Sync/jobs | Match/discovery/thread writes; inline single sync, queued bulk/Beat | Existing sync/task coverage; not real-broker proof | Real Redis/worker/Beat operation unestablished |
 | Retained messages/review | Metadata records only; no durable source model or discovery review API/account-list API | Target retention/review unimplemented/unverified | Pending |
@@ -107,7 +118,8 @@ No newly accepted capability is marked verified merely because it is designed.
   in the legacy implementation.
 - Replace path uniqueness, section-only categories, and immediate deletion
   with accepted identities, named categories, and Trash/lifecycle rules.
-- Scope all normal views to selected workspace; adapt payloads/errors and
+- Complete remaining workspace integration for email/jobs and the frontend;
+  included synchronous core APIs are scoped. Adapt remaining payloads/errors and
   search semantics deliberately. Preserve PDF/text/DOCX browser previews.
 - Build importer/exporter and validate restoration. Existing documents migration
   `0002` deletes/recreates DocumentOverride assuming no real data; fresh-database
@@ -118,18 +130,27 @@ No newly accepted capability is marked verified merely because it is designed.
 ## 7. Current implementation phase
 
 Decisions 1–10 and foundational Topics 1–9, including final refinements, are
-accepted. **Implementation of those foundations has not begun/resumed.** Existing
-backend components remain at the audit baseline. This checkpoint is documentation
-consolidation only, not completion of historical numbered implementation phases.
+accepted. **Workspace Scoping Core — Backend Only is implemented.** A reusable
+request mixin resolves authenticated workspace ownership, rejects conflicting
+workspace/owner input, and scopes included object lookups and nested references.
+Included application/document/posting APIs and core reads/settings use URL context;
+bulk overrides validate all targets before writing. Converted owner-wide routes
+are removed, with no redirects or fallback writes. DRF format-suffix variants are
+preserved for converted router routes and the existing deletion-only routes;
+explicit category/core adapters gain no new suffix behavior.
+
+Deletion remains legacy behavior awaiting lifecycle work. No Trash, schema,
+email/account/auth infrastructure, frontend, or task changes are part of this slice.
+This is not completion of the broader workspace contract or historical phases.
 Evidence regeneration replacement versus supersession still requires an explicit
 decision before that behavior is implemented; other remaining implementation and
 operational details are listed in Foundations.
 
 ## 8. Next recommended implementation actions
 
-1. Record this documentation checkpoint.
-2. Separately authorize and plan the first implementation slice under Decisions and Foundations.
-3. Establish explicit workspace/auth foundations and the small frontend client.
+1. Record the verified Workspace Scoping Core checkpoint.
+2. Separately authorize and plan the next slice under Decisions and Foundations.
+3. Complete remaining workspace/auth integration and the small frontend client.
 4. Implement schema/lifecycle foundations, derivation, and parity corrections.
 5. Connect core browser workflows, then retained email/review/postings/evidence.
 6. Develop import/export alongside models; rehearse representative workspaces.
@@ -175,6 +196,9 @@ commit references, and incorrect completion claims. No application changes or
 new operational validation are represented by this checkpoint.
 
 2026-09-12: consolidated accepted Topics 1–9 in Foundations and narrowly updated
-Decisions, Status, and AGENTS authority/navigation. Implementation and all existing
-cutover/retirement gates remain pending. Historical suite results above were not
-rerun; this documentation edit adds no operational evidence.
+Decisions, Status, and AGENTS authority/navigation at `8108a9f`. That consolidation
+was documentation only and added no fresh test or operational evidence.
+
+Workspace Scoping Core now implements the backend-only subset described in §7,
+with fresh automated verification in §2. All operational cutover/retirement gates
+remain open.

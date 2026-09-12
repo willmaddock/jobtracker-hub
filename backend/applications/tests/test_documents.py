@@ -40,14 +40,14 @@ class ListApplicationDocumentsTests(ApplicationDocumentsAPITestCase):
             filename="resume.pdf", doc_type="resume", ext=".pdf", content_hash="h1", size=3,
         )
         self.client.login(username="alice", password="pw123456")
-        response = self.client.get(reverse("application-documents", args=[self.application.id]))
+        response = self.client.get(reverse("application-documents", args=[self.workspace.pk, self.application.id]))
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(response.data), 1)
         self.assertEqual(response.data[0]["filename"], "resume.pdf")
 
     def test_cannot_list_another_users_application_documents(self):
         self.client.login(username="alice", password="pw123456")
-        response = self.client.get(reverse("application-documents", args=[self.other_application.id]))
+        response = self.client.get(reverse("application-documents", args=[self.workspace.pk, self.other_application.id]))
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
 
@@ -56,7 +56,7 @@ class UploadApplicationDocumentsTests(ApplicationDocumentsAPITestCase):
         self.client.login(username="alice", password="pw123456")
         upload = SimpleUploadedFile("Cover Letter.pdf", b"cover letter bytes")
         response = self.client.post(
-            reverse("application-documents", args=[self.application.id]),
+            reverse("application-documents", args=[self.workspace.pk, self.application.id]),
             {"files": [upload]},
             format="multipart",
         )
@@ -69,7 +69,7 @@ class UploadApplicationDocumentsTests(ApplicationDocumentsAPITestCase):
     def test_uploads_multiple_files(self):
         self.client.login(username="alice", password="pw123456")
         response = self.client.post(
-            reverse("application-documents", args=[self.application.id]),
+            reverse("application-documents", args=[self.workspace.pk, self.application.id]),
             {
                 "files": [
                     SimpleUploadedFile("resume.pdf", b"resume bytes"),
@@ -84,7 +84,7 @@ class UploadApplicationDocumentsTests(ApplicationDocumentsAPITestCase):
     def test_cannot_upload_to_another_users_application(self):
         self.client.login(username="alice", password="pw123456")
         response = self.client.post(
-            reverse("application-documents", args=[self.other_application.id]),
+            reverse("application-documents", args=[self.workspace.pk, self.other_application.id]),
             {"files": [SimpleUploadedFile("resume.pdf", b"x")]},
             format="multipart",
         )
