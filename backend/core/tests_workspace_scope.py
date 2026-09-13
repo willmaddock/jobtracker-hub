@@ -233,7 +233,7 @@ class WorkspaceScopeTests(APITestCase):
     def test_missing_workspace_and_existing_auth_requirement(self):
         self.assertEqual(self.client.get("/api/workspaces/999999/search/").status_code, 404)
         self.client.force_authenticate(None)
-        self.assertEqual(self.client.get(self.url("applications/")).status_code, 403)
+        self.assertEqual(self.client.get(self.url("applications/")).status_code, 401)
 
     def test_no_alternative_scope_or_move_assignment(self):
         self.populate_related()

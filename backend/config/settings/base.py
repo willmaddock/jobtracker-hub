@@ -171,23 +171,13 @@ STORAGES = {
 }
 
 
-# Django REST Framework (docs/DJANGO_MIGRATION_PLAN.md Phase 8).
-#
-# SessionAuthentication over token auth: the `desktop/` launcher runs
-# the frontend same-origin against this same server (see Phase 2's
-# "decided based on whether the frontend stays same-origin" note), so
-# there's no cross-origin case to design a token scheme around.
-# BasicAuthentication is included only so DRF's browsable API and
-# manual curl/http testing can authenticate without a browser session.
+# Same-origin browser product access: sessions and explicit CSRF protection.
 REST_FRAMEWORK = {
-    'DEFAULT_AUTHENTICATION_CLASSES': [
-        'rest_framework.authentication.SessionAuthentication',
-        'rest_framework.authentication.BasicAuthentication',
-    ],
-    'DEFAULT_PERMISSION_CLASSES': [
-        'rest_framework.permissions.IsAuthenticated',
-    ],
+    'DEFAULT_AUTHENTICATION_CLASSES': ['accounts.authentication.ProductSessionAuthentication'],
+    'DEFAULT_PERMISSION_CLASSES': ['rest_framework.permissions.IsAuthenticated'],
+    'EXCEPTION_HANDLER': 'core.api_errors.api_exception_handler',
 }
+CSRF_FAILURE_VIEW = 'core.api_errors.csrf_failure'
 
 
 # Email

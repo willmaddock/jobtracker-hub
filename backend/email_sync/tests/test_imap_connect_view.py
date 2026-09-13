@@ -54,7 +54,7 @@ class ImapConnectViewTests(APITestCase):
     def test_requires_auth(self):
         self.client.force_authenticate(None)
         response = self.client.post(self.url, self._body())
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
     def test_requires_workspace_email_password_host(self):
         for missing_field in ("workspace", "email", "password", "host"):

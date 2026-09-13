@@ -1,0 +1,58 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>Foundation browser checks</title>
+<h1>Foundation browser checks</h1>
+<p>Run only on the disposable serve_foundation.py server. This signs in as fixture Alice.</p>
+<button id="run">Run browser checks</button><pre id="results" role="status">Not run</pre>
+<script src="/workspace-context.js"></script><script src="/api-client.js"></script>
+<script>
+document.querySelector('#run').onclick = async function () {
+  this.disabled = true;
+  const output = document.querySelector('#results'); output.textContent = '';
+  let passed = 0;
+  function assert(value, message) { if (!value) throw Error(message); }
+  async function test(name, fn) { await fn(); passed++; output.textContent += 'PASS ' + name + '\n'; }
+  const context = JTHWorkspace.createContext();
+  const client = JTHApi.createClient({context});
+  try {
+    await test('anonymous login CSRF rejection', async () => {
+      await client.bootstrap();
+      try { await client.request('/api/auth/logout', {method:'POST'}); } catch(e) { assert(e.code === 'authentication_required', e.code); }
+      const response = await fetch('/api/auth/login', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:'alice',password:'browser-fixture-only'})});
+      assert(response.status === 403, 'login allowed without CSRF');
+      assert((await response.json()).code === 'csrf_failed', 'CSRF code');
+    });
+    await test('login and rotated CSRF', async () => {
+      await client.bootstrap();
+      const user = await client.request('/api/auth/login', {method:'POST',body:{username:'alice',password:'browser-fixture-only'}});
+      context.setActor(user.id); context.select(1); await client.bootstrap();
+      assert((await client.request('/api/auth/me')).username === 'alice', 'session missing');
+    });
+    await test('real XHR multipart carries File, text, session, CSRF', async () => {
+      const form = new FormData(); form.append('label','multipart fixture'); form.append('file',new File(['fixture bytes'],'fixture.txt',{type:'text/plain'}));
+      const result = await client.upload('/api/test-only/upload',form);
+      assert(result.actor === 'alice' && result.label === 'multipart fixture' && result.filename === 'fixture.txt' && result.content === 'fixture bytes', JSON.stringify(result));
+    });
+    await test('XHR CSRF error parity', async () => {
+      const other = JTHApi.createClient({context}); await other.bootstrap();
+      await client.request('/api/auth/login', {method:'POST',body:{username:'alice',password:'browser-fixture-only'}});
+      try { await other.upload('/api/test-only/upload',new FormData()); throw Error('missing rejection'); }
+      catch(e) { assert(e.code === 'csrf_failed' && e.status === 403, e.message); }
+      await client.bootstrap();
+    });
+    await test('workspace ownership and immutable read contexts', async () => {
+      await client.readWorkspace(); context.select(2); await client.readWorkspace(); context.select(3);
+      try { await client.readWorkspace(); throw Error('foreign workspace exposed'); } catch(e) { assert(e.code === 'not_found', e.message); }
+      context.select(1);
+    });
+    await test('real delayed response discarded after navigation', async () => {
+      const pending = client.request('/api/test-only/slow'); context.select(2);
+      try { await pending; throw Error('stale read accepted'); } catch(e) { assert(e.code === 'stale_response', e.message); }
+    });
+    await test('logout 204 and expired session 401', async () => {
+      assert(await client.request('/api/auth/logout',{method:'POST'}) === null, '204 handling');
+      try { await client.request('/api/auth/me'); throw Error('session remained'); } catch(e) { assert(e.code === 'authentication_required' && e.status === 401, e.message); }
+    });
+    output.textContent += `${passed} passed; 0 failed\n` + navigator.userAgent;
+  } catch(e) { output.textContent += 'FAIL ' + e.message + '\n' + `${passed} passed; 1 failed`; }
+  finally { this.disabled = false; }
+};
+</script></html>

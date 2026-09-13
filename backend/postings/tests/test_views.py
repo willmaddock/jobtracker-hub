@@ -61,7 +61,7 @@ class JobPostingAPITestCase(APITestCase):
 class UnauthenticatedAccessTests(JobPostingAPITestCase):
     def test_list_requires_auth(self):
         response = self.client.get(self.list_url())
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
 
 class ListJobPostingsTests(JobPostingAPITestCase):

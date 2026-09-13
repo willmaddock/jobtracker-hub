@@ -43,7 +43,7 @@ class ListWorkspacesTests(WorkspaceAPITestCase):
     def test_requires_auth(self):
         self.client.force_authenticate(None)
         response = self.client.get(reverse("workspace-list"))
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
 
 class CreateWorkspaceTests(WorkspaceAPITestCase):

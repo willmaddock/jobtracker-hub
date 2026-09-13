@@ -49,6 +49,10 @@ setup with side effects to report on.
 from __future__ import annotations
 
 from django.contrib.auth import authenticate, login, logout
+from django.middleware.csrf import get_token
+from django.utils.decorators import method_decorator
+from django.views.decorators.cache import never_cache
+from django.views.decorators.csrf import csrf_protect
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny
@@ -59,6 +63,17 @@ from .models import Workspace
 from .serializers import LoginSerializer, UserSerializer, WorkspaceSerializer, WorkspaceWriteSerializer
 
 
+@method_decorator(never_cache, name="dispatch")
+class CsrfView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def get(self, request):
+        return Response({"csrfToken": get_token(request)})
+
+
+@method_decorator(csrf_protect, name="dispatch")
+@method_decorator(never_cache, name="dispatch")
 class LoginView(APIView):
     permission_classes = [AllowAny]
 
@@ -72,7 +87,7 @@ class LoginView(APIView):
         )
         if user is None:
             return Response(
-                {"detail": "Invalid username or password."},
+                {"code": "invalid_credentials", "detail": "Invalid username or password."},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
         login(request, user)
@@ -85,6 +100,7 @@ class LogoutView(APIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+@method_decorator(never_cache, name="dispatch")
 class MeView(APIView):
     def get(self, request):
         return Response(UserSerializer(request.user).data)

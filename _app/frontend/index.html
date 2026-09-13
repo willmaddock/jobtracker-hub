@@ -565,6 +565,9 @@
 <body>
 <div id="root"></div>
 
+<!-- DJANGO_FOUNDATION_BOOTSTRAP -->
+<script src="/workspace-context.js"></script>
+<script src="/api-client.js"></script>
 <script type="text/babel" data-presets="react">
 const {useState, useEffect, useMemo, useCallback, useRef, useContext} = React;
 
@@ -7090,7 +7093,140 @@ function App(){
   );
 }
 
-ReactDOM.createRoot(document.getElementById("root")).render(<ErrorBoundary><App /></ErrorBoundary>);
+// The Django entry never mounts App: its effects and caches belong to FastAPI.
+function DjangoFoundation() {
+  const theme = useTheme();
+  const context = useMemo(() => JTHWorkspace.createContext(), []);
+  const client = useMemo(() => JTHApi.createClient({context}), [context]);
+  const identity = useRef(null);
+  const sessionWasAuthenticated = useRef(false);
+  const channel = useRef(null);
+  const [user, setUser] = useState(null);
+  const [workspaces, setWorkspaces] = useState([]);
+  const [selected, setSelected] = useState(null);
+  const [phase, setPhase] = useState("loading");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [connected, setConnected] = useState(false);
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [name, setName] = useState("");
+
+  function clearIdentity() {
+    if (identity.current !== null) history.replaceState(null, "", location.pathname + location.search);
+    context.invalidate(); context.setActor(null); client.clearCsrf();
+    identity.current = null; setUser(null); setWorkspaces([]);
+    setSelected(null); setConnected(false); setPassword(""); setName("");
+  }
+  function report(e) {
+    if (["stale_response", "aborted"].includes(e.code)) return;
+    if (e.code === "authentication_required") {
+      const hadSession = sessionWasAuthenticated.current;
+      clearIdentity(); sessionWasAuthenticated.current = false; setPhase("login");
+      setError(hadSession ? "Your session ended. Sign in to continue." : "");
+    } else setError(e.message);
+  }
+  async function selectRoute(list) {
+    const id = JTHWorkspace.parseRoute(window.location.hash);
+    context.invalidate(); context.select(null); setConnected(false); setSelected(null);
+    if (!id) {
+      if (window.location.hash) setError("Invalid workspace link. Select a workspace.");
+      return;
+    }
+    const workspace = list.find(w => w.id === id);
+    if (!workspace) { setError("Workspace unavailable. Select an accessible workspace."); return; }
+    context.select(id); setSelected(workspace); setError("");
+    try { await client.readWorkspace(); setConnected(true); } catch (e) { report(e); }
+  }
+  async function establish(nextUser) {
+    const changedUser = identity.current !== null && identity.current !== nextUser.id;
+    context.setActor(nextUser.id); identity.current = nextUser.id;
+    sessionWasAuthenticated.current = true;
+    if (changedUser) history.replaceState(null, "", location.pathname + location.search);
+    setUser(nextUser); setPassword(""); setName("");
+    const list = await client.request("/api/workspaces/");
+    setWorkspaces(list); setPhase("ready");
+    await selectRoute(list);
+  }
+  async function checkSession() {
+    context.invalidate(); setPhase("loading"); setConnected(false); setError("");
+    try {
+      await client.bootstrap();
+      const nextUser = await client.request("/api/auth/me");
+      await establish(nextUser);
+    } catch (e) { report(e); if (!["stale_response", "aborted"].includes(e.code)) setPhase(e.code === "authentication_required" ? "login" : "unavailable"); }
+  }
+  useEffect(() => {
+    checkSession();
+    const focus = () => checkSession();
+    const changed = () => checkSession();
+    window.addEventListener("focus", focus);
+    window.addEventListener("hashchange", changed);
+    if (window.BroadcastChannel) {
+      channel.current = new BroadcastChannel("jth-session-change");
+      channel.current.onmessage = () => { clearIdentity(); checkSession(); };
+    }
+    return () => { context.invalidate(); window.removeEventListener("focus", focus); window.removeEventListener("hashchange", changed); if (channel.current) channel.current.close(); };
+  }, []);
+  async function signIn(event) {
+    event.preventDefault(); setBusy(true); setError("");
+    try {
+      await client.bootstrap();
+      const nextUser = await client.request("/api/auth/login", {method:"POST", body:{username,password}});
+      await client.bootstrap(); // Django rotates the CSRF secret on login.
+      if (channel.current) channel.current.postMessage("changed");
+      await establish(nextUser);
+    } catch (e) { report(e); } finally { setPassword(""); setBusy(false); }
+  }
+  async function signOut() {
+    setBusy(true); setError("");
+    try {
+      await client.request("/api/auth/logout", {method:"POST"});
+      clearIdentity(); sessionWasAuthenticated.current = false;
+      history.replaceState(null, "", location.pathname + location.search);
+      setPhase("login");
+      if (channel.current) channel.current.postMessage("changed");
+    } catch (e) { report(e); } finally { setBusy(false); }
+  }
+  async function createWorkspace(event) {
+    event.preventDefault(); setBusy(true); setError("");
+    try {
+      const workspace = await client.request("/api/workspaces/", {method:"POST", body:{name}});
+      setName("");
+      // Creation is an explicit selection intent, unlike singleton inference.
+      window.location.hash = "/workspaces/" + workspace.id;
+    } catch (e) { report(e); } finally { setBusy(false); }
+  }
+  return <main className="app-shell" style={{alignItems:"center",justifyContent:"center"}}>
+    <section className="workspace-preview" style={{width:420,maxWidth:"90vw",padding:24}}>
+      <h1>JobTracker Hub</h1>
+      {error && <p role="alert" className="workspace-pop-err">{error}</p>}
+      {phase === "loading" ? <p role="status">Checking session…</p> : phase === "unavailable" ? <p>Session could not be verified. Refresh to continue.</p> : phase === "login" ?
+        <form onSubmit={signIn}>
+          <p>Sign in with your administrator-provided account.</p>
+          <label>Username<input className="workspace-rename-input" style={{display:"block",width:"100%"}} autoComplete="username" required value={username} onChange={e=>setUsername(e.target.value)} /></label>
+          <label>Password<input className="workspace-rename-input" style={{display:"block",width:"100%"}} type="password" autoComplete="current-password" required value={password} onChange={e=>setPassword(e.target.value)} /></label>
+          <button className="btn" disabled={busy}>Sign in</button>
+        </form> : <>
+          <p>Signed in as {user && user.username}</p>
+          <label>Workspace<select aria-label="Workspace" value={selected ? selected.id : ""} disabled={busy} onChange={e=> { window.location.hash = e.target.value ? "/workspaces/" + e.target.value : ""; }}>
+            <option value="">Select a workspace</option>
+            {workspaces.map(w=><option key={w.id} value={w.id}>{w.name}</option>)}
+          </select></label>
+          {!workspaces.length && <p>No workspaces yet. Create one to continue.</p>}
+          <form onSubmit={createWorkspace}>
+            <label>New workspace name<input className="workspace-rename-input" required value={name} onChange={e=>setName(e.target.value)} /></label>
+            <button className="btn" disabled={busy || !name.trim()}>Create workspace</button>
+          </form>
+          {selected && <p role="status">{connected ? "Connected to " + selected.name + "." : "Checking workspace connection…"}</p>}
+          <p>Application screens are not connected in this migration checkpoint.</p>
+          <button className="btn" disabled={busy} onClick={signOut}>Sign out</button>
+        </>}
+      {error && <button className="btn" disabled={busy} onClick={checkSession}>Refresh session and workspaces</button>}
+    </section>
+  </main>;
+}
+ReactDOM.createRoot(document.getElementById("root")).render(<ErrorBoundary>{window.JTH_DJANGO === true ? <DjangoFoundation /> : <App />}</ErrorBoundary>);
 </script>
 </body>
 </html>

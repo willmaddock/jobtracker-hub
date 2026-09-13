@@ -39,7 +39,7 @@ class ApplicationsAPITestCase(APITestCase):
 class ListApplicationsTests(ApplicationsAPITestCase):
     def test_requires_auth(self):
         response = self.client.get(reverse("application-list", args=[self.workspace.pk]))
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
     def test_lists_only_own_applications(self):
         self.client.login(username="alice", password="pw123456")

@@ -40,7 +40,7 @@ class AuthTests(APITestCase):
 
     def test_me_requires_login(self):
         response = self.client.get(reverse("auth-me"))
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
     def test_me_after_login_reflects_session(self):
         self.client.force_authenticate(self.user)
@@ -53,4 +53,4 @@ class AuthTests(APITestCase):
         logout_response = self.client.post(reverse("auth-logout"))
         self.assertEqual(logout_response.status_code, status.HTTP_204_NO_CONTENT)
         me_response = self.client.get(reverse("auth-me"))
-        self.assertEqual(me_response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(me_response.status_code, status.HTTP_401_UNAUTHORIZED)

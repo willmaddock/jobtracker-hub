@@ -74,7 +74,7 @@ class AttentionTests(CrossCuttingAPITestCase):
     def test_requires_authentication(self):
         self.client.logout()
         response = self.client.get(reverse("attention", args=[self.workspace.pk]))
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
 
 class InsightsTests(CrossCuttingAPITestCase):

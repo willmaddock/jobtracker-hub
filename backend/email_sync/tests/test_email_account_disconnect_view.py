@@ -42,7 +42,7 @@ class EmailAccountDisconnectViewTests(APITestCase):
     def test_requires_auth(self):
         self.client.force_authenticate(None)
         response = self.client.post(self.url)
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
     def test_404_for_nonexistent_account(self):
         url = reverse("email-account-disconnect", args=[999999])

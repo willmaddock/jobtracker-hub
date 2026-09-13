@@ -38,7 +38,7 @@ class EmailAccountSyncAllViewTests(APITestCase):
     def test_requires_auth(self):
         self.client.force_authenticate(None)
         response = self.client.post(self.url)
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
     def test_no_accounts_dispatches_nothing(self):
         with patch("email_sync.views.sync_account_task.delay") as mock_delay:
