@@ -5,17 +5,7 @@ Phase 8 (docs/DJANGO_MIGRATION_PLAN.md) -- DRF viewset for the
 use the owner-authorized Workspace in the route. Existing deletion endpoints
 remain isolated in LegacyApplicationDeletionViewSet.
 
-create() still doesn't create a folder or accept file uploads inline
-(see postings/views.py's apply() for the same deliberate
-simplification) -- uploading now happens as a separate step through
-the `documents` action below, same two-step flow the original's
-"create, then drag files onto the new application" UI already used
-even though its /api/applications/new endpoint *could* take files
-inline. A 409 on create still means the same thing it used to: this
-exact company/role_label combination already exists in this
-workspace (applications/models.py's unique_application_identity_per_workspace
-constraint), just via an IntegrityError catch instead of a
-FileExistsError one.
+Creation delegates to the protected synchronous authority in creation.py.
 
 The `documents` action (list + upload) lands in this slice too -- see
 its own docstring below.
@@ -34,7 +24,7 @@ evidence tier.
 """
 from __future__ import annotations
 
-from django.db import IntegrityError, transaction
+from django.db import transaction
 from django.utils import timezone
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
@@ -67,6 +57,7 @@ from email_sync.models import AccountMatch
 # not a cycle.
 from documents.models import Document, DocumentExtraction
 from documents.serializers import DocumentSerializer, DocumentUploadSerializer
+from applications.creation import CreationContentionMixin
 from core.workspace_scope import WorkspaceScopedMixin, scoped_duplicate_counts
 
 from documents.services import classify_doc_type, sha256_of
@@ -74,7 +65,7 @@ from documents.services import classify_doc_type, sha256_of
 _VALID_STATUSES = [choice[0] for choice in Application.STATUS_CHOICES]
 
 
-class ApplicationViewSet(WorkspaceScopedMixin, mixins.ListModelMixin, viewsets.GenericViewSet):
+class ApplicationViewSet(CreationContentionMixin, WorkspaceScopedMixin, mixins.ListModelMixin, viewsets.GenericViewSet):
     def get_queryset(self):
         return (
             Application.objects.filter(workspace=self.get_workspace())
@@ -88,38 +79,8 @@ class ApplicationViewSet(WorkspaceScopedMixin, mixins.ListModelMixin, viewsets.G
         return ApplicationSerializer
 
     def create(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        data = dict(serializer.validated_data)
-        status_value = data.pop("status", "").strip()
-        if status_value and status_value not in _VALID_STATUSES:
-            raise ValidationError(
-                {"status": f"Unknown status '{status_value}'. Must be one of {_VALID_STATUSES}."}
-            )
-        try:
-            with transaction.atomic():
-                application = Application.objects.create(
-                    workspace=self.get_workspace(),
-                    section=data.get("section", "applications"),
-                    company=data["company"],
-                    role_label=data.get("role_label", ""),
-                    # No folder/Document to derive a real relpath from
-                    # yet -- see this module's docstring.
-                    source_relpath="",
-                )
-                if status_value:
-                    Override.objects.create(application=application, manual_status=status_value)
-                    StatusHistory.objects.create(
-                        application=application, status=status_value,
-                        changed_at=timezone.now(), source="manual_create",
-                    )
-        except IntegrityError:
-            raise ValidationError(
-                {"company": "An application with this company and role already exists."},
-                code="conflict",
-            )
-        application = self.get_queryset().get(id=application.id)
-        return Response(ApplicationSerializer(application).data, status=status.HTTP_201_CREATED)
+        from .creation import request_creation
+        return request_creation(request, self.get_workspace(), self.get_serializer(data=request.data))
 
     @action(detail=True, methods=["get", "post"])
     def documents(self, request, pk=None, **kwargs):
@@ -342,7 +303,7 @@ class LegacyApplicationDeletionViewSet(viewsets.GenericViewSet):
         archived or not -- same as the original, single delete has no
         archived precondition (only bulk-delete below re-verifies
         that). FK cascades (Override, StatusHistory) and SET_NULL
-        (JobPosting.applied_application) handle the cleanup that used
+        (PostingApplicationConversion.application) handle the cleanup that used
         to be several manual DELETE statements plus a document-override
         ghost cleanup loop -- there's no document_overrides table or
         disk folder left to leave a ghost row in anymore.

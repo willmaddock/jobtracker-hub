@@ -6,7 +6,8 @@ of docs/DJANGO_MIGRATION_PLAN.md for making JobPosting fully
 first-class (this model already matches that phase's target shape,
 just without the extraction pipeline behind it yet).
 """
-from django.db import models
+from django.core.exceptions import ValidationError
+from django.db import models, router
 
 from applications.models import Application
 from email_sync.models import EmailAccount
@@ -48,21 +49,6 @@ class JobPosting(models.Model):
     # Starred/saved by the user. Independent of status: a saved job
     # can still be dismissed.
     saved = models.BooleanField(default=False)
-    # The Application this posting was turned into via "Apply",
-    # NULL until that happens. A real nullable FK now -- the old
-    # store kept this as a bare item_key string specifically because
-    # item_keys weren't reliable identifiers; Application.id doesn't
-    # have that problem, so on_delete=SET_NULL keeps a posting around
-    # (un-applied) if its Application is later deleted, rather than
-    # requiring the "re-check against the live list" workaround the
-    # old code needed.
-    applied_application = models.ForeignKey(
-        Application,
-        on_delete=models.SET_NULL,
-        blank=True,
-        null=True,
-        related_name="job_postings",
-    )
     created_at = models.DateTimeField(auto_now_add=True)
     # account + normalized posting URL when available, else account +
     # message_id + normalized title + normalized company. Unique here
@@ -73,5 +59,31 @@ class JobPosting(models.Model):
     class Meta:
         indexes = [models.Index(fields=["status"], name="postings_status_idx")]
 
+    def save(self, *args, **kwargs):
+        if self.pk:
+            using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
+            original = type(self).objects.using(using).filter(pk=self.pk).values(
+                "workspace_id", "account_id"
+            ).first()
+            if original and (
+                original["workspace_id"] != self.workspace_id
+                or original["account_id"] != self.account_id
+            ):
+                raise ValidationError("Existing posting workspace and account are immutable.")
+        return super().save(*args, **kwargs)
+
     def __str__(self) -> str:
         return f"{self.title or '?'} @ {self.company or '?'}"
+
+
+class PostingApplicationConversion(models.Model):
+    """Durable conversion fact; historical unknown operation/time remain null."""
+    workspace = models.ForeignKey("accounts.Workspace", on_delete=models.CASCADE)
+    posting = models.ForeignKey(JobPosting, null=True, on_delete=models.SET_NULL, related_name="conversions")
+    application = models.ForeignKey(Application, null=True, on_delete=models.SET_NULL, related_name="posting_conversions")
+    application_portable_id = models.UUIDField()
+    request_intent = models.OneToOneField("core.ApplicationRequestIntent", null=True, on_delete=models.SET_NULL)
+    converted_at = models.DateTimeField(null=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["posting", "application"], name="unique_surviving_posting_attempt")]

@@ -35,3 +35,25 @@ class HubSettings(models.Model):
 
     def __str__(self) -> str:
         return f"Settings for {self.workspace}"
+
+
+class ApplicationRequestIntent(models.Model):
+    """Compact synchronous allocation identity, retained until workspace deletion.
+
+    No request bodies or descriptive result snapshots. A null result on a completed
+    intent is terminal removal, never permission to allocate again.
+    """
+    actor = models.ForeignKey("accounts.User", on_delete=models.CASCADE)
+    workspace = models.ForeignKey("accounts.Workspace", on_delete=models.CASCADE)
+    key = models.CharField(max_length=128)
+    digest = models.CharField(max_length=64)
+    kind = models.CharField(max_length=16)
+    completed = models.BooleanField(default=False)
+    application = models.ForeignKey("applications.Application", null=True, on_delete=models.SET_NULL)
+    result_portable_id = models.UUIDField(null=True)
+    challenge_token = models.CharField(max_length=64, blank=True)
+    challenge_revision = models.CharField(max_length=64, blank=True)
+    challenge_expires_at = models.DateTimeField(null=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["actor", "workspace", "key"], name="unique_application_request_key")]

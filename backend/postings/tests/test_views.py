@@ -136,6 +136,7 @@ class SaveJobPostingTests(JobPostingAPITestCase):
 class ApplyJobPostingTests(JobPostingAPITestCase):
     def setUp(self):
         super().setUp()
+        self.client.credentials(HTTP_IDEMPOTENCY_KEY="test-posting-key-0001")
         self.client.force_authenticate(self.user)
 
     def test_apply_creates_application_and_links_posting(self):
@@ -149,7 +150,7 @@ class ApplyJobPostingTests(JobPostingAPITestCase):
         self.assertEqual(application.company, "Acme Corp")
         self.assertEqual(application.override.manual_status, "applied")
         self.posting.refresh_from_db()
-        self.assertEqual(self.posting.applied_application_id, application.id)
+        self.assertEqual(self.posting.conversions.get().application_id, application.id)
 
     def test_apply_falls_back_to_posting_company_and_title(self):
         response = self.client.post(self.detail_action_url(self.posting.id, "apply"), {})
@@ -158,10 +159,10 @@ class ApplyJobPostingTests(JobPostingAPITestCase):
         self.assertEqual(application.company, "Acme Corp")
         self.assertEqual(application.role_label, "Software Engineer")
 
-    def test_apply_twice_is_rejected(self):
+    def test_apply_same_key_replays_original(self):
         self.client.post(self.detail_action_url(self.posting.id, "apply"), {})
         response = self.client.post(self.detail_action_url(self.posting.id, "apply"), {})
-        self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
 
     def test_apply_with_invalid_status_is_rejected(self):
         response = self.client.post(
@@ -181,3 +182,99 @@ class ApplyJobPostingTests(JobPostingAPITestCase):
     def test_cannot_apply_to_another_users_posting(self):
         response = self.client.post(self.detail_action_url(self.other_posting.id, "apply"), {})
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+
+class PostingOwnershipTests(JobPostingAPITestCase):
+    def setUp(self):
+        super().setUp()
+        self.client.force_authenticate(self.user)
+
+    def test_terminal_conversion_cannot_be_bypassed_by_model_reparenting(self):
+        from django.core.exceptions import ValidationError
+        first = self.client.post(self.detail_action_url(self.posting.pk, "apply"), {},
+                                 HTTP_IDEMPOTENCY_KEY="ownership-original-key")
+        self.assertEqual(first.status_code, 201)
+        Application.objects.get(pk=first.data["application_id"]).delete()
+        conversion = self.posting.conversions.get()
+        self.assertIsNone(conversion.application_id)
+        portable_id = conversion.application_portable_id
+        for fields in ({"workspace": self.other_workspace}, {"account": self.other_account},
+                       {"workspace": self.other_workspace, "account": self.other_account}):
+            for field, value in fields.items():
+                setattr(self.posting, field, value)
+            with self.assertRaises(ValidationError):
+                self.posting.save()
+            self.posting.refresh_from_db()
+        self.assertEqual(self.posting.workspace_id, self.workspace.pk)
+        self.assertEqual(self.posting.account_id, self.account.pk)
+        conversion.refresh_from_db()
+        self.assertEqual(conversion.workspace_id, self.workspace.pk)
+        self.assertEqual(conversion.application_portable_id, portable_id)
+        self.assertIsNone(conversion.application_id)
+        # Even the destination owner cannot apply this posting in workspace B.
+        self.client.force_authenticate(self.other_user)
+        foreign = reverse("job-posting-apply", args=[self.other_workspace.pk, self.posting.pk])
+        self.assertEqual(self.client.post(foreign, {}, HTTP_IDEMPOTENCY_KEY="ownership-new-key-b").status_code, 404)
+        self.client.force_authenticate(self.user)
+        warning = self.client.post(self.detail_action_url(self.posting.pk, "apply"), {},
+                                   HTTP_IDEMPOTENCY_KEY="ownership-new-key-a")
+        self.assertEqual(warning.status_code, 409)
+        self.assertEqual(warning.data["code"], "new_attempt_confirmation_required")
+        self.assertEqual(warning.data["prior_conversion_count"], 1)
+        self.assertEqual(Application.objects.count(), 0)
+        self.assertEqual(self.posting.conversions.count(), 1)
+
+    def test_admin_keeps_ownership_on_forged_edit_and_allows_metadata(self):
+        from django.contrib import admin
+        from django.test import RequestFactory
+        first = self.client.post(self.detail_action_url(self.posting.pk, "apply"), {},
+                                 HTTP_IDEMPOTENCY_KEY="admin-original-key")
+        self.assertEqual(first.status_code, 201)
+        Application.objects.get(pk=first.data["application_id"]).delete()
+        self.user.is_staff = self.user.is_superuser = True
+        self.user.save()
+        self.client.force_login(self.user)
+        request = RequestFactory().get("/admin/")
+        request.user = self.user
+        model_admin = admin.site._registry[JobPosting]
+        add_form = model_admin.get_form(request)
+        change_form = model_admin.get_form(request, obj=self.posting)
+        for field in ("workspace", "account"):
+            self.assertIn(field, add_form.base_fields)
+            self.assertNotIn(field, change_form.base_fields)
+        response = self.client.post(reverse("admin:postings_jobposting_change", args=[self.posting.pk]), {
+            "message_id": self.posting.message_id, "status": "new", "title": "Edited title",
+            "company": "Edited company", "saved": "on", "_save": "Save",
+            "workspace": self.other_workspace.pk, "account": self.other_account.pk,
+        })
+        self.assertEqual(response.status_code, 302)
+        self.posting.refresh_from_db()
+        self.assertEqual(self.posting.title, "Edited title")
+        self.assertTrue(self.posting.saved)
+        self.assertEqual(self.posting.workspace_id, self.workspace.pk)
+        self.assertEqual(self.posting.account_id, self.account.pk)
+
+        conversion = self.posting.conversions.get()
+        self.assertEqual(conversion.workspace_id, self.workspace.pk)
+        self.assertIsNone(conversion.application_id)
+        warning = self.client.post(self.detail_action_url(self.posting.pk, "apply"), {},
+                                   HTTP_IDEMPOTENCY_KEY="admin-new-key-0001")
+        self.assertEqual(warning.status_code, 409)
+        self.assertEqual(warning.data["prior_conversion_count"], 1)
+        self.assertEqual(Application.objects.count(), 0)
+
+    def test_new_posting_establishes_ownership_but_existing_account_is_fixed(self):
+        from django.core.exceptions import ValidationError
+        new = JobPosting.objects.create(workspace=self.other_workspace, account=self.other_account,
+                                        message_id="new", dedupe_key="new-owned-posting")
+        new.title = "Metadata edit"
+        new.save(update_fields=["title"])
+        self.assertEqual(JobPosting.objects.get(pk=new.pk).title, "Metadata edit")
+        same_workspace_account = EmailAccount.objects.create(workspace=self.workspace, email="second@example.com")
+        self.posting.account = same_workspace_account
+        with self.assertRaises(ValidationError):
+            self.posting.save(update_fields=["account"])
+        # Supplying an existing PK on a fresh instance must not evade the guard.
+        with self.assertRaises(ValidationError):
+            JobPosting(pk=new.pk, workspace=self.workspace, account=self.account,
+                       message_id="replacement", dedupe_key="replacement").save()

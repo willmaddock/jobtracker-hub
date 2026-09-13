@@ -43,6 +43,7 @@ class WorkspaceScopeTests(APITestCase):
             self.assertFalse(StatusHistory.objects.exists())
 
     def test_creation_and_redundant_assignment(self):
+        self.client.credentials(HTTP_IDEMPOTENCY_KEY="workspace-create-test-key")
         response = self.client.post(self.url("applications/"), {"company": "New"}, format="json")
         self.assertEqual(response.status_code, 201)
         self.assertEqual(Application.objects.get(pk=response.data["id"]).workspace_id, self.a.pk)
@@ -146,13 +147,16 @@ class WorkspaceScopeTests(APITestCase):
                 self.assertEqual(self.client.post(self.url(f"job-postings/{job.pk}/{action}/"),
                     {"saved": True}, format="json").status_code, 404)
         job = self.postings[0]
-        job.applied_application = self.apps[1]
-        job.save()
+        from postings.models import PostingApplicationConversion
+        conversion = PostingApplicationConversion.objects.create(
+            workspace=self.a, posting=job, application=self.apps[1],
+            application_portable_id=self.apps[1].portable_id,
+        )
         self.assertEqual(self.client.get(self.url("job-postings/")).data, [])
         self.assertEqual(self.client.post(self.url(f"job-postings/{job.pk}/dismiss/")).status_code, 404)
-        job.applied_application = None
-        job.account = self.accounts[1]
-        job.save()
+        conversion.delete()
+        # Simulate corrupt historical data, bypassing the supported save guard.
+        type(job).objects.filter(pk=job.pk).update(account=self.accounts[1])
         self.assertEqual(self.client.post(self.url(f"job-postings/{job.pk}/apply/")).status_code, 404)
         self.assertEqual(Application.objects.count(), 3)
 

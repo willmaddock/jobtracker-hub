@@ -68,6 +68,10 @@ class ListApplicationsTests(ApplicationsAPITestCase):
 
 
 class CreateApplicationTests(ApplicationsAPITestCase):
+    def setUp(self):
+        super().setUp()
+        self.client.credentials(HTTP_IDEMPOTENCY_KEY="test-manual-key-0001")
+
     def test_create_minimal(self):
         self.client.login(username="alice", password="pw123456")
         response = self.client.post(
@@ -97,13 +101,13 @@ class CreateApplicationTests(ApplicationsAPITestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
-    def test_duplicate_company_role_in_same_workspace_is_rejected(self):
+    def test_duplicate_company_role_requires_explicit_continuation(self):
         self.client.login(username="alice", password="pw123456")
         response = self.client.post(
             reverse("application-list", args=[self.workspace.pk]),
             {"company": "Acme Robotics", "role_label": "Backend Engineer"},
         )
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
 
     def test_create_with_custom_section_becomes_a_category(self):
         self.client.login(username="alice", password="pw123456")

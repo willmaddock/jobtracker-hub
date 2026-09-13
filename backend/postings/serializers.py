@@ -1,27 +1,34 @@
-"""
-postings serializers.
-
-Phase 8 (docs/DJANGO_MIGRATION_PLAN.md) -- DRF shapes for the "Job
-postings" section of the Phase 0 endpoint inventory (GET
-/api/job-postings, dismiss/restore/save/apply). The actual apply
-eligibility/status-validation rules live in postings/services.py
-(ported in Phase 5) and are unchanged here; this module is only the
-request/response shape around them.
-"""
+"""Posting representations use durable conversion facts; creation is protected separately."""
 from __future__ import annotations
 
 from rest_framework import serializers
+from django.db.models import Q
 
 from .models import JobPosting
 
 
 class JobPostingSerializer(serializers.ModelSerializer):
+    applied_application = serializers.SerializerMethodField()
+    conversions = serializers.SerializerMethodField()
+
+    def get_applied_application(self, obj):
+        # Temporary read projection; remove when posting UI consumes conversions.
+        return obj.conversions.filter(workspace=obj.workspace, application__workspace=obj.workspace).order_by("-pk").values_list("application_id", flat=True).first()
+
+    def get_conversions(self, obj):
+        return [{"id": c.pk, "application_id": c.application_id,
+                 "portable_id": str(c.application_portable_id),
+                 "state": "live" if c.application_id else "removed",
+                 "converted_at": c.converted_at}
+                for c in obj.conversions.filter(workspace=obj.workspace).filter(
+                    Q(application__isnull=True) | Q(application__workspace=obj.workspace))]
+
     class Meta:
         model = JobPosting
         fields = [
             "id", "source", "title", "company", "location", "salary",
             "employment_type", "posting_url", "received_at", "email_subject",
-            "sender", "status", "saved", "applied_application", "created_at",
+            "sender", "status", "saved", "applied_application", "conversions", "created_at",
         ]
         read_only_fields = fields
 

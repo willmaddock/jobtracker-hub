@@ -1,20 +1,14 @@
-from types import SimpleNamespace
-
 from django.contrib.auth import get_user_model
 from django.test import SimpleTestCase, TestCase
 
 from accounts.models import Workspace
 from core.exceptions import (
     InvalidApplyStatusError,
-    JobPostingAlreadyAppliedError,
-    JobPostingNotFoundError,
 )
 from email_sync.models import EmailAccount
 from postings.models import JobPosting
 
 from ..services import (
-    build_apply_response,
-    ensure_postable,
     ingest_extracted_postings,
     validate_apply_status,
 )
@@ -32,27 +26,6 @@ class ValidateApplyStatusTests(SimpleTestCase):
     def test_unrecognized_status_raises(self):
         with self.assertRaises(InvalidApplyStatusError):
             validate_apply_status("bogus", VALID_STATUSES)
-
-
-class EnsurePostableTests(SimpleTestCase):
-    def test_missing_job_raises_not_found(self):
-        with self.assertRaises(JobPostingNotFoundError):
-            ensure_postable(None, job_id=42)
-
-    def test_already_applied_job_raises_conflict(self):
-        job = SimpleNamespace(applied_application_id=7)
-        with self.assertRaises(JobPostingAlreadyAppliedError):
-            ensure_postable(job, job_id=42)
-
-    def test_unapplied_job_is_postable(self):
-        job = SimpleNamespace(applied_application_id=None)
-        ensure_postable(job, job_id=42)  # no raise
-
-
-class BuildApplyResponseTests(SimpleTestCase):
-    def test_response_shape(self):
-        application = SimpleNamespace(id=99)
-        self.assertEqual(build_apply_response(application), {"ok": True, "application_id": 99})
 
 
 class IngestExtractedPostingsTests(TestCase):

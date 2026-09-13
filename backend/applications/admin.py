@@ -21,6 +21,11 @@ class ApplicationAdmin(admin.ModelAdmin):
     list_filter = ("section", "status", "workspace")
     search_fields = ("company", "role_label", "source_relpath")
     inlines = [OverrideInline, StatusHistoryInline]
+    readonly_fields = ("portable_id", "workspace", "source_relpath")
+
+    def has_add_permission(self, request):
+        return False
+
 
 
 @admin.register(CompanyAlias)

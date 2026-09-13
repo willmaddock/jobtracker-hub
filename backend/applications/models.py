@@ -22,6 +22,9 @@ Document rows exist to derive them from -- see the migration plan's
 Phase 4 note on rebuild becoming "re-derive from Document rows," not
 a filesystem walk.
 """
+import uuid
+
+from django.core.exceptions import ValidationError
 from django.db import models
 
 from accounts.models import Workspace
@@ -57,12 +60,12 @@ class Application(models.Model):
     workspace = models.ForeignKey(
         Workspace, on_delete=models.CASCADE, related_name="applications"
     )
+    portable_id = models.UUIDField(default=uuid.uuid4, editable=False)
     section = models.CharField(max_length=32, choices=SECTION_CHOICES)
     company = models.CharField(max_length=255)
     role_label = models.CharField(max_length=255)
-    # Folder path relative to the JobTracker root today; becomes
-    # derived from the owning Document rows once Phase 4 lands.
-    source_relpath = models.CharField(max_length=1024)
+    # Transitional provenance only; never used to allocate or identify attempts.
+    source_relpath = models.CharField(max_length=1024, blank=True, default="")
     status = models.CharField(
         max_length=16, choices=STATUS_CHOICES, default="unknown"
     )
@@ -73,13 +76,20 @@ class Application(models.Model):
     class Meta:
         constraints = [
             models.UniqueConstraint(
-                fields=["workspace", "section", "company", "role_label", "source_relpath"],
-                name="unique_application_identity_per_workspace",
+                fields=["workspace", "portable_id"],
+                name="unique_application_portable_id_per_workspace",
             )
         ]
         indexes = [
             models.Index(fields=["workspace", "section"], name="app_workspace_section_idx")
         ]
+
+    def save(self, *args, **kwargs):
+        if self.pk:
+            original = type(self).objects.filter(pk=self.pk).values("portable_id", "workspace_id").first()
+            if original and (original["portable_id"] != self.portable_id or original["workspace_id"] != self.workspace_id):
+                raise ValidationError("Application identity and workspace are immutable.")
+        return super().save(*args, **kwargs)
 
     def __str__(self) -> str:
         return f"{self.company} / {self.role_label}"

@@ -23,6 +23,7 @@ class ApplicationRowSerializer(serializers.Serializer):
     Browse (nested under each section).
     """
 
+    portable_id = serializers.UUIDField(read_only=True)
     id = serializers.IntegerField()
     workspace_id = serializers.IntegerField()
     section = serializers.CharField()

@@ -121,6 +121,7 @@ def annotate_application(application: Application) -> dict:
     return {
         "id": application.id,
         "workspace_id": application.workspace_id,
+        "portable_id": application.portable_id,
         "section": application.section,
         "company": application.company,
         "role_label": application.role_label,

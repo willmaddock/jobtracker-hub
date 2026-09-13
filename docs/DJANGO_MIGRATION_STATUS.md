@@ -1,6 +1,6 @@
 # Django migration: current status
 
-Maintained checkpoint: 2026-09-12, Frontend API Foundation — Auth + Explicit Workspace Context implemented in the uncommitted tree based on `e1785f9`; bounded browser checks passed; all three legacy-suite failures also reproduce on clean `e1785f9` in the same environment.
+Maintained checkpoint: 2026-09-13, Application Identity & Repeated Attempts — Backend Core implemented in the uncommitted tree on `188351c`. The preceding Frontend API Foundation was committed and pushed as `188351c`; its browser evidence below is historical.
 
 ## 1. Scope and source of truth
 
@@ -19,10 +19,60 @@ Maintained checkpoint: 2026-09-12, Frontend API Foundation — Auth + Explicit W
 
 ## 2. Current verification evidence
 
-Base: `django-migration` at `e1785f9` — Implement workspace-scoped Django API.
-Frontend foundation changes remain uncommitted; no migrations were created.
+Base: `django-migration` at `188351c` — Implement frontend auth and workspace foundation.
+Identity changes and four new migrations are uncommitted; no real tracker database
+was migrated. The legacy implementation and frontend are unchanged.
 
-| Command | Actual current-tree result |
+| Command (Django from `backend/`, others from root) | Current identity-slice result |
+|---|---|
+| `venv/bin/python manage.py test applications.tests.test_identity applications.tests.test_creation applications.tests.test_identity_migrations postings.tests.test_views postings.tests.test_services core.tests_workspace_scope` | 76 passed |
+| `venv/bin/python manage.py test applications postings core` | 221 passed |
+| `venv/bin/python manage.py test` | 523 passed; system check clean |
+| `venv/bin/python manage.py check` | No issues |
+| `venv/bin/python manage.py makemigrations --check --dry-run applications core postings` | No changes detected, exit 0 |
+| `venv/bin/python manage.py makemigrations --check --dry-run` | Exit 1: only known `email_sync` provider-choice drift; no migration generated |
+| `venv/bin/python manage.py showmigrations applications core postings --plan` | Exit 0; four new migrations pending on the local database, as intended |
+| `node --test tests/frontend/*.test.cjs` | 8 passed |
+| `.venv/bin/python -m pytest tests/test_build_index.py tests/test_overrides_store.py tests/test_status_history.py tests/test_job_postings_store.py tests/test_dossier.py` | 56 passed, one known deletion/status-history failure, 2 warnings |
+| `.venv/bin/python -m pytest tests/test_export.py tests/test_import_local_folder.py tests/test_overrides_portability.py` | 13 passed, two known import PermissionError failures, 2 warnings |
+| `.venv/bin/python -m pytest` | 367 passed, the same 3 baseline failures, 2 warnings |
+| `git diff --check` | Passed |
+
+Identity tests exercise both HTTP creation paths, changed-intent rejection, explicit
+repeat/replay, challenge expiry/renewal and stale candidates, account/workspace
+reauthorization, terminal removal, rollback of initial writes, independent child
+rows/document lists, dossier input scoping, and ambiguous email attribution for
+identical attempts. Dossier assembly is mocked in the identity isolation test;
+the existing dossier/extraction suites remain separate coverage.
+
+Two threaded tests exercise simultaneous same-key requests and competing manual/
+posting requests on SQLite. At most one initial effect is permitted. SQLite may
+reject one **or both** requests with `503 creation_busy`; explicit reconciliation
+using the original keys must yield one effect and (for a competing intent) a
+409 review challenge. The first full run exposed an overstrict test assumption
+that one concurrent SQLite request must succeed; the test was corrected without
+adding automatic retries. These tests do not prove PostgreSQL row-lock, deadlock,
+or production concurrency behavior. That validation remains a production/cutover
+gate; neither `psycopg` nor `psycopg2` is installed in `backend/venv` (verified
+with `importlib.util.find_spec`). No PostgreSQL infrastructure or dependencies were added.
+
+The populated migration test uses a separate temporary SQLite database. It builds
+the old checkpoint schema before adding fixture data, then upgrades only forward:
+Application PKs, Override/StatusHistory/Document FKs, non-pipeline rows and source
+paths survive; UUIDs are distinct and unchanged on repeated backfill; one known
+posting link becomes one conversion, while a null link invents none. Historical
+conversion timestamp/request identity remain null. It never replays the destructive
+historical Document migration over populated data. No real-data upgrade or rollback
+has been validated. The conversion migration is deliberately irreversible because
+one old pointer cannot represent repeated conversions; operational rollback requires
+a separately rehearsed backup/restore plan.
+
+### Historical frontend checkpoint verification (`188351c`)
+
+Base: `django-migration` at `e1785f9` — Implement workspace-scoped Django API.
+Frontend foundation was committed and pushed as `188351c`; it created no migrations.
+
+| Command | Historical frontend-checkpoint result |
 |---|---|
 | `node --test tests/frontend/*.test.cjs` (root) | 8 passed, 0 failed |
 | `venv/bin/python manage.py test accounts core` (`backend/`) | 104 passed |
@@ -139,7 +189,7 @@ No newly accepted capability is marked verified merely because it is designed.
 |---|---|---|---|
 | Auth/workspaces | Session-only product auth, anonymous-login CSRF bootstrap/protection, structured DRF exception codes; owned workspace list/create and explicit route selection in Django entry | 104 accounts/core subset; bounded browser session/tab checks described in §2 | Local foundation validated; broader onboarding/production/cutover pending |
 | Frontend/desktop | Existing HTML has explicit Django entry with separate minimal root/client/context; legacy App never mounts in Django mode; desktop remains FastAPI | 8 Node tests; browser harness 7/7 in Safari and Chromium; three legacy suite failures recorded in §2 | Only login → explicit workspace select/create → insights read → logout validated; domain UI pending |
-| Applications/overrides | Create/list/overrides/history; path uniqueness still restricts repeats | Baseline coverage; repeats/warnings/history parity pending | Integrated workflow pending |
+| Applications/overrides | Stable numeric PKs plus workspace portable UUID; shared protected creation, explicit repeat challenges and durable replay | Identity/ownership subset in §2 plus existing coverage; history parity still pending | Backend-only; duplicate-warning/domain UI pending |
 | Derivation/dossier | PDF/TXT extraction, dossier/date evidence; no document-to-application status/activity recalculation | Existing extraction/dossier coverage; derivation pending | Target timestamp/import behavior pending |
 | Categories | Section-derived groups and archive/delete, no named category model | Existing section-category coverage only | Target category workflow pending |
 | Documents/files | Upload/list/type correction/metadata rename; storage URL; permanent individual delete | Existing API/extraction coverage | Production storage/previews pending |
@@ -164,8 +214,8 @@ No newly accepted capability is marked verified merely because it is designed.
   legacy suppresses consecutive duplicates.
 - Add Ghosted choices/metrics/UI parity. This main-branch change exists only
   in the legacy implementation.
-- Replace path uniqueness, section-only categories, and immediate deletion
-  with accepted identities, named categories, and Trash/lifecycle rules.
+- Replace section-only categories and immediate deletion with named categories
+  and Trash/lifecycle rules. Repeated-attempt identity is now implemented below.
 - Complete remaining workspace integration for email/jobs and the frontend;
   included synchronous core APIs are scoped. Adapt remaining payloads/errors and
   search semantics deliberately. Preserve PDF/text/DOCX browser previews.
@@ -194,7 +244,7 @@ Evidence regeneration replacement versus supersession still requires an explicit
 decision before that behavior is implemented; other remaining implementation and
 operational details are listed in Foundations.
 
-### Frontend API Foundation — current uncommitted slice
+### Frontend API Foundation — committed and pushed at `188351c`
 
 The explicit Django same-origin entry serves the existing HTML and allowlisted
 public assets. Its minimal root provides login, workspace list/create, hash-route
@@ -223,13 +273,86 @@ session and removes the stray import from config/urls.py's introductory docstrin
 All commands in §2 were rerun after these two changes. Browser evidence and
 clean-baseline regression comparison are recorded above. Known environment/baseline
 failures prevent a fully green suite claim; they do not indicate a slice regression.
-No commit or push has been performed.
+This frontend checkpoint was committed and pushed as `188351c`.
+
+### Application Identity & Repeated Attempts — current uncommitted slice
+
+`applications.0002_application_portable_identity` adds a nullable UUID, backfills
+one UUID per historical row, then enforces a generated, non-null UUID unique within
+Workspace. `source_relpath` retains its values as blank-allowed provenance. Numeric
+PKs remain normal API lookups. Normal create/override APIs reject identity assignment;
+Application admin add is disabled and identity fields are read-only. Model save also
+rejects identity/workspace changes; privileged bulk SQL/ORM writes are not a supported
+identity-editing workflow.
+
+`core.0003_applicationrequestintent` stores only compact actor/workspace/key,
+versioned semantic digest, pending challenge and linked/terminal result identity.
+No raw request bodies or candidate descriptions are retained. Completed key mappings
+remain until workspace deletion; there is no detailed replay cache or background
+retention job in this slice. Both manual create and posting apply call
+`applications/creation.py`, under one workspace transaction authority. Initial
+Application, Override, StatusHistory, intent completion and conversion commit together.
+Arbitrary IntegrityError is not translated into a duplicate-company warning.
+
+Both existing creation URLs now require `Idempotency-Key` (16–128 opaque ASCII
+letters/digits/underscore/hyphen; clients must generate a random key). Semantic digest
+v1 includes route kind/target and validated supplied fields, preserving omission.
+Same key/intent resolves the current effect with 200; changed intent returns
+`409 idempotency_key_reused`. First allocation returns 201. Removed results return
+only `state: removed` and portable identity; retries never recreate them.
+
+Normalized company/role matches warn across the authorized workspace, including
+archived attempts. `409 new_attempt_confirmation_required` supplies scoped numeric
+candidate IDs/state, a token and expiry. Explicit continuation resubmits the same
+URL/key/fields plus `challenge`; the token binds actor/workspace/intent and the visible
+candidate/posting/conversion revision. Expiry defaults to 900 seconds, configurable
+with `APPLICATION_CHALLENGE_TTL_SECONDS`. Invalid, expired and stale tokens get distinct
+409 codes. Re-submit without a token to renew review; no `force` flag or automatic
+mutation retry exists. Consuming the token creates a separate attempt once; replay
+then resolves that result.
+
+`postings.0002_posting_application_conversions` creates durable conversion rows,
+backfills only non-null known links (cross-workspace links fail migration explicitly),
+and removes the old pointer. New conversions link one request intent, record actual
+conversion time and retain portable result identity when their Application is deleted.
+A new request key alone does not authorize another conversion. The list serializer
+adds conversion states and retains `applied_application` only as a read projection
+of the latest surviving conversion; remove that projection when the posting UI
+adopts conversion representations, before legacy retirement. No pointer dual-write
+or ordinary admin allocation bypass remains.
+
+Final review found and closed an admin reparenting bypass: existing postings now
+keep both `workspace` and `account` read-only in admin, and model saves reject changes
+to either persisted FK (including an existing PK supplied on a fresh instance).
+New-posting ownership setup and unrelated metadata edits remain available. No
+conversion history or historical workspace IDs are rewritten. Three regression
+tests cover terminal conversion followed by attempted model/admin reparenting,
+forged admin ownership input with allowed metadata edits, new creation and fixed
+account identity. The original workspace still requires a new-attempt challenge;
+the destination workspace returns 404. Privileged bulk ORM/SQL writes bypass model
+save hooks and are not a supported reparenting workflow; the historical-corruption
+scope test uses such a write explicitly. This safeguard adds no migration.
+The review's non-ASCII challenge validation fix is retained and tested: malformed
+non-ASCII tokens return 400 instead of raising TypeError.
+
+Finally, `applications.0003_allow_repeated_attempts`, dependent on conversion setup,
+drops descriptive uniqueness. Deploy the protected code with these migrations;
+do not run old allocators after removing the constraint. No Categories, Trash,
+timestamp/derivation/history parity, retained-message schema, importer/exporter,
+discovery acceptance, frontend CRUD, upload/storage or worker framework was added.
+The existing permanent-deletion behavior remains deferred lifecycle debt.
+
+Plan concretizations: continuation uses the existing creation URLs, not an extra
+endpoint; compact synchronous intent state lives in one model; unsafe admin creation
+is disabled; SQLite contention has a bounded 503 response. These stay within the
+approved backend-only boundary. PostgreSQL and full domain/browser workflows remain
+unvalidated.
 
 ## 8. Next recommended implementation actions
 
-1. Review the uncommitted frontend foundation and the verification limitations above.
+1. Review the uncommitted identity/repeated-attempt slice and verification limitations above.
 2. Resolve the legacy verification blockers under separately approved scope before declaring a fully green checkpoint.
-3. Separately authorize the next slice; remaining email/job workspace integration and broader frontend workflows are still pending.
+3. Separately authorize the next slice; categories/lifecycle foundations, remaining email/job workspace integration and broader frontend workflows are still pending.
 4. Implement schema/lifecycle foundations, derivation, and parity corrections.
 5. Connect core browser workflows, then retained email/review/postings/evidence.
 6. Develop import/export alongside models; rehearse representative workspaces.

@@ -39,7 +39,7 @@ class ApplicationSerializer(serializers.ModelSerializer):
     class Meta:
         model = Application
         fields = [
-            "id", "workspace", "section", "company", "role_label", "source_relpath",
+            "id", "portable_id", "workspace", "section", "company", "role_label", "source_relpath",
             "status", "effective_status", "last_activity", "first_activity",
             "created_at", "override",
         ]
@@ -75,7 +75,15 @@ class ApplicationCreateSerializer(serializers.ModelSerializer):
             "section": {"required": False, "default": "applications"},
         }
 
-class OverrideWriteSerializer(serializers.Serializer):
+class ImmutableIdentityInput(serializers.Serializer):
+    def validate(self, attrs):
+        forbidden = {"portable_id", "source_relpath", "id"} & set(self.initial_data)
+        if forbidden:
+            raise serializers.ValidationError({field: "Application identity is read-only." for field in forbidden})
+        return super().validate(attrs)
+
+
+class OverrideWriteSerializer(ImmutableIdentityInput):
     """POST /api/applications/{id}/override body. Every field left
     deliberately without a `default=` (reset_status is the one
     exception) so a field the caller didn't send is simply absent from
@@ -98,7 +106,7 @@ class OverrideWriteSerializer(serializers.Serializer):
     activity_override = serializers.DateField(required=False, allow_null=True)
 
 
-class BulkOverrideWriteSerializer(serializers.Serializer):
+class BulkOverrideWriteSerializer(ImmutableIdentityInput):
     """POST /api/applications/bulk-override body -- deliberately a
     smaller field set than OverrideWriteSerializer above, mirroring
     compute_bulk_override_fields()'s own smaller set (no notes,
