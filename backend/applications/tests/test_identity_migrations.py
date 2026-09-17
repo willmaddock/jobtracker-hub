@@ -28,8 +28,8 @@ class IdentityMigrationTests(TransactionTestCase):
             try:
                 executor = MigrationExecutor(db)
                 leaves = executor.loader.graph.leaf_nodes()
-                baseline = [(app, name) for app, name in leaves if app not in {"applications", "postings", "core"}]
-                baseline += [("applications", "0001_initial"), ("postings", "0001_initial"), ("core", "0002_alter_hubsettings_role_location_default")]
+                baseline = [(app, name) for app, name in leaves if app not in {"applications", "postings", "core", "documents"}]
+                baseline += [("documents", "0002_document_and_fk_refactor"), ("applications", "0001_initial"), ("postings", "0001_initial"), ("core", "0002_alter_hubsettings_role_location_default")]
                 executor.migrate(baseline)
                 old = executor.loader.project_state(baseline).apps
                 def create(app, model, **values):

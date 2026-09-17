@@ -61,6 +61,7 @@ class Application(models.Model):
         Workspace, on_delete=models.CASCADE, related_name="applications"
     )
     portable_id = models.UUIDField(default=uuid.uuid4, editable=False)
+    category_revision = models.PositiveBigIntegerField(default=0, editable=False)
     section = models.CharField(max_length=32, choices=SECTION_CHOICES)
     company = models.CharField(max_length=255)
     role_label = models.CharField(max_length=255)

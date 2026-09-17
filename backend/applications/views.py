@@ -69,7 +69,7 @@ class ApplicationViewSet(CreationContentionMixin, WorkspaceScopedMixin, mixins.L
     def get_queryset(self):
         return (
             Application.objects.filter(workspace=self.get_workspace())
-            .select_related("override")
+            .select_related("override", "category_membership__category")
             .order_by("-created_at")
         )
 

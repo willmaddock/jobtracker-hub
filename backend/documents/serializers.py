@@ -81,20 +81,3 @@ class DocumentOverrideWriteSerializer(serializers.Serializer):
     # None/blank clears the correction, same as the original's
     # DocumentOverrideRequest.doc_type_override.
     doc_type_override = serializers.CharField(required=False, allow_null=True, allow_blank=True)
-
-
-class CategorySerializer(serializers.Serializer):
-    """Not model-backed -- a category is a live grouping of
-    Applications by `section`, computed in the view (see views.py's
-    module docstring on why there's no more physical-folder layer to
-    read this from). This just shapes that computed dict for output.
-    """
-
-    section = serializers.CharField()
-    item_count = serializers.IntegerField()
-    doc_count = serializers.IntegerField()
-    archived = serializers.BooleanField()
-
-
-class CategoryOverrideWriteSerializer(serializers.Serializer):
-    archived = serializers.BooleanField()

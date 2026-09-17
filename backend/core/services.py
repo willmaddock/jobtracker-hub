@@ -122,6 +122,9 @@ def annotate_application(application: Application) -> dict:
         "id": application.id,
         "workspace_id": application.workspace_id,
         "portable_id": application.portable_id,
+        "category_id": (application.category_membership.category_id
+            if hasattr(application, "category_membership") and application.category_membership.category.workspace_id == application.workspace_id else None),
+        "category_revision": application.category_revision,
         "section": application.section,
         "company": application.company,
         "role_label": application.role_label,
@@ -154,7 +157,7 @@ def load_applications(queryset) -> list[dict]:
     per distinct workspace_id in the queryset rather than querying it
     per row).
     """
-    applications = list(queryset.select_related("override"))
+    applications = list(queryset.select_related("override", "category_membership__category"))
     aliases_by_workspace: dict[int, dict[str, str]] = {}
     out = []
     for application in applications:

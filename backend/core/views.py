@@ -36,9 +36,8 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from applications.models import Application, CompanyAlias
-from documents.models import Document, FolderOverride
+from documents.models import Document
 from documents.serializers import DocumentSerializer
-from documents.views import RESERVED_CATEGORY_SECTIONS
 
 from .workspace_scope import WorkspaceScopedMixin, scoped_duplicate_counts
 from .models import HubSettings
@@ -102,9 +101,8 @@ class SearchView(WorkspaceScopedMixin, APIView):
     filename/company search (the FTS-vs-LIKE fallback in _app/api.py's
     search() was a SQLite implementation detail; `icontains` on
     Document.filename / Application.company covers the same two match
-    paths on a real database). Same personal-section and
-    archived-category filtering rules as the original: an archived
-    category disappears from search too, not just its own Browse tab.
+    paths on a real database). Personal-section filtering is retained;
+    organizational Category archive never suppresses system search results.
     """
 
     def get(self, request, **kwargs):
@@ -121,18 +119,9 @@ class SearchView(WorkspaceScopedMixin, APIView):
         if not show_personal:
             documents = documents.exclude(application__section="personal")
 
-        archived_sections = set(
-            FolderOverride.objects.filter(workspace=self.get_workspace(), archived=True).values_list(
-                "workspace_id", "folder"
-            )
-        )
-
         results = []
         for document in documents:
             application = document.application
-            if application.section not in RESERVED_CATEGORY_SECTIONS:
-                if (application.workspace_id, application.section) in archived_sections:
-                    continue
             results.append({
                 "id": document.id,
                 "filename": document.filename,
@@ -148,12 +137,8 @@ class SearchView(WorkspaceScopedMixin, APIView):
 class BrowseView(WorkspaceScopedMixin, APIView):
     """GET /api/browse?show_personal=&show_archived=&q= -- every
     application, grouped by section, with its documents nested.
-    Archived state is checked at both the application level
-    (Override.archived, via annotate_application) and the category
-    level (FolderOverride, same as CategoryOverrideView) -- archiving
-    a category hides everything in it from Browse without touching
-    each application's own archived flag, same relationship the
-    original's folder_overrides check had to item_overrides.archived.
+    Application archive filtering is retained. Category archive affects only
+    category context, never this authoritative system grouping.
 
     Returns a plain `{section: [item, ...]}` dict rather than a
     Serializer-shaped list, same as the original endpoint -- the
@@ -178,21 +163,11 @@ class BrowseView(WorkspaceScopedMixin, APIView):
         if not show_personal:
             applications = applications.exclude(section="personal")
 
-        folder_overrides = {
-            (fo.workspace_id, fo.folder): fo
-            for fo in FolderOverride.objects.filter(workspace=self.get_workspace())
-        }
-
         out: dict[str, list[dict]] = {}
         for application in applications:
             row = annotate_application(application)
             if row["archived"] and not show_archived:
                 continue
-            if application.section not in RESERVED_CATEGORY_SECTIONS:
-                folder_override = folder_overrides.get((application.workspace_id, application.section))
-                if folder_override and folder_override.archived and not show_archived:
-                    continue
-
             if not application.role_label or application.role_label == "(root)":
                 label = application.company
             else:

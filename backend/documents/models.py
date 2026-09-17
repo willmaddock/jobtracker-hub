@@ -34,7 +34,11 @@ got wired up, since they didn't get the same treatment:
   added only for traceability (which upload actually triggered a
   given cache write), not as the lookup key.
 """
-from django.db import models
+import unicodedata
+import uuid
+
+from django.core.exceptions import ValidationError
+from django.db import models, router
 
 
 def document_upload_path(instance: "Document", filename: str) -> str:
@@ -158,11 +162,10 @@ class DocumentExtraction(models.Model):
 
 
 class FolderOverride(models.Model):
-    """Archive/section state for a physical top-level folder (or, for
-    the nested-compliance case, a two-part folder path). Folder-scoped
-    rather than section-scoped because several folders can share one
-    Browse tab, and archiving needs to target just one without
-    touching its siblings.
+    """Preserved legacy folder/section-adapter metadata, not native Category authority.
+
+    Rows may describe physical provenance, a synthetic section key, or ambiguous
+    metadata. Do not infer physical containers or memberships from these alone.
     """
 
     workspace = models.ForeignKey(
@@ -186,3 +189,60 @@ class FolderOverride(models.Model):
 
     def __str__(self) -> str:
         return self.folder
+
+
+# Organizational entities live beside the former category adapter, but never own
+# Applications or their files. Category deletion can remove only membership links.
+CATEGORY_SECTIONS = ("credentials", "network", "resume_library", "leads", "compliance", "personal", "misc")
+
+
+def normalized_category_name(name):
+    return " ".join(unicodedata.normalize("NFKC", name).casefold().split())
+
+
+def validate_category_name(name):
+    if not isinstance(name, str) or not name.strip() or any(unicodedata.category(c).startswith("C") for c in name):
+        raise ValidationError("A non-empty name without control characters is required.")
+    if normalized_category_name(name) == "applications":
+        raise ValidationError("Applications is reserved for the system pipeline.")
+
+
+class Category(models.Model):
+    workspace = models.ForeignKey("accounts.Workspace", on_delete=models.CASCADE, related_name="categories")
+    portable_id = models.UUIDField(default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=255, validators=[validate_category_name])
+    section = models.CharField(max_length=32, choices=[(s, s) for s in CATEGORY_SECTIONS])
+    archived = models.BooleanField(default=False)
+    revision = models.PositiveBigIntegerField(default=0, editable=False)
+    provenance = models.JSONField(default=dict, editable=False)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["workspace", "portable_id"], name="unique_category_portable_per_ws")]
+
+    def save(self, *args, **kwargs):
+        using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
+        if self.pk:
+            old = type(self).objects.using(using).filter(pk=self.pk).values("workspace_id", "portable_id").first()
+            if old and (old["workspace_id"] != self.workspace_id or old["portable_id"] != self.portable_id):
+                raise ValidationError("Category identity and workspace are immutable.")
+        validate_category_name(self.name)
+        if self.section not in CATEGORY_SECTIONS:
+            raise ValidationError("Unsupported organizational section.")
+        return super().save(*args, **kwargs)
+
+    def __str__(self):
+        return self.name
+
+
+class CategoryMembership(models.Model):
+    application = models.OneToOneField("applications.Application", primary_key=True, on_delete=models.CASCADE, related_name="category_membership")
+    category = models.ForeignKey(Category, on_delete=models.CASCADE, related_name="memberships")
+
+    def save(self, *args, **kwargs):
+        from applications.models import Application
+        using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
+        app_workspace = Application.objects.using(using).filter(pk=self.application_id).values_list("workspace_id", flat=True).first()
+        category_workspace = Category.objects.using(using).filter(pk=self.category_id).values_list("workspace_id", flat=True).first()
+        if app_workspace is None or category_workspace is None or app_workspace != category_workspace:
+            raise ValidationError("Application and Category must belong to the same workspace.")
+        return super().save(*args, **kwargs)

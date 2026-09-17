@@ -38,7 +38,7 @@ class HubSettings(models.Model):
 
 
 class ApplicationRequestIntent(models.Model):
-    """Compact synchronous allocation identity, retained until workspace deletion.
+    """Compact synchronous Application/Category intent, retained until workspace deletion.
 
     No request bodies or descriptive result snapshots. A null result on a completed
     intent is terminal removal, never permission to allocate again.
@@ -50,6 +50,7 @@ class ApplicationRequestIntent(models.Model):
     kind = models.CharField(max_length=16)
     completed = models.BooleanField(default=False)
     application = models.ForeignKey("applications.Application", null=True, on_delete=models.SET_NULL)
+    category = models.ForeignKey("documents.Category", null=True, on_delete=models.SET_NULL)
     result_portable_id = models.UUIDField(null=True)
     challenge_token = models.CharField(max_length=64, blank=True)
     challenge_revision = models.CharField(max_length=64, blank=True)

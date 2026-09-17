@@ -123,7 +123,7 @@ class SearchTests(CrossCuttingAPITestCase):
         response = self.client.get(reverse("search", args=[self.workspace.pk]), {"q": "passport", "show_personal": "true"})
         self.assertEqual(len(response.data), 1)
 
-    def test_excludes_archived_category(self):
+    def test_preserved_folder_archive_does_not_hide_system_records(self):
         application = _make_app(self.workspace, section="credentials", company="AWS")
         Document.objects.create(
             workspace=self.workspace, application=application, file=SimpleUploadedFile("c.pdf", b"x"),
@@ -134,7 +134,7 @@ class SearchTests(CrossCuttingAPITestCase):
             workspace=self.workspace, folder="credentials", section="credentials", archived=True,
         )
         response = self.client.get(reverse("search", args=[self.workspace.pk]), {"q": "certificate"})
-        self.assertEqual(response.data, [])
+        self.assertEqual(len(response.data), 1)
 
     def test_never_returns_other_users_documents(self):
         application = _make_app(self.other_workspace, company="Bob Inc")
@@ -172,13 +172,13 @@ class BrowseTests(CrossCuttingAPITestCase):
         companies = [row["company"] for row in response.data.get("applications", [])]
         self.assertIn("Archived Co", companies)
 
-    def test_excludes_archived_category_by_default(self):
+    def test_preserved_folder_archive_does_not_hide_system_records_by_default(self):
         _make_app(self.workspace, section="network", company="Jane Doe")
         FolderOverride.objects.create(
             workspace=self.workspace, folder="network", section="network", archived=True,
         )
         response = self.client.get(reverse("browse", args=[self.workspace.pk]))
-        self.assertNotIn("network", response.data)
+        self.assertIn("network", response.data)
         response = self.client.get(reverse("browse", args=[self.workspace.pk]), {"show_archived": "true"})
         self.assertIn("network", response.data)
 

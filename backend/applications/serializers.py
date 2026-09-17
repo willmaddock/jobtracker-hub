@@ -33,6 +33,7 @@ class OverrideSerializer(serializers.ModelSerializer):
 
 
 class ApplicationSerializer(serializers.ModelSerializer):
+    category_id = serializers.SerializerMethodField()
     override = OverrideSerializer(read_only=True)
     effective_status = serializers.SerializerMethodField()
 
@@ -41,9 +42,15 @@ class ApplicationSerializer(serializers.ModelSerializer):
         fields = [
             "id", "portable_id", "workspace", "section", "company", "role_label", "source_relpath",
             "status", "effective_status", "last_activity", "first_activity",
-            "created_at", "override",
+            "created_at", "override", "category_id", "category_revision",
         ]
         read_only_fields = fields
+
+    def get_category_id(self, obj):
+        membership = getattr(obj, "category_membership", None)
+        if membership and membership.category.workspace_id == obj.workspace_id:
+            return membership.category_id
+        return None
 
     def get_effective_status(self, obj) -> str:
         override = getattr(obj, "override", None)
@@ -66,10 +73,11 @@ class ApplicationCreateSerializer(serializers.ModelSerializer):
     """
 
     status = serializers.CharField(required=False, allow_blank=True, default="")
+    category_id = serializers.IntegerField(required=False, allow_null=True, min_value=1)
 
     class Meta:
         model = Application
-        fields = ["company", "role_label", "status", "section"]
+        fields = ["company", "role_label", "status", "section", "category_id"]
         extra_kwargs = {
             "role_label": {"required": False, "allow_blank": True, "default": ""},
             "section": {"required": False, "default": "applications"},
@@ -77,7 +85,7 @@ class ApplicationCreateSerializer(serializers.ModelSerializer):
 
 class ImmutableIdentityInput(serializers.Serializer):
     def validate(self, attrs):
-        forbidden = {"portable_id", "source_relpath", "id"} & set(self.initial_data)
+        forbidden = {"portable_id", "source_relpath", "id", "category_id", "category_revision"} & set(self.initial_data)
         if forbidden:
             raise serializers.ValidationError({field: "Application identity is read-only." for field in forbidden})
         return super().validate(attrs)

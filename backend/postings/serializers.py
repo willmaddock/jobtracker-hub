@@ -50,3 +50,4 @@ class ApplyJobPostingSerializer(serializers.Serializer):
     company = serializers.CharField(max_length=255, allow_blank=True, required=False, default="")
     role_label = serializers.CharField(max_length=255, allow_blank=True, required=False, default="")
     status = serializers.CharField(max_length=16, allow_blank=True, required=False, default="applied")
+    category_id = serializers.IntegerField(required=False, allow_null=True, min_value=1)

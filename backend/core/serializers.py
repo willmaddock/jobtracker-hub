@@ -24,6 +24,8 @@ class ApplicationRowSerializer(serializers.Serializer):
     """
 
     portable_id = serializers.UUIDField(read_only=True)
+    category_id = serializers.IntegerField(allow_null=True)
+    category_revision = serializers.IntegerField()
     id = serializers.IntegerField()
     workspace_id = serializers.IntegerField()
     section = serializers.CharField()

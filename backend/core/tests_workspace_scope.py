@@ -119,10 +119,16 @@ class WorkspaceScopeTests(APITestCase):
         for app in self.apps:
             app.section = "credentials"
             app.save()
-        self.assertEqual(self.client.get(self.url("categories/")).data[0]["doc_count"], 1)
-        self.assertEqual(self.client.post(self.url("categories/credentials/override/"),
-            {"archived": True}, format="json").status_code, 200)
-        self.assertEqual(list(FolderOverride.objects.values_list("workspace_id", flat=True)), [self.a.pk])
+        from documents.models import Category
+        category = Category.objects.create(workspace=self.a, name="Certificates", section="credentials")
+        other = Category.objects.create(workspace=self.b, name="Certificates", section="credentials")
+        self.assertEqual([row["id"] for row in self.client.get(self.url("categories/")).data], [category.pk])
+        self.assertEqual(self.client.patch(self.url(f"categories/{category.pk}/"),
+            {"archived": True, "expected_revision": 0}, format="json",
+            HTTP_IDEMPOTENCY_KEY="category_scope_key_1").status_code, 200)
+        other.refresh_from_db()
+        self.assertFalse(other.archived)
+        self.assertFalse(FolderOverride.objects.exists())
 
     def test_document_actions_and_nested_lists(self):
         self.populate_related()
@@ -194,7 +200,7 @@ class WorkspaceScopeTests(APITestCase):
         FolderOverride.objects.create(workspace=self.b, folder="credentials", archived=True)
         self.assertEqual(len(self.client.get(self.url("search/"), {"q": "overlap"}).data), 1)
         self.assertEqual(len(self.client.get(self.url("browse/")).data["credentials"]), 1)
-        self.assertFalse(self.client.get(self.url("categories/")).data[0]["archived"])
+        self.assertEqual(self.client.get(self.url("categories/")).data, [])
 
     def test_dossier_filters_nested_documents_and_account_matches(self):
         from unittest.mock import patch

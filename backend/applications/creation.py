@@ -1,6 +1,6 @@
 """The two synchronous application allocators share this transaction authority.
 
-Lock order: workspace, request intent, posting. PostgreSQL workspace row locks
+Lock order: workspace, request intent, category, posting, applications. PostgreSQL workspace row locks
 serialize candidate review/allocation across both routes. SQLite takes its write
 lock before any transactional reads (no deferred read-to-write upgrade). No retry
 is performed here; uncertain clients must deliberately reuse the original key.
@@ -22,6 +22,7 @@ from core.models import ApplicationRequestIntent
 from postings.models import JobPosting, PostingApplicationConversion
 from .models import Application, Override, StatusHistory
 from .serializers import ApplicationSerializer
+from documents.models import Category, CategoryMembership
 
 
 def digest(value):
@@ -36,18 +37,27 @@ def conflict(code, **details):
     return Response({"code": code, **details}, status=409)
 
 
-def create_attempt(*, actor, workspace, key, supplied, values, posting_id=None, challenge=None):
+def validate_request_key(key):
     if not key or not re.fullmatch(r"[A-Za-z0-9_-]{16,128}", key):
         raise ValidationError({"Idempotency-Key": "Supply a random opaque key of 16–128 letters, digits, underscores or hyphens."})
+
+
+def lock_workspace(actor, workspace):
+    """Must be called inside the allocation/membership transaction."""
+    owned = Workspace.objects.filter(pk=workspace.pk, owner=actor)
+    if connection.vendor == "sqlite":
+        if not owned.update(name=models.F("name")):
+            raise NotFound()
+    elif not owned.select_for_update().exists():
+        raise NotFound()
+
+
+def create_attempt(*, actor, workspace, key, supplied, values, posting_id=None, challenge=None):
+    validate_request_key(key)
     kind = "posting" if posting_id is not None else "manual"
     intent_digest = digest({"version": 1, "kind": kind, "posting_id": posting_id, "fields": supplied})
     with transaction.atomic():
-        owned = Workspace.objects.filter(pk=workspace.pk, owner=actor)
-        if connection.vendor == "sqlite":
-            if not owned.update(name=models.F("name")):
-                raise NotFound()
-        elif not owned.select_for_update().exists():
-            raise NotFound()
+        lock_workspace(actor, workspace)
         intent, _ = ApplicationRequestIntent.objects.get_or_create(
             actor=actor, workspace=workspace, key=key,
             defaults={"digest": intent_digest, "kind": kind},
@@ -62,6 +72,11 @@ def create_attempt(*, actor, workspace, key, supplied, values, posting_id=None, 
 
         job = None
         data = dict(values)
+        category = None
+        if data.get("category_id") is not None:
+            category = Category.objects.select_for_update().filter(pk=data["category_id"], workspace=workspace).first()
+            if category is None:
+                raise NotFound()
         if posting_id is not None:
             job = JobPosting.objects.select_for_update().filter(pk=posting_id, workspace=workspace, account__workspace=workspace).first()
             if job is None:
@@ -89,7 +104,8 @@ def create_attempt(*, actor, workspace, key, supplied, values, posting_id=None, 
         # Only fingerprints are persisted, never candidate descriptors. Include the
         # complete visible candidate revision and posting fallback context.
         revision = digest({"candidates": candidates, "conversions": [[i, a, str(p)] for i, a, p in conversions],
-                           "posting": [job.company, job.title, job.status] if job else None})
+                           "posting": [job.company, job.title, job.status] if job else None,
+                           "category": [category.pk, str(category.portable_id), category.revision] if category else None})
         if challenge is not None:
             if not intent.challenge_token or not secrets.compare_digest(challenge, intent.challenge_token):
                 return conflict("invalid_challenge")
@@ -109,6 +125,10 @@ def create_attempt(*, actor, workspace, key, supplied, values, posting_id=None, 
                             prior_conversion_count=len(conversions))
         app = Application.objects.create(workspace=workspace, company=data["company"],
                                          role_label=data.get("role_label", ""), section=data.get("section", "applications"))
+        if category:
+            CategoryMembership.objects.create(application=app, category=category)
+            app.category_revision = 1
+            app.save(update_fields=["category_revision"])
         if status_value:
             Override.objects.create(application=app, manual_status=status_value)
             StatusHistory.objects.create(application=app, status=status_value, changed_at=timezone.now(),
@@ -153,7 +173,7 @@ def request_creation(request, workspace, serializer, posting_id=None):
 class CreationContentionMixin:
     """Include SQLite admission reads in bounded allocation contention handling."""
     def handle_exception(self, exc):
-        if (self.action in {"create", "apply"} and isinstance(exc, OperationalError)
+        if (getattr(self, "action", None) in {"create", "apply", "category"} and isinstance(exc, OperationalError)
                 and connection.vendor == "sqlite" and "locked" in str(exc).lower()):
             return Response({"code": "creation_busy", "detail": "Database busy. Reconcile using the original request key."}, status=503)
         return super().handle_exception(exc)

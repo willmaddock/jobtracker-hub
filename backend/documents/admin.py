@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Document, DocumentExtraction, DocumentOverride, FolderOverride
+from .models import Category, CategoryMembership, Document, DocumentExtraction, DocumentOverride, FolderOverride
 
 
 @admin.register(Document)
@@ -23,8 +23,18 @@ class DocumentExtractionAdmin(admin.ModelAdmin):
     search_fields = ("content_hash",)
 
 
-@admin.register(FolderOverride)
-class FolderOverrideAdmin(admin.ModelAdmin):
-    list_display = ("folder", "section", "archived", "workspace")
-    list_filter = ("archived", "section", "workspace")
-    search_fields = ("folder",)
+# Category mutations require the revision/request authority.
+class PreservedReadOnlyAdmin(admin.ModelAdmin):
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+admin.site.register(FolderOverride, PreservedReadOnlyAdmin)
+admin.site.register(Category, PreservedReadOnlyAdmin)
+admin.site.register(CategoryMembership, PreservedReadOnlyAdmin)
