@@ -17,8 +17,9 @@ from .serializers import (
     DocumentSerializer,
 )
 from .services import classify_doc_type
+from core.lifecycle import LifecycleContentionMixin, require_live, workspace_mutation
 
-class DocumentViewSet(WorkspaceScopedMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
+class DocumentViewSet(LifecycleContentionMixin, WorkspaceScopedMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
     """Metadata / rename / override for a single Document, all reached
     by its real id (see serializers.py's module docstring on why this
     drops the original's relpath identity). No list route here --
@@ -39,6 +40,7 @@ class DocumentViewSet(WorkspaceScopedMixin, mixins.RetrieveModelMixin, viewsets.
         return DocumentSerializer(document, context={"duplicate_counts": counts}).data
 
     @action(detail=True, methods=["post"])
+    @workspace_mutation
     def rename(self, request, pk=None, **kwargs):
         """Renames the file in place. doc_type is recomputed from the
         new filename via the same classify_doc_type rules used at
@@ -49,6 +51,7 @@ class DocumentViewSet(WorkspaceScopedMixin, mixins.RetrieveModelMixin, viewsets.
         Document row, so it just carries over automatically.
         """
         document = self.get_object()
+        require_live(document)
         serializer = DocumentRenameSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         new_filename = serializer.validated_data["new_filename"]
@@ -62,12 +65,14 @@ class DocumentViewSet(WorkspaceScopedMixin, mixins.RetrieveModelMixin, viewsets.
         return Response(self._serialize(document))
 
     @action(detail=True, methods=["post"])
+    @workspace_mutation
     def override(self, request, pk=None, **kwargs):
         """Manual doc-type correction for a file the filename-based
         classifier can't disambiguate on its own. Never touches the
         stored file itself.
         """
         document = self.get_object()
+        require_live(document)
         serializer = DocumentOverrideWriteSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         value = serializer.validated_data.get("doc_type_override") or None
@@ -81,23 +86,6 @@ class DocumentViewSet(WorkspaceScopedMixin, mixins.RetrieveModelMixin, viewsets.
 
 
 class LegacyDocumentDeletionViewSet(viewsets.GenericViewSet):
-    """Preserves the existing deletion endpoint independently of scoped actions."""
-
-    serializer_class = DocumentSerializer
-    def get_queryset(self):
-        return Document.objects.filter(workspace__owner=self.request.user).select_related(
-            "override", "application")
-
-    @action(detail=True, methods=["post"])
-    def delete(self, request, pk=None, **kwargs):
-        """Deletes both the storage object and the Document row --
-        the original moved the file to the OS Trash (recoverable);
-        there's no equivalent "trash" tier for object storage here,
-        so this is a real delete, same as Application/JobPosting
-        delete elsewhere in this API.
-        """
-        document = self.get_object()
-        document_id = document.id
-        document.file.delete(save=False)
-        document.delete()
-        return Response({"ok": True, "id": document_id})
+    """Retired; never delete a retained row or storage object."""
+    def delete(self, request, **kwargs):
+        return Response({"code": "endpoint_retired", "detail": "Use workspace-scoped Trash."}, status=410)

@@ -32,7 +32,7 @@ def scoped_duplicate_counts(workspace, content_hashes):
     hashes = {value for value in content_hashes if value}
     if not hashes:
         return {}
-    rows = Document.objects.filter(
+    rows = Document.objects.live().filter(
         workspace=workspace, application__workspace=workspace, content_hash__in=hashes
     ).values("content_hash").annotate(count=Count("id"))
     return {row["content_hash"]: row["count"] for row in rows}

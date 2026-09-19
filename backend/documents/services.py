@@ -14,13 +14,9 @@ would mean forgetting the `workspace=` filter and letting any
 authenticated user fetch any Document by guessing its id. Same risk,
 much simpler check.
 
-No corresponding "resolve_safe_dir" here: that variant additionally
-refused to resolve the JobTracker root itself or 'Applications/' as a
-deletable target, guarding against a bad/blank source_relpath
-trashing everything. An Application is deleted by its real id via the
-ORM now (cascading to its Documents via Document.application's
-on_delete=CASCADE -- see documents/models.py), so there's no
-path-shaped "delete everything" footgun left to guard against.
+Applications and Documents use retained Trash state. Product deletion routes do
+not delete records or files; retained ownership FKs resist incidental deletion.
+
 """
 from __future__ import annotations
 
@@ -130,7 +126,7 @@ def duplicate_counts(workspace, content_hashes: list[str]) -> dict[str, int]:
     if not hashes:
         return {}
     rows = (
-        Document.objects.filter(workspace=workspace, content_hash__in=set(hashes))
+        Document.objects.live().filter(workspace=workspace, content_hash__in=set(hashes))
         .values("content_hash")
         .annotate(count=Count("id"))
     )

@@ -8,6 +8,8 @@ def api_exception_handler(exc, context):
     if response is None:
         return None
     code = getattr(exc, "default_code", None)
+    if response.status_code == 409 and hasattr(exc, "get_codes"):
+        code = exc.get_codes()
     if code != "csrf_failed":
         code = {401: "authentication_required", 403: "permission_denied",
                 404: "not_found", 400: "validation_error"}.get(response.status_code, code or "request_failed")

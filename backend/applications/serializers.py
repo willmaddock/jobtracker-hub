@@ -43,6 +43,7 @@ class ApplicationSerializer(serializers.ModelSerializer):
             "id", "portable_id", "workspace", "section", "company", "role_label", "source_relpath",
             "status", "effective_status", "last_activity", "first_activity",
             "created_at", "override", "category_id", "category_revision",
+            "is_trashed", "trashed_at", "effective_trashed", "lifecycle_revision",
         ]
         read_only_fields = fields
 

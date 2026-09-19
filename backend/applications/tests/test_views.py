@@ -231,60 +231,18 @@ class BulkOverrideApplicationTests(ApplicationsAPITestCase):
         self.assertFalse(hasattr(self.other_application, "override") and self.other_application.override.archived)
 
 
-class DeleteApplicationTests(ApplicationsAPITestCase):
-    def test_delete_removes_application(self):
-        self.client.login(username="alice", password="pw123456")
-        response = self.client.post(reverse("application-delete", args=[self.application.id]))
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertFalse(Application.objects.filter(id=self.application.id).exists())
-
-    def test_delete_works_without_archiving_first(self):
-        self.client.login(username="alice", password="pw123456")
-        response = self.client.post(reverse("application-delete", args=[self.application.id]))
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-
-    def test_delete_cascades_override_and_status_history(self):
-        Override.objects.create(application=self.application, notes="x")
+class RetiredApplicationDeleteTests(ApplicationsAPITestCase):
+    def test_single_and_bulk_routes_preserve_all_records(self):
+        Override.objects.create(application=self.application, archived=True, notes="keep")
         StatusHistory.objects.create(application=self.application, status="applied", changed_at="2026-01-01T00:00:00Z")
         self.client.login(username="alice", password="pw123456")
-        self.client.post(reverse("application-delete", args=[self.application.id]))
-        self.assertFalse(Override.objects.filter(application_id=self.application.id).exists())
-        self.assertFalse(StatusHistory.objects.filter(application_id=self.application.id).exists())
-
-    def test_cannot_delete_another_users_application(self):
-        self.client.login(username="alice", password="pw123456")
-        response = self.client.post(reverse("application-delete", args=[self.other_application.id]))
-        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
-
-
-class BulkDeleteApplicationTests(ApplicationsAPITestCase):
-    def test_deletes_only_archived_applications(self):
-        Override.objects.create(application=self.application, archived=True)
-        second = Application.objects.create(
-            workspace=self.workspace, section="applications", company="Initech", role_label="QA", source_relpath="",
-        )
-        self.client.login(username="alice", password="pw123456")
-        response = self.client.post(
-            reverse("application-bulk-delete"), {"item_ids": [self.application.id, second.id]}
-        )
-        self.assertTrue(response.data["ok"] is False)
-        self.assertEqual(response.data["deleted"], [self.application.id])
-        self.assertFalse(Application.objects.filter(id=self.application.id).exists())
-        self.assertTrue(Application.objects.filter(id=second.id).exists())
-
-    def test_reports_not_found_for_missing_id(self):
-        self.client.login(username="alice", password="pw123456")
-        response = self.client.post(
-            reverse("application-bulk-delete"), {"item_ids": [999999]}
-        )
-        self.assertEqual(response.data["deleted"], [])
-        self.assertEqual(response.data["failed"][0]["id"], 999999)
-
-    def test_cannot_bulk_delete_another_users_application(self):
-        Override.objects.create(application=self.other_application, archived=True)
-        self.client.login(username="alice", password="pw123456")
-        response = self.client.post(
-            reverse("application-bulk-delete"), {"item_ids": [self.other_application.id]}
-        )
-        self.assertEqual(response.data["deleted"], [])
-        self.assertTrue(Application.objects.filter(id=self.other_application.id).exists())
+        for pk in (self.application.pk, self.other_application.pk, 999999):
+            response = self.client.post(reverse("application-delete", args=[pk]))
+            self.assertEqual(response.status_code, 410)
+            self.assertEqual(response.data["code"], "endpoint_retired")
+        response = self.client.post(reverse("application-bulk-delete"),
+                                    {"item_ids": [self.application.pk, self.other_application.pk, 999999]})
+        self.assertEqual(response.status_code, 410)
+        self.assertEqual(Application.objects.count(), 2)
+        self.assertEqual(Override.objects.get().notes, "keep")
+        self.assertEqual(StatusHistory.objects.count(), 1)

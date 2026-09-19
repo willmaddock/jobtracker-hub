@@ -1,9 +1,11 @@
 from django.urls import path
+from core.lifecycle_views import LifecycleView
 from rest_framework.urlpatterns import format_suffix_patterns
 from .views import ApplicationViewSet, LegacyApplicationDeletionViewSet
 
 prefix = "workspaces/<int:workspace_id>/applications/"
 urlpatterns = [
+    path(prefix + "<int:pk>/", ApplicationViewSet.as_view({"get": "retrieve"}), name="application-detail"),
     path(prefix, ApplicationViewSet.as_view({"get": "list", "post": "create"}), name="application-list"),
     path(prefix + "<int:pk>/documents/", ApplicationViewSet.as_view({"get": "documents", "post": "documents"}), name="application-documents"),
     path(prefix + "<int:pk>/dossier/", ApplicationViewSet.as_view({"get": "dossier"}), name="application-dossier"),
@@ -15,3 +17,11 @@ urlpatterns = [
 
 # Preserve the suffix variants previously supplied by DefaultRouter.
 urlpatterns = format_suffix_patterns(urlpatterns)
+
+# Lifecycle routes use only desired state and the expected lifecycle revision.
+for kind in ['applications']:
+    for transition in ("trash", "restore"):
+        urlpatterns.append(path(
+            f"workspaces/<int:workspace_id>/{kind}/<int:pk>/{transition}/",
+            LifecycleView.as_view(), {"kind": kind, "transition": transition},
+            name=f"{kind[:-1] if kind != 'categories' else 'category'}-{transition}"))

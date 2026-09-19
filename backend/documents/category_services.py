@@ -9,13 +9,14 @@ from rest_framework.response import Response
 from applications.creation import conflict, digest, lock_workspace, validate_request_key
 from applications.models import Application
 from core.models import ApplicationRequestIntent
+from core.lifecycle import lifecycle_data, require_live
 from .models import Category, CategoryMembership, CATEGORY_SECTIONS, normalized_category_name
 
 
 def category_data(category):
     return {"id": category.pk, "workspace": category.workspace_id, "portable_id": str(category.portable_id),
             "name": category.name, "section": category.section, "archived": category.archived,
-            "revision": category.revision, "provenance": category.provenance}
+            "revision": category.revision, "provenance": category.provenance, **lifecycle_data(category)}
 
 
 def ordered_categories(queryset):
@@ -43,6 +44,8 @@ def mutate_category(*, actor, workspace, key, supplied, values, category_id=None
             if result is None:
                 return Response({"state": "removed", "portable_id": str(intent.result_portable_id)})
             return Response(category_data(result))
+        if category:
+            require_live(category)
         if category and values["expected_revision"] != category.revision:
             return conflict("stale_revision")
         name = values.get("name", category.name if category else "")
@@ -98,6 +101,9 @@ def assign_category(*, actor, workspace, application_id, category_id, expected_r
         application = Application.objects.select_for_update().filter(pk=application_id, workspace=workspace).first()
         if application is None:
             raise NotFound()
+        require_live(application)
+        if category:
+            require_live(category)
         if application.category_revision != expected_revision:
             return conflict("stale_revision")
         membership = CategoryMembership.objects.filter(application=application).first()

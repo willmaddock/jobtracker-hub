@@ -115,14 +115,15 @@ class OverrideDocumentTests(DocumentAPITestCase):
 
 
 class DeleteDocumentTests(DocumentAPITestCase):
-    def test_deletes_document_and_file(self):
+    def test_retired_delete_preserves_document_and_file(self):
         self.client.login(username="alice", password="pw123456")
         response = self.client.post(reverse("document-delete", args=[self.document.id]))
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertFalse(Document.objects.filter(id=self.document.id).exists())
+        self.assertEqual(response.status_code, status.HTTP_410_GONE)
+        self.assertTrue(Document.objects.filter(id=self.document.id).exists())
+        self.assertTrue(self.document.file.storage.exists(self.document.file.name))
 
     def test_cannot_delete_another_users_document(self):
         self.client.login(username="alice", password="pw123456")
         response = self.client.post(reverse("document-delete", args=[self.other_document.id]))
-        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(response.status_code, status.HTTP_410_GONE)
         self.assertTrue(Document.objects.filter(id=self.other_document.id).exists())

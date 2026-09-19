@@ -79,7 +79,7 @@ class AttentionView(WorkspaceScopedMixin, APIView):
     """
 
     def get(self, request, **kwargs):
-        queryset = Application.objects.filter(workspace=self.get_workspace())
+        queryset = Application.objects.live().filter(workspace=self.get_workspace())
         apps = load_applications(queryset)
         attention = needs_attention(apps)
         return Response(ApplicationRowSerializer(attention, many=True).data)
@@ -91,7 +91,7 @@ class InsightsView(WorkspaceScopedMixin, APIView):
     """
 
     def get(self, request, **kwargs):
-        queryset = Application.objects.filter(workspace=self.get_workspace())
+        queryset = Application.objects.live().filter(workspace=self.get_workspace())
         apps = load_applications(queryset)
         return Response(InsightsSerializer(compute_metrics(apps)).data)
 
@@ -112,7 +112,7 @@ class SearchView(WorkspaceScopedMixin, APIView):
         show_personal = _parse_bool(request.query_params.get("show_personal"))
 
         documents = (
-            Document.objects.filter(workspace=self.get_workspace(), application__workspace=self.get_workspace())
+            Document.objects.live().filter(workspace=self.get_workspace(), application__workspace=self.get_workspace())
             .filter(Q(filename__icontains=q) | Q(application__company__icontains=q))
             .select_related("application")
         )
@@ -154,9 +154,9 @@ class BrowseView(WorkspaceScopedMixin, APIView):
         ql = q.lower()
 
         applications = (
-            Application.objects.filter(workspace=self.get_workspace())
+            Application.objects.live().filter(workspace=self.get_workspace())
             .select_related("override")
-            .prefetch_related(Prefetch("documents", queryset=Document.objects.filter(
+            .prefetch_related(Prefetch("documents", queryset=Document.objects.live().filter(
                 workspace=self.get_workspace()).select_related("override")))
             .order_by("company", "role_label")
         )
@@ -196,7 +196,7 @@ class ManageView(WorkspaceScopedMixin, APIView):
     """
 
     def get(self, request, **kwargs):
-        app_queryset = Application.objects.filter(workspace=self.get_workspace())
+        app_queryset = Application.objects.live().filter(workspace=self.get_workspace())
         apps = load_applications(app_queryset)
 
         aliases = dict(
@@ -209,7 +209,7 @@ class ManageView(WorkspaceScopedMixin, APIView):
         }
         archived = [a for a in apps if a["archived"]]
 
-        doc_queryset = Document.objects.filter(workspace=self.get_workspace(), application__workspace=self.get_workspace())
+        doc_queryset = Document.objects.live().filter(workspace=self.get_workspace(), application__workspace=self.get_workspace())
         duplicate_documents = find_duplicate_groups(doc_queryset)
 
         data = {

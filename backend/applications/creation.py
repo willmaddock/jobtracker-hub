@@ -23,6 +23,7 @@ from postings.models import JobPosting, PostingApplicationConversion
 from .models import Application, Override, StatusHistory
 from .serializers import ApplicationSerializer
 from documents.models import Category, CategoryMembership
+from core.lifecycle import lifecycle_data, require_live
 
 
 def digest(value):
@@ -77,6 +78,8 @@ def create_attempt(*, actor, workspace, key, supplied, values, posting_id=None, 
             category = Category.objects.select_for_update().filter(pk=data["category_id"], workspace=workspace).first()
             if category is None:
                 raise NotFound()
+        if category:
+            require_live(category)
         if posting_id is not None:
             job = JobPosting.objects.select_for_update().filter(pk=posting_id, workspace=workspace, account__workspace=workspace).first()
             if job is None:
@@ -97,7 +100,7 @@ def create_attempt(*, actor, workspace, key, supplied, values, posting_id=None, 
                 override = overrides.get(app.pk)
                 candidates.append({"id": app.pk, "portable_id": str(app.portable_id), "company": app.company,
                                    "role_label": app.role_label, "section": app.section,
-                                   "archived": bool(override and override.archived),
+                                   "archived": bool(override and override.archived), **lifecycle_data(app),
                                    "status": override.manual_status if override and override.manual_status else app.status,
                                    "date_applied": str(override.date_applied) if override and override.date_applied else None})
         conversions = list(PostingApplicationConversion.objects.filter(posting=job, workspace=workspace).order_by("pk").values_list("pk", "application_id", "application_portable_id")) if job else []
@@ -105,7 +108,7 @@ def create_attempt(*, actor, workspace, key, supplied, values, posting_id=None, 
         # complete visible candidate revision and posting fallback context.
         revision = digest({"candidates": candidates, "conversions": [[i, a, str(p)] for i, a, p in conversions],
                            "posting": [job.company, job.title, job.status] if job else None,
-                           "category": [category.pk, str(category.portable_id), category.revision] if category else None})
+                           "category": [category.pk, str(category.portable_id), category.revision, category.lifecycle_revision] if category else None})
         if challenge is not None:
             if not intent.challenge_token or not secrets.compare_digest(challenge, intent.challenge_token):
                 return conflict("invalid_challenge")
@@ -148,7 +151,7 @@ def create_attempt(*, actor, workspace, key, supplied, values, posting_id=None, 
 
 
 def result(app, kind, replay=False):
-    body = {"ok": True, "application_id": app.pk, "portable_id": str(app.portable_id)} if kind == "posting" else ApplicationSerializer(app).data
+    body = {"ok": True, "application_id": app.pk, "portable_id": str(app.portable_id), **lifecycle_data(app)} if kind == "posting" else ApplicationSerializer(app).data
     return Response(body, status=200 if replay else 201)
 
 

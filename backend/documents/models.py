@@ -37,6 +37,7 @@ got wired up, since they didn't get the same treatment:
 import unicodedata
 import uuid
 
+from core.lifecycle_models import RetainedLifecycle, DocumentQuerySet
 from django.core.exceptions import ValidationError
 from django.db import models, router
 
@@ -57,13 +58,19 @@ def document_upload_path(instance: "Document", filename: str) -> str:
     )
 
 
-class Document(models.Model):
+class Document(RetainedLifecycle):
     """One uploaded file (resume, cover letter, evidence PDF, ...)
     belonging to an Application. Replaces a jobtracker.db
     `documents` row; `doc_type` mirrors classify.classify_doc_type's
     return values so the existing classification logic (Phase 5)
     needs no schema changes to port over.
     """
+
+    objects = DocumentQuerySet.as_manager()
+
+    @property
+    def effective_trashed(self):
+        return self.is_trashed or self.application.is_trashed
 
     DOC_TYPE_CHOICES = [
         ("readme", "Readme"),
@@ -79,10 +86,10 @@ class Document(models.Model):
     ]
 
     workspace = models.ForeignKey(
-        "accounts.Workspace", on_delete=models.CASCADE, related_name="documents"
+        "accounts.Workspace", on_delete=models.PROTECT, related_name="documents"
     )
     application = models.ForeignKey(
-        "applications.Application", on_delete=models.CASCADE, related_name="documents"
+        "applications.Application", on_delete=models.PROTECT, related_name="documents"
     )
     file = models.FileField(upload_to=document_upload_path)
     # Original filename, kept separate from the storage key -- the
@@ -207,8 +214,8 @@ def validate_category_name(name):
         raise ValidationError("Applications is reserved for the system pipeline.")
 
 
-class Category(models.Model):
-    workspace = models.ForeignKey("accounts.Workspace", on_delete=models.CASCADE, related_name="categories")
+class Category(RetainedLifecycle):
+    workspace = models.ForeignKey("accounts.Workspace", on_delete=models.PROTECT, related_name="categories")
     portable_id = models.UUIDField(default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=255, validators=[validate_category_name])
     section = models.CharField(max_length=32, choices=[(s, s) for s in CATEGORY_SECTIONS])

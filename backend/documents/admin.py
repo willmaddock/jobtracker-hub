@@ -1,19 +1,33 @@
 from django.contrib import admin
+from core.lifecycle_admin import LifecycleAdminMixin
 
 from .models import Category, CategoryMembership, Document, DocumentExtraction, DocumentOverride, FolderOverride
 
 
 @admin.register(Document)
-class DocumentAdmin(admin.ModelAdmin):
+class DocumentAdmin(LifecycleAdminMixin, admin.ModelAdmin):
     list_display = ("filename", "doc_type", "application", "workspace", "size", "uploaded_at")
     list_filter = ("workspace", "doc_type")
     search_fields = ("filename", "content_hash")
+    readonly_fields = ("workspace", "application", "file", "trashed_at", "lifecycle_revision")
+
+    def has_add_permission(self, request):
+        return False
 
 
 @admin.register(DocumentOverride)
 class DocumentOverrideAdmin(admin.ModelAdmin):
     list_display = ("document", "doc_type_override", "updated_at")
     search_fields = ("document__filename",)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(DocumentExtraction)

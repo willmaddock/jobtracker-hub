@@ -2,8 +2,8 @@
 
 Phase 8 (docs/DJANGO_MIGRATION_PLAN.md) -- DRF viewset for the
 "applications" section of the Phase 0 endpoint inventory. Normal workflows
-use the owner-authorized Workspace in the route. Existing deletion endpoints
-remain isolated in LegacyApplicationDeletionViewSet.
+use the owner-authorized Workspace in the route. Existing unscoped deletion endpoints
+are retired by LegacyApplicationDeletionViewSet.
 
 Creation delegates to the protected synchronous authority in creation.py.
 
@@ -36,7 +36,6 @@ from .models import Application, Override, StatusHistory
 from .serializers import (
     ApplicationCreateSerializer,
     ApplicationSerializer,
-    BulkDeleteSerializer,
     BulkOverrideWriteSerializer,
     OverrideWriteSerializer,
 )
@@ -61,14 +60,18 @@ from applications.creation import CreationContentionMixin
 from core.workspace_scope import WorkspaceScopedMixin, scoped_duplicate_counts
 
 from documents.services import classify_doc_type, sha256_of
+from core.lifecycle import LifecycleContentionMixin, require_live, workspace_mutation
 
 _VALID_STATUSES = [choice[0] for choice in Application.STATUS_CHOICES]
 
 
-class ApplicationViewSet(CreationContentionMixin, WorkspaceScopedMixin, mixins.ListModelMixin, viewsets.GenericViewSet):
+class ApplicationViewSet(CreationContentionMixin, LifecycleContentionMixin, WorkspaceScopedMixin, mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
     def get_queryset(self):
+        queryset = Application.objects.filter(workspace=self.get_workspace())
+        if self.action == "list" and self.request.query_params.get("show_trashed", "").lower() not in {"true", "1"}:
+            queryset = queryset.live()
         return (
-            Application.objects.filter(workspace=self.get_workspace())
+            queryset
             .select_related("override", "category_membership__category")
             .order_by("-created_at")
         )
@@ -83,6 +86,7 @@ class ApplicationViewSet(CreationContentionMixin, WorkspaceScopedMixin, mixins.L
         return request_creation(request, self.get_workspace(), self.get_serializer(data=request.data))
 
     @action(detail=True, methods=["get", "post"])
+    @workspace_mutation
     def documents(self, request, pk=None, **kwargs):
         """GET lists this application's documents; POST uploads one
         or more new ones. Same URL for both, matching the original's
@@ -101,7 +105,10 @@ class ApplicationViewSet(CreationContentionMixin, WorkspaceScopedMixin, mixins.L
         """
         application = self.get_object()
         if request.method == "GET":
-            documents = application.documents.filter(workspace=self.get_workspace()).select_related("override").order_by(
+            documents = application.documents.filter(workspace=self.get_workspace())
+            if request.query_params.get("show_trashed", "").lower() not in {"1", "true"}:
+                documents = documents.live()
+            documents = documents.select_related("override", "application").order_by(
                 "doc_type", "filename"
             )
             counts = scoped_duplicate_counts(
@@ -112,6 +119,7 @@ class ApplicationViewSet(CreationContentionMixin, WorkspaceScopedMixin, mixins.L
             )
             return Response(serializer.data)
 
+        require_live(application)
         serializer = DocumentUploadSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         created = []
@@ -140,6 +148,7 @@ class ApplicationViewSet(CreationContentionMixin, WorkspaceScopedMixin, mixins.L
         return Response({"ok": True, "documents": serializer.data}, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=["get"])
+    @workspace_mutation
     def dossier(self, request, pk=None, **kwargs):
         """GET /api/applications/{id}/dossier -- see this module's
         docstring and applications/dossier.assemble_dossier() for the
@@ -179,7 +188,8 @@ class ApplicationViewSet(CreationContentionMixin, WorkspaceScopedMixin, mixins.L
         flag.
         """
         application = self.get_object()
-        documents = application.documents.filter(workspace=self.get_workspace()).select_related("override")
+        require_live(application)
+        documents = application.documents.live().filter(workspace=self.get_workspace()).select_related("override")
         # A populated intermediate database may contain inconsistent cache
         # provenance. Reject before extraction/autofill rather than reusing it.
         caches = DocumentExtraction.objects.filter(
@@ -240,6 +250,7 @@ class ApplicationViewSet(CreationContentionMixin, WorkspaceScopedMixin, mixins.L
         return Response(result)
 
     @action(detail=True, methods=["post"])
+    @workspace_mutation
     def override(self, request, pk=None, **kwargs):
         """Uses the numeric Application.id in the URL -- no item_key
         round-trip to worry about, since Application.id has been the
@@ -247,6 +258,7 @@ class ApplicationViewSet(CreationContentionMixin, WorkspaceScopedMixin, mixins.L
         docstring on what that made unnecessary to port).
         """
         application = self.get_object()
+        require_live(application)
         serializer = OverrideWriteSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         values = dict(serializer.validated_data)
@@ -264,6 +276,7 @@ class ApplicationViewSet(CreationContentionMixin, WorkspaceScopedMixin, mixins.L
         return Response({"ok": True, "id": application.id})
 
     @action(detail=False, methods=["post"], url_path="bulk-override")
+    @workspace_mutation
     def bulk_override(self, request, **kwargs):
         """Validate all selected-Workspace targets before atomically applying overrides."""
         serializer = BulkOverrideWriteSerializer(data=request.data)
@@ -279,6 +292,8 @@ class ApplicationViewSet(CreationContentionMixin, WorkspaceScopedMixin, mixins.L
             if {app.pk for app in targets} != set(item_ids):
                 raise NotFound()
             for application in targets:
+                require_live(application)
+            for application in targets:
                 if fields:
                     Override.objects.update_or_create(application=application, defaults=fields)
                 if "manual_status" in fields:
@@ -291,52 +306,9 @@ class ApplicationViewSet(CreationContentionMixin, WorkspaceScopedMixin, mixins.L
 
 
 class LegacyApplicationDeletionViewSet(viewsets.GenericViewSet):
-    """Existing deletion only; no canonical Trash contract is introduced here."""
+    """Retired: callers must use workspace-scoped revision-protected Trash."""
+    def delete(self, request, **kwargs):
+        return Response({"code": "endpoint_retired", "detail": "Use workspace-scoped Trash."}, status=410)
 
-    serializer_class = ApplicationSerializer
-    def get_queryset(self):
-        return Application.objects.filter(workspace__owner=self.request.user).select_related("override")
-
-    @action(detail=True, methods=["post"])
-    def delete(self, request, pk=None, **kwargs):
-        """Permanently removes one application. Works whether it's
-        archived or not -- same as the original, single delete has no
-        archived precondition (only bulk-delete below re-verifies
-        that). FK cascades (Override, StatusHistory) and SET_NULL
-        (PostingApplicationConversion.application) handle the cleanup that used
-        to be several manual DELETE statements plus a document-override
-        ghost cleanup loop -- there's no document_overrides table or
-        disk folder left to leave a ghost row in anymore.
-        """
-        application = self.get_object()
-        application_id = application.id
-        application.delete()
-        return Response({"ok": True, "id": application_id})
-
-    @action(detail=False, methods=["post"], url_path="bulk-delete")
     def bulk_delete(self, request, **kwargs):
-        """Re-verifies server-side that every id is actually archived
-        before touching it, same as the original -- the frontend only
-        offers this from the Archived list, but that's a UI-level
-        guarantee, not a security one, for a destructive bulk action.
-        Never aborts the whole batch on one bad id.
-        """
-        serializer = BulkDeleteSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        item_ids = serializer.validated_data["item_ids"]
-        queryset = self.get_queryset().filter(id__in=item_ids)
-        by_id = {application.id: application for application in queryset}
-        deleted: list[int] = []
-        failed: list[dict] = []
-        for app_id in item_ids:
-            application = by_id.get(app_id)
-            if application is None:
-                failed.append({"id": app_id, "error": "Application not found."})
-                continue
-            override = getattr(application, "override", None)
-            if not (override and override.archived):
-                failed.append({"id": app_id, "error": "Not archived — archive it before deleting."})
-                continue
-            application.delete()
-            deleted.append(app_id)
-        return Response({"ok": len(failed) == 0, "deleted": deleted, "failed": failed})
+        return self.delete(request, **kwargs)

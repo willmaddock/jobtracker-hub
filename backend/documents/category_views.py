@@ -7,6 +7,7 @@ from applications.creation import CreationContentionMixin
 from applications.serializers import ApplicationSerializer
 from applications.models import Application
 from core.workspace_scope import WorkspaceScopedMixin
+from core.lifecycle import require_live
 from .models import Category, CATEGORY_SECTIONS, validate_category_name
 from .category_services import assign_category, category_data, mutate_category, ordered_categories
 
@@ -51,6 +52,8 @@ class CategoryView(CreationContentionMixin, WorkspaceScopedMixin, APIView):
             if category is None:
                 raise NotFound()
             return Response(category_data(category))
+        if request.query_params.get("show_trashed", "").lower() not in {"1", "true"}:
+            queryset = queryset.live()
         if request.query_params.get("show_archived", "").lower() not in {"1", "true"}:
             queryset = queryset.filter(archived=False)
         return Response([category_data(c) for c in ordered_categories(queryset)])
@@ -78,9 +81,10 @@ class CategoryApplicationsView(WorkspaceScopedMixin, APIView):
         category = Category.objects.filter(workspace=self.get_workspace(), pk=pk).first()
         if category is None:
             raise NotFound()
+        require_live(category)
         if category.archived and request.query_params.get("show_archived", "").lower() not in {"1", "true"}:
             return Response([])
-        applications = Application.objects.filter(workspace=self.get_workspace(), category_membership__category=category).select_related("override", "category_membership__category").order_by("pk")
+        applications = Application.objects.live().filter(workspace=self.get_workspace(), category_membership__category=category).select_related("override", "category_membership__category").order_by("pk")
         if request.query_params.get("show_archived", "").lower() not in {"1", "true"}:
             applications = applications.exclude(override__archived=True)
         return Response(ApplicationSerializer(applications, many=True).data)

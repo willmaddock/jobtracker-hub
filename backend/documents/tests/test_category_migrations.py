@@ -19,7 +19,11 @@ class CategoryMigrationTests(TransactionTestCase):
             db = connections[alias]
             try:
                 executor = MigrationExecutor(db)
-                leaves = executor.loader.graph.leaf_nodes()
+                leaves = [(app, name) for app, name in executor.loader.graph.leaf_nodes()
+                          if app not in {'applications', 'documents', 'core'}]
+                leaves += [('applications', '0004_application_category_revision'),
+                           ('documents', '0004_backfill_synthetic_categories'),
+                           ('core', '0004_applicationrequestintent_category')]
                 baseline = [(app, name) for app, name in leaves if app not in {'applications', 'documents', 'core'}]
                 baseline += [('applications', '0003_allow_repeated_attempts'), ('documents', '0002_document_and_fk_refactor'), ('core', '0003_applicationrequestintent')]
                 executor.migrate(baseline)

@@ -1,4 +1,5 @@
 from django.contrib import admin
+from core.lifecycle_admin import LifecycleAdminMixin
 
 from .models import Application, CompanyAlias, Override, StatusHistory
 
@@ -16,12 +17,12 @@ class StatusHistoryInline(admin.TabularInline):
 
 
 @admin.register(Application)
-class ApplicationAdmin(admin.ModelAdmin):
+class ApplicationAdmin(LifecycleAdminMixin, admin.ModelAdmin):
     list_display = ("company", "role_label", "section", "status", "workspace")
     list_filter = ("section", "status", "workspace")
     search_fields = ("company", "role_label", "source_relpath")
     inlines = [OverrideInline, StatusHistoryInline]
-    readonly_fields = ("portable_id", "workspace", "source_relpath", "category_revision")
+    readonly_fields = ("portable_id", "workspace", "source_relpath", "category_revision", "trashed_at", "lifecycle_revision")
 
     def has_add_permission(self, request):
         return False

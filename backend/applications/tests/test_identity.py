@@ -65,7 +65,9 @@ class IdentityTests(TestCase):
         CompanyAlias.objects.create(workspace=self.ws, alias="Same", canonical="Canonical")
         CompanyAlias.objects.all().delete()
         self.assertEqual(Application.objects.count(), 2)
-        self.a.delete()
+        from django.db.models.deletion import ProtectedError
+        with self.assertRaises(ProtectedError):
+            self.a.delete()
         self.assertEqual(self.b.documents.count(), 1)
         self.assertEqual(self.b.status_history.count(), 1)
         self.assertEqual(self.b.override.notes, "two")

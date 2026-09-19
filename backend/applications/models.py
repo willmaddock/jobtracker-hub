@@ -24,13 +24,14 @@ a filesystem walk.
 """
 import uuid
 
+from core.lifecycle_models import RetainedLifecycle
 from django.core.exceptions import ValidationError
 from django.db import models
 
 from accounts.models import Workspace
 
 
-class Application(models.Model):
+class Application(RetainedLifecycle):
     """One tracked item -- an application, a credential, a network
     contact, etc. Replaces a jobtracker.db `items` row plus its
     item_key. Everything else in this app (and in email_sync/
@@ -58,7 +59,7 @@ class Application(models.Model):
     ]
 
     workspace = models.ForeignKey(
-        Workspace, on_delete=models.CASCADE, related_name="applications"
+        Workspace, on_delete=models.PROTECT, related_name="applications"
     )
     portable_id = models.UUIDField(default=uuid.uuid4, editable=False)
     category_revision = models.PositiveBigIntegerField(default=0, editable=False)

@@ -70,12 +70,12 @@ class WorkspaceScopeTests(APITestCase):
         self.test_object_and_workspace_mismatches_have_no_effects()
         self.test_list_and_metrics_are_selected_workspace_only()
 
-    def test_old_writes_removed_and_deletion_preserved(self):
+    def test_old_writes_removed_and_deletion_retired(self):
         for path in ("/api/applications/", "/api/applications/bulk-override/",
                      "/api/manage/merge", "/api/hub/settings"):
             self.assertEqual(self.client.post(path, {}, format="json").status_code, 404)
         response = self.client.post(f"/api/applications/{self.apps[0].pk}/delete/")
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 410)
 
     def populate_related(self):
         from applications.models import CompanyAlias
@@ -336,14 +336,14 @@ class WorkspaceScopeTests(APITestCase):
         self.assertEqual(list(Override.objects.values_list("application_id", flat=True)), [self.apps[0].pk])
         self.assertEqual(self.client.get(self.url("applications.json", self.c)).status_code, 404)
 
-    def test_legacy_bulk_delete_accepts_format_without_changing_authorization(self):
+    def test_legacy_bulk_delete_format_is_also_retired(self):
         Override.objects.create(application=self.apps[0], archived=True)
         Override.objects.create(application=self.apps[2], archived=True)
         response = self.client.post("/api/applications/bulk-delete.json", {
             "item_ids": [self.apps[0].pk, self.apps[2].pk],
         }, format="json")
-        self.assertEqual(response.status_code, 200)
-        self.assertFalse(Application.objects.filter(pk=self.apps[0].pk).exists())
+        self.assertEqual(response.status_code, 410)
+        self.assertTrue(Application.objects.filter(pk=self.apps[0].pk).exists())
         self.assertTrue(Application.objects.filter(pk=self.apps[2].pk).exists())
 
     def test_suffix_compatibility_does_not_restore_old_routes_or_expand_adapters(self):
