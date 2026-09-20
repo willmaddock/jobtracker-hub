@@ -69,6 +69,10 @@ def compute_override_fields(fields_set: set, values: dict, reset_status: bool) -
         fields["snoozed_until"] = values.get("snoozed_until")
     if "activity_override" in fields_set:
         fields["activity_override"] = values.get("activity_override")
+    if "date_applied" in fields:
+        fields["date_applied_mode"] = "manual" if fields["date_applied"] else "suppressed"
+    if values.get("reset_date_applied"):
+        fields.update(date_applied=None, date_applied_source=None, date_applied_mode="automatic")
     return fields
 
 

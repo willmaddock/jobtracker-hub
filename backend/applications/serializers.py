@@ -27,7 +27,7 @@ class OverrideSerializer(serializers.ModelSerializer):
         fields = [
             "manual_status", "notes", "date_applied", "date_applied_source",
             "next_action", "next_action_date", "archived", "snoozed_until",
-            "activity_override",
+            "activity_override", "date_applied_mode",
         ]
         read_only_fields = fields
 
@@ -36,16 +36,24 @@ class ApplicationSerializer(serializers.ModelSerializer):
     category_id = serializers.SerializerMethodField()
     override = OverrideSerializer(read_only=True)
     effective_status = serializers.SerializerMethodField()
+    effective_date_applied = serializers.SerializerMethodField()
 
     class Meta:
         model = Application
         fields = [
             "id", "portable_id", "workspace", "section", "company", "role_label", "source_relpath",
             "status", "effective_status", "last_activity", "first_activity",
+            "first_activity_date", "last_activity_date", "activity_provenance",
+            "automatic_date_applied", "effective_date_applied", "date_candidate",
+            "derivation_state", "derivation_version", "derivation_fingerprint", "derived_at",
             "created_at", "override", "category_id", "category_revision",
             "is_trashed", "trashed_at", "effective_trashed", "lifecycle_revision",
         ]
         read_only_fields = fields
+
+    def get_effective_date_applied(self, obj):
+        from .derivation import effective_date
+        return effective_date(obj)
 
     def get_category_id(self, obj):
         membership = getattr(obj, "category_membership", None)
@@ -104,6 +112,7 @@ class OverrideWriteSerializer(ImmutableIdentityInput):
     manual_status = serializers.CharField(required=False, allow_null=True, allow_blank=True)
     reset_status = serializers.BooleanField(required=False, default=False)
     notes = serializers.CharField(required=False, allow_null=True, allow_blank=True)
+    reset_date_applied = serializers.BooleanField(required=False)
     date_applied = serializers.DateField(required=False, allow_null=True)
     date_applied_source = serializers.ChoiceField(
         choices=Override.DATE_APPLIED_SOURCE_CHOICES, required=False, allow_null=True,

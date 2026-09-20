@@ -165,8 +165,9 @@ class OverrideApplicationTests(ApplicationsAPITestCase):
         )
         override = Override.objects.get(application=self.application)
         self.assertIsNone(override.manual_status)
+        # No eligible evidence: resetting manual status exposes derived unknown.
         self.assertTrue(
-            StatusHistory.objects.filter(application=self.application, status="applied").exists()
+            StatusHistory.objects.filter(application=self.application, status="unknown").exists()
         )
 
     def test_date_applied_without_source_clears_stale_provenance(self):

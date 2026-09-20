@@ -18,7 +18,10 @@ class LifecycleMigrationTests(TransactionTestCase):
             db = connections[alias]
             try:
                 executor = MigrationExecutor(db)
-                leaves = executor.loader.graph.leaf_nodes()
+                leaves = [node for node in executor.loader.graph.leaf_nodes()
+                          if node[0] not in {"applications", "documents", "accounts"}]
+                leaves += [("applications", "0005_retained_lifecycle"),
+                           ("documents", "0005_retained_lifecycle"), ("accounts", "0001_initial")]
                 baseline = [(app, name) for app, name in leaves if app not in {'applications', 'documents'}]
                 baseline += [('applications', '0004_application_category_revision'), ('documents', '0004_backfill_synthetic_categories')]
                 executor.migrate(baseline)

@@ -22,7 +22,7 @@ from .models import User, Workspace
 class WorkspaceSerializer(serializers.ModelSerializer):
     class Meta:
         model = Workspace
-        fields = ["id", "name", "created_at"]
+        fields = ["id", "name", "created_at", "calendar_timezone"]
         read_only_fields = fields
 
 

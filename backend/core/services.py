@@ -42,6 +42,8 @@ from django.db.models import Count
 from django.utils import timezone as dj_timezone
 
 from applications.models import Application, CompanyAlias
+from applications.derivation import calendar_day, effective_date
+from zoneinfo import ZoneInfo
 from documents.models import Document
 
 STATUS_ORDER = ["drafted", "applied", "interviewing", "rejected", "unknown"]
@@ -52,28 +54,9 @@ STALE_APPLIED_DAYS = 21
 STALE_DRAFTED_DAYS = 14
 
 
-def _as_aware_datetime(value) -> datetime | None:
-    """Application.last_activity/first_activity are DateTimeFields;
-    Override.date_applied/next_action_date/snoozed_until/
-    activity_override are plain DateFields. Both flow through the
-    same staleness/due/snooze math below, so normalize either shape
-    to an aware datetime (midnight UTC for a bare date) once here
-    instead of duplicating the isinstance check at each call site.
-    """
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        return value if value.tzinfo else value.replace(tzinfo=dt_timezone.utc)
-    if isinstance(value, date):
-        return datetime(value.year, value.month, value.day, tzinfo=dt_timezone.utc)
-    return None
-
-
-def _days_since(value) -> int | None:
-    dt = _as_aware_datetime(value)
-    if dt is None:
-        return None
-    return (dj_timezone.now() - dt).days
+def _days_since(value, zone=ZoneInfo("UTC")) -> int | None:
+    day = calendar_day(value, zone)
+    return (dj_timezone.now().astimezone(zone).date() - day).days if day else None
 
 
 def annotate_application(application: Application) -> dict:
@@ -86,7 +69,8 @@ def annotate_application(application: Application) -> dict:
     override = getattr(application, "override", None)
     manual_status = override.manual_status if override else None
     notes = override.notes if override else None
-    date_applied = override.date_applied if override else None
+    date_applied = effective_date(application)
+    zone = ZoneInfo(application.workspace.calendar_timezone)
     date_applied_source = override.date_applied_source if override else None
     next_action = override.next_action if override else None
     next_action_date = override.next_action_date if override else None
@@ -101,8 +85,8 @@ def annotate_application(application: Application) -> dict:
     # e.g. after an interview or a follow-up, without touching
     # date_applied itself), then date_applied, then the (unreliable)
     # last_activity as a last resort.
-    reference = activity_override or date_applied or application.last_activity
-    days_since_activity = _days_since(reference)
+    reference = activity_override or date_applied or application.last_activity_date or application.last_activity
+    days_since_activity = _days_since(reference, zone)
 
     is_stale = False
     if not archived and days_since_activity is not None:
@@ -111,12 +95,9 @@ def annotate_application(application: Application) -> dict:
         elif effective_status in ("drafted", "unknown") and days_since_activity >= STALE_DRAFTED_DAYS:
             is_stale = True
 
-    now = dj_timezone.now()
-    next_due_dt = _as_aware_datetime(next_action_date)
-    next_action_due = bool(next_due_dt and next_due_dt <= now)
-
-    snoozed_dt = _as_aware_datetime(snoozed_until)
-    is_snoozed = bool(snoozed_dt and snoozed_dt > now)
+    today = dj_timezone.now().astimezone(zone).date()
+    next_action_due = bool(next_action_date and next_action_date <= today)
+    is_snoozed = bool(snoozed_until and snoozed_until > today)
 
     return {
         "id": application.id,
@@ -140,8 +121,13 @@ def annotate_application(application: Application) -> dict:
         "snoozed_until": snoozed_until,
         "activity_override": activity_override,
         "last_activity": application.last_activity,
+        "last_activity_date": application.last_activity_date,
+        "calendar_timezone": application.workspace.calendar_timezone,
+        "activity_provenance": application.activity_provenance,
+        "derivation_state": application.derivation_state,
+        "date_applied_mode": override.date_applied_mode if override else "automatic",
         "days_since_activity": days_since_activity,
-        "date_is_manual": bool(date_applied),
+        "date_is_manual": bool(date_applied and override and override.date_applied_mode == "manual"),
         "activity_is_reset": bool(activity_override),
         "is_stale": is_stale,
         "next_action_due": next_action_due,
@@ -157,7 +143,7 @@ def load_applications(queryset) -> list[dict]:
     per distinct workspace_id in the queryset rather than querying it
     per row).
     """
-    applications = list(queryset.select_related("override", "category_membership__category"))
+    applications = list(queryset.select_related("override", "workspace", "category_membership__category"))
     aliases_by_workspace: dict[int, dict[str, str]] = {}
     out = []
     for application in applications:
@@ -195,9 +181,10 @@ def compute_metrics(apps: list[dict]) -> dict:
     # unreliable).
     lags = []
     for a in active:
-        if a["date_applied"] and a["effective_status"] in ("interviewing", "rejected") and a["last_activity"]:
-            applied_dt = _as_aware_datetime(a["date_applied"])
-            last_dt = _as_aware_datetime(a["last_activity"])
+        if a["date_applied"] and a["effective_status"] in ("interviewing", "rejected") and (a.get("last_activity_date") or a["last_activity"]):
+            zone = ZoneInfo(a.get("calendar_timezone", "UTC"))
+            applied_dt = calendar_day(a["date_applied"], zone)
+            last_dt = calendar_day(a.get("last_activity_date") or a["last_activity"], zone)
             if applied_dt and last_dt and last_dt > applied_dt:
                 lags.append((last_dt - applied_dt).days)
     avg_response_days = round(sum(lags) / len(lags)) if lags else None

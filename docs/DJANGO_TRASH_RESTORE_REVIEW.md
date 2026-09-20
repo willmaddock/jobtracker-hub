@@ -1,12 +1,16 @@
 # Backend Trash & Restore — implementation review
 
-2026-09-19. **Uncommitted; stop for human review. No commit or push performed.**
+2026-09-19 historical review. The reviewed slice was subsequently committed and
+pushed as `74f1e916d83a1865a93962e37243f2c1b96694bd`
+(`Implement backend trash and restore lifecycle`). The evidence below describes
+that lifecycle slice before commit; it is not current derivation verification.
+See [the derivation review](DJANGO_DERIVATION_REVIEW.md) for the subsequent work.
 
 ## Checkpoint and authorization
 
 Repository: `/Users/dev/Documents/GitHub/jobtracker-hub`.
 Branch: `django-migration`.
-Starting and final HEAD: `3f564ba3cb3522ff494444635756df2b26f0ec36`
+Starting and pre-commit review HEAD: `3f564ba3cb3522ff494444635756df2b26f0ec36`
 (`Implement named category identity and membership`).
 
 Inspection verified the canonical root, branch, clean starting tree, HEAD, local
@@ -94,7 +98,7 @@ it consumes no revision and cannot undo the later committed transition.
 - Product metadata mutations use the workspace gate and reject direct/effective
   Trash. Bulk override validates eligibility for every target before any effect.
 
-**Acknowledged temporary limitation:** this slice does not recalculate stored
+**Historical limitation at `74f1e91` (addressed for future mutations by the subsequent derivation slice):** this lifecycle slice does not recalculate stored
 Application status/activity when evidence eligibility changes. Existing business
 status, manual overrides, activity timestamps and history stay unchanged. Stored
 values may still reflect subsequently trashed evidence. No pretend recalculation

@@ -67,7 +67,7 @@ from __future__ import annotations
 import re
 from datetime import date
 
-DATE_EXTRACTOR_VERSION = "1"
+DATE_EXTRACTOR_VERSION = "2"
 
 _MONTHS = {
     "jan": 1, "january": 1,
@@ -131,3 +131,24 @@ def extract_application_date(text: str) -> str | None:
             return iso
 
     return None
+
+
+def extract_date_evidence(text: str) -> dict:
+    """Retain all recognized claims; conflicting dates never get a first winner."""
+    candidates = []
+    for method, pattern in (("email_header", _EMAIL_HEADER_DATE_RE), ("submission_keyword", _KEYWORD_SLASH_DATE_RE)):
+        for match in pattern.finditer(text):
+            if method == "email_header":
+                month, day, year = match.groups()
+                iso = _to_iso(int(year), _MONTHS.get(month.lower(), 0), int(day))
+            else:
+                month, day, year = match.groups()
+                iso = _to_iso(int(year), int(month), int(day))
+            candidate = {"date": iso, "source": method, "precision": "date"}
+            if iso and candidate not in candidates:
+                candidates.append(candidate)
+    candidates.sort(key=lambda item: (item["date"], item["source"]))
+    dates = {item["date"] for item in candidates}
+    return {"state": "conflicted" if len(dates) > 1 else "current" if dates else "unavailable",
+            "date": next(iter(dates)) if len(dates) == 1 else None,
+            "candidates": candidates, "version": DATE_EXTRACTOR_VERSION}

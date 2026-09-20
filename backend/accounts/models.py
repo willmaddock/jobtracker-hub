@@ -35,6 +35,7 @@ class Workspace(models.Model):
         User, on_delete=models.CASCADE, related_name="workspaces"
     )
     name = models.CharField(max_length=255)
+    calendar_timezone = models.CharField(max_length=64, default="UTC", editable=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

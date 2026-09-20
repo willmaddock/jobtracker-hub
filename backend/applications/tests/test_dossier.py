@@ -77,7 +77,7 @@ class DossierAPITestCase(APITestCase):
 
     def _add_document(self, filename, content, doc_type, application=None, ext=".txt", content_hash=None):
         application = application or self.application
-        return Document.objects.create(
+        document = Document.objects.create(
             workspace=application.workspace,
             application=application,
             file=SimpleUploadedFile(filename, content),
@@ -87,6 +87,10 @@ class DossierAPITestCase(APITestCase):
             content_hash=content_hash or filename,
             size=len(content),
         )
+        from applications.derivation import derive_application
+        derive_application(actor=application.workspace.owner, workspace=application.workspace,
+                           application_id=application.pk)
+        return document
 
     def _get_dossier(self, application=None):
         application = application or self.application
@@ -131,15 +135,15 @@ class RoleSectionsAndContactsTests(DossierAPITestCase):
 
 
 class DateAppliedAutoFillTests(DossierAPITestCase):
-    def test_autofills_date_applied_from_confirmation_evidence(self):
+    def test_explicit_derivation_stores_candidate_without_get_autofill(self):
         self._add_document(
             "confirmation.txt", _CONFIRMATION, "application_confirmation", content_hash="conf-hash-2"
         )
         response = self._get_dossier()
-        self.assertTrue(response.data["date_applied_auto_filled"])
+        self.assertFalse(response.data["date_applied_auto_filled"])
         self.application.refresh_from_db()
-        self.assertEqual(self.application.override.date_applied.isoformat(), "2025-07-10")
-        self.assertEqual(self.application.override.date_applied_source, "confirmation")
+        self.assertEqual(self.application.automatic_date_applied.isoformat(), "2025-07-10")
+        self.assertFalse(Override.objects.filter(application=self.application).exists())
 
     def test_never_overwrites_an_existing_date_applied(self):
         Override.objects.create(

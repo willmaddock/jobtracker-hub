@@ -1,4 +1,4 @@
-"""Canonical reversible lifecycle authority. No storage writes or derivation.
+"""Canonical reversible lifecycle authority. No storage writes; direct evidence changes explicitly derive.
 
 All lifecycle/ordinary product mutations acquire the existing workspace gate,
 then category (when needed), Application, Document. This also serializes category
@@ -33,6 +33,8 @@ def workspace_mutation(method):
     """Keep eligibility checks and the ordinary write under the lifecycle gate."""
     @wraps(method)
     def guarded(self, request, *args, **kwargs):
+        if request.method in {"GET", "HEAD", "OPTIONS"}:
+            return method(self, request, *args, **kwargs)
         from applications.creation import lock_workspace
         with transaction.atomic():
             lock_workspace(request.user, self.get_workspace())
@@ -81,4 +83,14 @@ def set_trash(*, actor, workspace, kind, pk, trashed, expected_revision):
             resource.trashed_at = timezone.now() if trashed else None
             resource.lifecycle_revision += 1
             resource.save(update_fields=["trashed_at", "lifecycle_revision"])
+            from applications.derivation import derive_application
+            if kind == "documents":
+                if resource.application.is_trashed:
+                    parent = resource.application
+                    parent.derivation_state = "needs_reconciliation"
+                    parent.save(update_fields=["derivation_state"])
+                else:
+                    derive_application(actor=actor, workspace=workspace, application_id=resource.application_id)
+            elif kind == "applications" and not trashed and resource.derivation_state == "needs_reconciliation":
+                resource = derive_application(actor=actor, workspace=workspace, application_id=resource.pk)
         return resource

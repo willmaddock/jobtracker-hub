@@ -1,38 +1,16 @@
-"""applications views.
-
-Phase 8 (docs/DJANGO_MIGRATION_PLAN.md) -- DRF viewset for the
-"applications" section of the Phase 0 endpoint inventory. Normal workflows
-use the owner-authorized Workspace in the route. Existing unscoped deletion endpoints
-are retired by LegacyApplicationDeletionViewSet.
-
-Creation delegates to the protected synchronous authority in creation.py.
-
-The `documents` action (list + upload) lands in this slice too -- see
-its own docstring below.
-
-`dossier` (this slice) ports _app/api.py's application_dossier
-endpoint on top of applications/dossier.assemble_dossier() and
-documents/extraction.py -- see those modules' docstrings for the
-content-extraction pipeline itself. What's ported here is the
-endpoint-level policy assemble_dossier() deliberately leaves to its
-caller: auto-filling an empty date_applied from strong
-("confirmation") evidence, and computing the Timeline's "Current
-status" line from StatusHistory. Same as the original, this endpoint
-writes at most one thing -- the date_applied auto-fill -- and never
-touches a date_applied that already has a value, regardless of
-evidence tier.
-"""
+"""Workspace-scoped Application workflows; evidence writes explicitly derive."""
 from __future__ import annotations
 
 from django.db import transaction
 from django.utils import timezone
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import NotFound, ValidationError
+from rest_framework.exceptions import NotFound
 from rest_framework.response import Response
 
 from .dossier import assemble_dossier
-from .models import Application, Override, StatusHistory
+from .derivation import apply_overrides, derive_application, effective_date
+from .models import Application
 from .serializers import (
     ApplicationCreateSerializer,
     ApplicationSerializer,
@@ -42,7 +20,6 @@ from .serializers import (
 from .services import (
     compute_bulk_override_fields,
     compute_override_fields,
-    resolve_effective_status,
 )
 
 # email_sync imports the other direction already (AccountMatch ->
@@ -119,6 +96,7 @@ class ApplicationViewSet(CreationContentionMixin, LifecycleContentionMixin, Work
             )
             return Response(serializer.data)
 
+        application = Application.objects.select_for_update().get(pk=application.pk, workspace=self.get_workspace())
         require_live(application)
         serializer = DocumentUploadSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -138,9 +116,11 @@ class ApplicationViewSet(CreationContentionMixin, LifecycleContentionMixin, Work
                 ext=ext,
                 content_hash=content_hash,
                 size=uploaded_file.size,
+                original_upload_at=timezone.now(),
             )
             created.append(document)
 
+        derive_application(actor=request.user, workspace=self.get_workspace(), application_id=application.pk)
         counts = scoped_duplicate_counts(
             application.workspace, [d.content_hash for d in created]
         )
@@ -148,50 +128,12 @@ class ApplicationViewSet(CreationContentionMixin, LifecycleContentionMixin, Work
         return Response({"ok": True, "documents": serializer.data}, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=["get"])
-    @workspace_mutation
     def dossier(self, request, pk=None, **kwargs):
-        """GET /api/applications/{id}/dossier -- see this module's
-        docstring and applications/dossier.assemble_dossier() for the
-        extraction/tiebreak rules.
-
-        date_applied auto-fill, split by evidence tier
-        (assemble_dossier's detected_date_evidence_tier):
-          - date_applied already has a value (typed, or auto-filled
-            earlier): NEVER touched here, regardless of tier. A value
-            already on record only ever changes via an explicit
-            accept through the override action.
-          - date_applied is unset AND the evidence is "confirmation"
-            (a direct record of submission, from an
-            application_confirmation document): auto-filled here,
-            once, silently -- see date_applied_auto_filled in the
-            response, which the frontend uses to know it needs to
-            refresh the applications list.
-          - date_applied is unset AND the evidence is only "posting"
-            (weaker -- names when the position was *listed*, not
-            applied to): left unset and still surfaced as a
-            suggestion for the user to accept or dismiss.
-
-        `timeline_events` passes straight through from
-        assemble_dossier() -- doc-derived, nothing to compute here.
-        `current_status` / `current_status_date` /
-        `current_status_date_known` cover the Timeline's last line:
-        `current_status` is the same manual-status-or-auto-status
-        value ApplicationSerializer.get_effective_status computes; the
-        date comes from the most recent StatusHistory row recording a
-        transition TO that status, so current_status_date_known is
-        False (and current_status_date is None) for any status that
-        predates the first StatusHistory row for it, rather than
-        guessing. `account_matches` is connected-account matches for
-        this application's timeline -- empty for everyone until an
-        account is actually connected and synced (Phase 9); cheap
-        no-op reads either way, not worth gating behind a feature
-        flag.
-        """
+        """Read cached evidence only; POST derive prepares missing extraction."""
         application = self.get_object()
         require_live(application)
         documents = application.documents.live().filter(workspace=self.get_workspace()).select_related("override")
-        # A populated intermediate database may contain inconsistent cache
-        # provenance. Reject before extraction/autofill rather than reusing it.
+        # Reject inconsistent historical cache provenance before projecting it.
         caches = DocumentExtraction.objects.filter(
             workspace=self.get_workspace(),
             content_hash__in=[document.content_hash for document in documents if document.content_hash],
@@ -205,19 +147,10 @@ class ApplicationViewSet(CreationContentionMixin, LifecycleContentionMixin, Work
 
         override = getattr(application, "override", None)
         result["date_applied_auto_filled"] = False
-        if (
-            (override is None or not override.date_applied)
-            and result.get("detected_date_evidence_tier") == "confirmation"
-            and result.get("detected_date_applied")
-        ):
-            Override.objects.update_or_create(
-                application=application,
-                defaults={
-                    "date_applied": result["detected_date_applied"],
-                    "date_applied_source": "confirmation",
-                },
-            )
-            result["date_applied_auto_filled"] = True
+        result["effective_date_applied"] = effective_date(application)
+        result["automatic_date_applied"] = application.automatic_date_applied
+        result["date_candidate"] = application.date_candidate
+        result["derivation_state"] = application.derivation_state
 
         current_status = (override.manual_status if override and override.manual_status
                            else application.status)
@@ -251,6 +184,16 @@ class ApplicationViewSet(CreationContentionMixin, LifecycleContentionMixin, Work
 
     @action(detail=True, methods=["post"])
     @workspace_mutation
+    def derive(self, request, pk=None, **kwargs):
+        # Explicit reconciliation prepares retained evidence without inventing
+        # historical transitions at the time of a repair request.
+        application = self.get_object()
+        require_live(application)
+        application = derive_application(actor=request.user, workspace=self.get_workspace(), application_id=application.pk, record_history=False)
+        return Response(ApplicationSerializer(application).data)
+
+    @action(detail=True, methods=["post"])
+    @workspace_mutation
     def override(self, request, pk=None, **kwargs):
         """Uses the numeric Application.id in the URL -- no item_key
         round-trip to worry about, since Application.id has been the
@@ -265,14 +208,7 @@ class ApplicationViewSet(CreationContentionMixin, LifecycleContentionMixin, Work
         reset_status = values.pop("reset_status", False)
         fields_set = set(values.keys())
         fields = compute_override_fields(fields_set, values, reset_status)
-        if fields:
-            Override.objects.update_or_create(application=application, defaults=fields)
-        if "manual_status" in fields:
-            effective_status = resolve_effective_status(fields, application.status)
-            StatusHistory.objects.create(
-                application=application, status=effective_status,
-                changed_at=timezone.now(), source="manual",
-            )
+        apply_overrides(actor=request.user, workspace=self.get_workspace(), application_id=application.pk, fields=fields)
         return Response({"ok": True, "id": application.id})
 
     @action(detail=False, methods=["post"], url_path="bulk-override")
@@ -294,14 +230,7 @@ class ApplicationViewSet(CreationContentionMixin, LifecycleContentionMixin, Work
             for application in targets:
                 require_live(application)
             for application in targets:
-                if fields:
-                    Override.objects.update_or_create(application=application, defaults=fields)
-                if "manual_status" in fields:
-                    effective_status = resolve_effective_status(fields, application.status)
-                    StatusHistory.objects.create(
-                        application=application, status=effective_status,
-                        changed_at=timezone.now(), source="manual",
-                    )
+                apply_overrides(actor=request.user, workspace=self.get_workspace(), application_id=application.pk, fields=fields)
         return Response({"ok": True, "count": len(targets)})
 
 

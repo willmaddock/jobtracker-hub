@@ -20,7 +20,9 @@ class LifecycleAdminMixin:
         workspace = Workspace.objects.get(pk=obj.workspace_id)
         lock_workspace(workspace.owner, workspace)
         if change:
-            current = type(obj).objects.get(pk=obj.pk)
+            from core.lifecycle import locked_resource
+            kind = {"application": "applications", "document": "documents", "category": "categories"}[obj._meta.model_name]
+            current = locked_resource(workspace, kind, obj.pk)
             try:
                 require_live(current)
             except LifecycleConflict as exc:

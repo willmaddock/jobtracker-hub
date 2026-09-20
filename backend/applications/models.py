@@ -14,13 +14,9 @@ that used to carry a loosely-matched item_key string now carries a
 real ForeignKey(Application), giving referential integrity and
 cascade deletes the old string-keyed joins never had.
 
-Note this only ports the *identity and override* data. The fields
-that build_index.py currently derives by walking the JobTracker
-folder (status/last_activity/first_activity) stay on Application as
-plain columns for now, populated by the Phase 4 "rebuild" once
-Document rows exist to derive them from -- see the migration plan's
-Phase 4 note on rebuild becoming "re-derive from Document rows," not
-a filesystem walk.
+Automatic fields are maintained by applications.derivation after explicit
+eligible-evidence mutations. Historical rows remain pending until individually
+reconciled; no model signal or migration backfills their business state.
 """
 import uuid
 
@@ -73,10 +69,26 @@ class Application(RetainedLifecycle):
     )
     last_activity = models.DateTimeField(null=True, blank=True)
     first_activity = models.DateTimeField(null=True, blank=True)
+    # Date-only bounds never masquerade as midnight instants. Empty provenance
+    # on existing rows means historical semantics have not been reconciled.
+    first_activity_date = models.DateField(null=True, blank=True, editable=False)
+    last_activity_date = models.DateField(null=True, blank=True, editable=False)
+    activity_provenance = models.JSONField(default=dict, editable=False)
+    automatic_date_applied = models.DateField(null=True, blank=True, editable=False)
+    date_candidate = models.JSONField(default=dict, editable=False)
+    derivation_version = models.CharField(max_length=16, blank=True, editable=False)
+    derivation_fingerprint = models.CharField(max_length=64, blank=True, editable=False)
+    derived_at = models.DateTimeField(null=True, editable=False)
+    derivation_state = models.CharField(max_length=24, default="pending", editable=False,
+        choices=[(s, s) for s in ("pending", "current", "incomplete", "needs_reconciliation")])
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         constraints = [
+            models.CheckConstraint(condition=models.Q(first_activity__isnull=True) | models.Q(first_activity_date__isnull=True),
+                                   name="application_first_one_precision"),
+            models.CheckConstraint(condition=models.Q(last_activity__isnull=True) | models.Q(last_activity_date__isnull=True),
+                                   name="application_last_one_precision"),
             models.UniqueConstraint(
                 fields=["workspace", "portable_id"],
                 name="unique_application_portable_id_per_workspace",
@@ -119,6 +131,8 @@ class Override(models.Model):
     manual_status = models.CharField(max_length=16, blank=True, null=True)
     notes = models.TextField(blank=True, null=True)
     date_applied = models.DateField(blank=True, null=True)
+    date_applied_mode = models.CharField(max_length=24, default="automatic",
+        choices=[(s, s) for s in ("automatic", "manual", "legacy_preserved", "suppressed")])
     # How date_applied got its value -- "confirmation"/"posting" when
     # accepted from a detected-date suggestion, NULL when typed
     # manually. Display-only provenance; cleared whenever date_applied

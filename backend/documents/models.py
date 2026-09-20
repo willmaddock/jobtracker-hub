@@ -101,8 +101,17 @@ class Document(RetainedLifecycle):
     content_hash = models.CharField(max_length=64, db_index=True)
     size = models.PositiveBigIntegerField()
     uploaded_at = models.DateTimeField(auto_now_add=True)
+    # Per-Document source facts, never inferred from ORM arrival/cache times.
+    evidence_event_at = models.DateTimeField(null=True, blank=True)
+    evidence_event_date = models.DateField(null=True, blank=True)
+    evidence_event_provenance = models.JSONField(default=dict, blank=True)
+    verified_legacy_mtime = models.DateTimeField(null=True, blank=True)
+    original_upload_at = models.DateTimeField(null=True, blank=True, editable=False)
 
     class Meta:
+        constraints = [models.CheckConstraint(
+            condition=models.Q(evidence_event_at__isnull=True) | models.Q(evidence_event_date__isnull=True),
+            name="document_event_one_precision")]
         indexes = [
             models.Index(fields=["workspace", "application"], name="doc_workspace_app_idx"),
             models.Index(fields=["workspace", "content_hash"], name="doc_workspace_hash_idx"),

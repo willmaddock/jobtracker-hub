@@ -132,10 +132,14 @@ def create_attempt(*, actor, workspace, key, supplied, values, posting_id=None, 
             CategoryMembership.objects.create(application=app, category=category)
             app.category_revision = 1
             app.save(update_fields=["category_revision"])
+        from applications.derivation import _derive_locked, record_transition, effective_status
+        _derive_locked(app, record_history=False)
+        previous_status = effective_status(app)
         if status_value:
             Override.objects.create(application=app, manual_status=status_value)
-            StatusHistory.objects.create(application=app, status=status_value, changed_at=timezone.now(),
-                                         source="job_posting_apply" if job else "manual_create")
+            app._state.fields_cache.pop("override", None)
+            record_transition(app, previous_status, "job_posting_apply" if job else "manual_create")
+            _derive_locked(app, record_history=False)
         if job:
             PostingApplicationConversion.objects.create(workspace=workspace, posting=job, application=app,
                 application_portable_id=app.portable_id, request_intent=intent, converted_at=timezone.now())

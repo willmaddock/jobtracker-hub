@@ -83,6 +83,8 @@ class LifecycleTests(APITestCase):
                                  {'expected_revision': 2, 'archived': False}, format='json').status_code, 400)
 
     def test_parent_child_preservation_and_original_evidence_eligibility(self):
+        from applications.derivation import derive_application
+        derive_application(actor=self.user, workspace=self.ws, application_id=self.app.pk)
         before = self.snapshot()
         files = [(d.pk, d.file.name, d.file.read()) for d in self.docs]
         self.transition('documents', self.docs[1], 'trash', 0)
@@ -103,7 +105,12 @@ class LifecycleTests(APITestCase):
         self.assertEqual(self.docs[1].lifecycle_revision, 1)
         self.transition('documents', self.docs[1], 'restore', 1)
         self.assertEqual(Document.objects.live().count(), 2)
-        self.assertEqual(before, self.snapshot())
+        after = self.snapshot()
+        # Evidence mutations may recalculate automatic output; retained manual,
+        # history, membership, extraction and file identity remain unchanged.
+        for row in (before[0], after[0]):
+            row.pop("derived_at")
+        self.assertEqual(before, after)
         for pk, name, content in files:
             doc = Document.objects.get(pk=pk)
             self.assertEqual(doc.file.name, name)
@@ -323,3 +330,38 @@ class LifecycleConcurrencyTests(TransactionTestCase):
         with self.assertRaises(LifecycleConflict):
             assign_category(actor=self.user, workspace=self.ws, application_id=self.app.pk,
                             category_id=self.cat.pk, expected_revision=self.app.category_revision)
+
+    def test_competing_evidence_writes_leave_derived_committed_snapshot(self):
+        from applications.derivation import derive_application
+        self.doc.doc_type = 'resume'
+        self.doc.save()
+        derive_application(actor=self.user, workspace=self.ws, application_id=self.app.pk)
+        results = self.race([
+            ('post', f'documents/{self.doc.pk}/override/', {'doc_type_override': 'rejection_notice'}),
+            ('post', f'documents/{self.doc.pk}/rename/', {'new_filename': 'interview.txt'}),
+        ])
+        # SQLite may reject both admissions; rejected writes must also leave
+        # the previously derived snapshot intact. No automatic mutation retry.
+        self.app.refresh_from_db()
+        before = (self.app.status, self.app.derivation_fingerprint, self.app.derived_at,
+                  list(self.app.status_history.values_list('status', flat=True)))
+        # This must be a no-op, not a repair of an intermediate race snapshot.
+        derive_application(actor=self.user, workspace=self.ws, application_id=self.app.pk)
+        self.app.refresh_from_db()
+        self.assertEqual(before, (self.app.status, self.app.derivation_fingerprint, self.app.derived_at,
+                                  list(self.app.status_history.values_list('status', flat=True))))
+        self.assertEqual(Document.objects.count(), 1)
+        self.assertEqual(self.app.lifecycle_revision, 0)
+
+    def test_document_trash_racing_type_change_keeps_eligible_snapshot(self):
+        from applications.derivation import derive_application
+        self.doc.doc_type = 'resume'
+        self.doc.save()
+        derive_application(actor=self.user, workspace=self.ws, application_id=self.app.pk)
+        self.race([self.transition('documents', self.doc, 'trash', 0),
+                   ('post', f'documents/{self.doc.pk}/override/', {'doc_type_override': 'rejection_notice'})])
+        self.app.refresh_from_db()
+        before = (self.app.status, self.app.derivation_fingerprint, self.app.derived_at, self.app.status_history.count())
+        derive_application(actor=self.user, workspace=self.ws, application_id=self.app.pk)
+        self.app.refresh_from_db()
+        self.assertEqual(before, (self.app.status, self.app.derivation_fingerprint, self.app.derived_at, self.app.status_history.count()))

@@ -1,6 +1,10 @@
 # Django migration: current status
 
-Maintained checkpoint: 2026-09-19. Named Categories is committed and pushed at `3f564ba3cb3522ff494444635756df2b26f0ec36` on `django-migration`, following Application Identity at `3a62b58`. Backend Trash & Restore for Applications, Documents, and Categories is the current **uncommitted** slice. No frontend lifecycle integration or operational cutover is claimed.
+Maintained checkpoint: 2026-09-19. Backend Trash & Restore is committed and pushed
+at `74f1e916d83a1865a93962e37243f2c1b96694bd` on `django-migration`, following Named
+Categories at `3f564ba` and Application Identity at `3a62b58`. Backend Deterministic
+Application Derivation is the current **uncommitted** review slice. No frontend
+integration, historical bulk reconciliation, or operational cutover is claimed.
 
 ## 1. Scope and source of truth
 
@@ -19,7 +23,30 @@ Maintained checkpoint: 2026-09-19. Named Categories is committed and pushed at `
 
 ## 2. Current verification evidence
 
-Trash/Restore starts from clean `3f564ba`; branch, local tracking reference, and
+The interrupted implementation started from `74f1e91`. This continuation verified
+the canonical root, branch and local/tracking HEAD and preserved the intentional
+dirty tree; no fresh live-remote check was performed. See [derivation review](DJANGO_DERIVATION_REVIEW.md)
+for contracts, exact commands, changed files, results and limitations.
+
+- Focused derivation, populated forward migration, and lifecycle/race tests:
+  **43 passed**. Affected `applications documents core postings accounts` regression:
+  **331 passed** on the final implementation tree.
+- Full Django verification: **573 passed**, exit 0, on the final implementation
+  tree. All required continuation runs completed; known exceptions remain below.
+- Frontend Node regression: **8 passed**. Full legacy: **367 passed, 3 known
+  baseline failures**, with the same two real-path PermissionErrors and deletion
+  500-versus-200 signature recorded below. Legacy code and frontend are unchanged.
+- System check and scoped drift checks pass. Global drift still reports only
+  `email_sync.0006_alter_emailaccount_provider`; no such migration was generated.
+- Three additive migrations preserve existing data and mark unreconciled rows
+  pending; existing non-null stored dates become `legacy_preserved`. No historical
+  status/activity backfill, source timestamp invention, or synthetic history.
+- Existing environments reused without dependency changes. Tests use isolated
+  SQLite/storage fixtures; no real tracker migration or production validation.
+
+### Historical Trash/Restore verification (`74f1e91`)
+
+Trash/Restore started from clean `3f564ba`; branch, local tracking reference, and
 live remote were verified. See [review and verification report](DJANGO_TRASH_RESTORE_REVIEW.md)
 for exact commands, API contracts, changed-file inventory and limitations.
 
@@ -217,10 +244,10 @@ No newly accepted capability is marked verified merely because it is designed.
 |---|---|---|---|
 | Auth/workspaces | Session-only product auth, anonymous-login CSRF bootstrap/protection, structured DRF exception codes; owned workspace list/create and explicit route selection in Django entry | 104 accounts/core subset; bounded browser session/tab checks described in §2 | Local foundation validated; broader onboarding/production/cutover pending |
 | Frontend/desktop | Existing HTML has explicit Django entry with separate minimal root/client/context; legacy App never mounts in Django mode; desktop remains FastAPI | 8 Node tests; browser harness 7/7 in Safari and Chromium; three legacy suite failures recorded in §2 | Only login → explicit workspace select/create → insights read → logout validated; domain UI pending |
-| Applications/overrides | Stable numeric PKs plus workspace portable UUID; shared protected creation, explicit repeat challenges and durable replay | Identity/ownership subset in §2 plus existing coverage; history parity still pending | Backend-only; duplicate-warning/domain UI pending |
-| Derivation/dossier | PDF/TXT extraction, dossier/date evidence; no document-to-application status/activity recalculation | Existing extraction/dossier coverage; derivation pending | Target timestamp/import behavior pending |
-| Categories | Native stable identity, single revision-protected membership, independent Archive; committed at `3f564ba`; reversible Trash added in this uncommitted slice | Current Category and lifecycle coverage in §2 | Frontend category workflow pending |
-| Documents/files | Upload/list/type correction/metadata rename; storage URL; retained Trash and effective parent eligibility | Current Document/lifecycle coverage in §2 | Production storage/previews and derivation integration pending |
+| Applications/overrides | Stable numeric PKs plus workspace portable UUID; shared protected creation, explicit repeat challenges and durable replay | Identity/ownership and duplicate-safe future transition coverage in §2 | Backend-only; duplicate-warning/domain UI pending |
+| Derivation/dossier | Canonical per-Application status/activity, manual precedence, source precision, confirmation candidate/modes, duplicate-safe transitions; read-only dossier GET | Current derivation/forward-migration/SQLite coverage in §2 | Historical reconciliation, import provenance, frontend and operations pending |
+| Categories | Native stable identity, single revision-protected membership, independent Archive; committed at `3f564ba`; reversible Trash committed at `74f1e91` | Current Category and lifecycle coverage in §2 | Frontend category workflow pending |
+| Documents/files | Upload/list/type correction/metadata rename; storage URL; retained Trash and effective parent eligibility | Current Document/lifecycle coverage in §2 | Production storage/previews and frontend integration pending |
 | Trash/recovery | Application/Document/Category Trash and Restore, revisions, mutation/admin guards; old deletes retired | Current lifecycle/migration/SQLite race coverage in §2 | Workspace lifecycle, purge, frontend and operational validation deferred |
 | Search/dashboards/settings | Included reads, counts, search, section adapters, merges, and settings scoped to URL workspace; search parity and Ghosted still pending | Scoped isolation coverage; broader target parity pending | Frontend integration pending |
 | Provider connections | Gmail/Outlook/IMAP connect/sync/disconnect; encrypted credentials | Baseline provider/view coverage, mocked external seams | Historical Gmail OAuth/live-sync checkpoint; complete target flows unvalidated; Outlook/IMAP live validation unestablished |
@@ -237,9 +264,9 @@ No newly accepted capability is marked verified merely because it is designed.
   safe job/URL association and evidence behavior.
 - Implement retained sources, account listing, discovery preview/attach/accept/
   dismiss/restore/sender classification, and evidence/backfill.
-- Add per-application derivation and timestamp provenance without modifying
-  manual overrides. Django history currently logs repeated identical statuses;
-  legacy suppresses consecutive duplicates.
+- Review the uncommitted per-Application derivation slice. Historical rows are
+  intentionally not bulk-reconciled; missing source facts remain unknown. Future
+  importer/cutover work must supply verified provenance and preserve history.
 - Add Ghosted choices/metrics/UI parity. This main-branch change exists only
   in the legacy implementation.
 - Named Categories and Application/Document/Category Trash are now implemented
@@ -386,7 +413,7 @@ backfill are implemented. Sections remain classifications. Category membership
 never owns Applications. The supplied historical 245/245 result is distinct from
 the fresh regression verification in §2.
 
-### Backend Trash & Restore — current uncommitted slice
+### Backend Trash & Restore — committed and pushed at `74f1e91`
 
 Application, Document and Category gain nullable `trashed_at` and nonnegative
 `lifecycle_revision`, defaulting to live/revision 0 without invented history.
@@ -423,27 +450,54 @@ Creation/duplicate/replay identity still includes retained attempts. Completed
 Application, posting-conversion and Category creation requests resolve the original
 current record without cloning, restoring or recreating cleared membership.
 
-**Authorized migration-stage limitation:** automatic Application status/activity
-recalculation is deferred. Direct/effective Document Trash excludes ordinary live
-evidence; restoration makes the same retained original evidence eligible again.
-Stored status, manual overrides, activity and existing history are not rewritten,
-and no synthetic history or pretend recalculation is emitted. A stored value may
-still reflect evidence subsequently trashed. The later deterministic derivation
-slice must use lifecycle eligibility as authoritative, preserve manual precedence,
-and apply the accepted evidence/timestamp rules. This is not final product parity.
-The pre-existing live dossier GET extraction/autofill behavior is not redesigned;
-it now uses only eligible Documents and is blocked for trashed Applications.
+**Historical limitation at `74f1e91`:** the lifecycle slice intentionally deferred
+status/activity recalculation and retained the old dossier GET autofill behavior.
+The derivation slice below now handles future evidence mutations and makes GETs
+read-only. Untouched historical Applications remain unreconciled; this is still
+not whole-database or final product parity.
 
 No permanent purge, physical file deletion, Workspace Trash, frontend changes,
 automatic expiration, provider/background work or unrelated migration fixes are
 implemented. PostgreSQL concurrency and operational recovery remain unvalidated.
 
+### Backend Deterministic Application Derivation — current uncommitted slice
+
+`applications.derivation` applies effective Document type priority
+`rejected > interviewing > applied > drafted > unknown`; non-pipeline is `n/a`.
+Manual status remains authoritative, including existing Ghosted values. Explicit
+upload, type/rename, direct Trash/Restore, and manual reset paths use the same
+workspace-gated transaction and Application-before-Document locks. Creation replay
+remains identity-preserving. Category operations never trigger derivation.
+
+Parent Trash preserves its business snapshot. A direct child change while the
+parent is trashed marks reconciliation needed; Restore reconciles that actual
+change once. A parent-only cycle produces no business transition. Same inputs do
+not churn derived metadata, history, activity, or lifecycle/membership revisions.
+
+Additive `accounts.0002_deterministic_derivation`,
+`applications.0006_deterministic_derivation`, and
+`documents.0006_deterministic_derivation` retain source-event/date precision,
+verified legacy mtime, genuine new-upload fallback, automatic confirmation candidate,
+manual/legacy/suppressed date mode, and fingerprint/completeness metadata.
+Calendar timezone defaults explicitly to UTC; configuration UI is deferred.
+Dates never become invented midnight instants. Extraction claims are content-only;
+Document arrival/source facts are separate. Conflicting confirmation dates have no
+arbitrary winner. Attention uses calendar days and the existing reset → effective
+application date → last evidence precedence and due-first ordering.
+
+Dossier GET does not extract, write caches, or autofill overrides. POST
+`/api/workspaces/{workspace_id}/applications/{id}/derive/` explicitly reconciles one
+live Application without fabricating historical transitions. Ordinary evidence
+mutations record real effective changes once, using recorded-now history timestamps
+rather than source dates. Existing duplicate history is preserved. Missing, failed,
+and conflicting evidence is reported; no cross-workspace evidence is admitted.
+
 ## 8. Next recommended implementation actions
 
-1. Review the uncommitted Trash/Restore slice and verification limitations above.
+1. Review the uncommitted derivation slice and verification limitations above.
 2. Resolve the legacy verification blockers under separately approved scope before declaring a fully green checkpoint.
-3. Separately authorize the next slice; categories/lifecycle foundations, remaining email/job workspace integration and broader frontend workflows are still pending.
-4. Implement schema/lifecycle foundations, derivation, and parity corrections.
+3. Separately authorize the next slice; retained email/job integration and broader frontend workflows remain pending.
+4. Plan provenance-aware historical reconciliation with importer/cutover work; do not silently backfill current records.
 5. Connect core browser workflows, then retained email/review/postings/evidence.
 6. Develop import/export alongside models; rehearse representative workspaces.
 7. Validate production operations and cutover gates before retiring legacy.

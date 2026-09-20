@@ -1,80 +1,14 @@
-"""
-Application Dossier assembly (docs/DJANGO_MIGRATION_PLAN.md Phase 8
-slice, porting _app/dossier.py's assemble_dossier()).
-
-Combines documents/extraction.py's contact extraction and role-section
-extraction into a single per-application payload, by running
-extraction.get_or_extract() over every Document already belonging to
-one Application.
-
-The job-posting-within-an-application heuristic lives HERE, at the
-assembly layer, not inside documents/extraction.py -- same split the
-original kept between dossier.py and extract.py. An application can
-have several documents (job posting, application-received
-confirmation, a resume, a cover letter); only ONE of them should
-populate the four role sections. documents/services.effective_doc_type()
-already resolves doc_type_override vs the classifier's own doc_type --
-this module just picks which document, deterministically, when more
-than one is classified "job_posting".
-
-Django-port identity change: the original keyed everything (tiebreaks,
-extraction_errors, timeline_events) off `relpath`, a folder-relative
-path string. There is no relpath any more -- Document.id is the real
-identity (same numeric-id-over-string-key choice documents/
-serializers.py and applications/views.py already made). Tiebreaks that
-used to sort by relpath now sort by (filename, id) for the same
-"fully deterministic, same inputs always yield the same choice"
-guarantee; every place the original surfaced a relpath now surfaces
-`document_id` (plus `filename` where it aids display).
-
-Contacts are aggregated (deduped) across EVERY document belonging to
-the application, not just the job posting -- a recruiter's email/phone
-often only appears on the posting itself, while the candidate's own
-contact info lives on the resume or cover letter. Deduping follows the
-same rules documents/extraction.py already uses per-document
-(case-insensitive for emails/URLs, digits-only for phones), just
-applied across the merged set instead of within one document's text.
-
-Nothing here writes anything -- all writes happen inside
-extraction.get_or_extract()'s existing content-hash-keyed cache. A
-document that fails to extract (unreadable, encrypted, unsupported
-type) is skipped for contacts/role-sections and reported in
-`extraction_errors`, rather than failing the whole Dossier.
-
-detected_date_applied / detected_date_source_document_id /
-detected_date_evidence_tier: date_extract.py's per-document
-`detected_date_applied` is picked here the same way job_posting_document_id
-is -- deterministic, at the assembly layer, never inside
-documents/extraction.py. `application_confirmation` documents are
-checked before `job_posting` documents (in that priority order,
-tied within each doc type by (filename, id)), because a confirmation
-email's own timestamp is a direct record of when the application was
-submitted, while a job posting's text at best names when the position
-was *listed*. This module never writes to Override.date_applied
-itself -- see applications/views.py's dossier action, which owns the
-auto-fill-vs-suggest decision, matching the original's api.py split.
-
-timeline_events: one entry per application_confirmation or
-interview_notice document that has a detected date. Unlike
-detected_date_applied above, this is NOT a single winner-take-all
-value -- every matching document becomes its own event (e.g. a phone
-screen request AND a later interview request on the same application
-both show up), because collapsing them would hide real information the
-documents actually contain.
-"""
-
+"""Read-only dossier projection of previously extracted eligible evidence."""
 from __future__ import annotations
 
 import re
 
 from documents import role_extract
-from documents.extraction import get_or_extract
+from documents.extraction import get_cached_extraction
 from documents.services import effective_doc_type
 
-# Priority order for whose detected_date_applied gets surfaced when more
-# than one document has one -- see module docstring for why confirmation
-# beats posting. Ties within a doc type are broken by (filename, id),
-# same deterministic rule job_posting_candidates already uses.
+# Confirmation has priority over a posting suggestion; conflicting dates have
+# no winner. Filename order only selects a representative of an agreeing date.
 DATE_EVIDENCE_DOC_TYPES = ("application_confirmation", "job_posting")
 
 # Doc types that can each anchor their own Timeline event, and the
@@ -135,8 +69,8 @@ def assemble_dossier(documents) -> dict:
     role_sections = role_extract.empty_role_sections()
     extraction_errors: list[dict] = []
     # One list of (filename, id, detected_date) per doc type in
-    # DATE_EVIDENCE_DOC_TYPES, so we can pick the (filename, id)-first
-    # document within the highest-priority doc type that had any hit.
+    # DATE_EVIDENCE_DOC_TYPES, retaining agreement/conflict before selecting
+    # a representative supporting Document.
     date_candidates: dict[str, list[tuple[str, int, str]]] = {
         doc_type: [] for doc_type in DATE_EVIDENCE_DOC_TYPES
     }
@@ -146,8 +80,9 @@ def assemble_dossier(documents) -> dict:
     # document.
     timeline_events: list[dict] = []
 
+    conflicting_confirmation = False
     for d in documents:
-        result = get_or_extract(d)
+        result = get_cached_extraction(d)
         if not result.get("extraction_ok"):
             extraction_errors.append(
                 {"document_id": d.id, "filename": d.filename, "error": result.get("error")}
@@ -163,6 +98,8 @@ def assemble_dossier(documents) -> dict:
                 role_sections[key] = result.get(key, role_extract.NOT_DETECTED)
 
         doc_type = effective_doc_type(d)
+        if doc_type == "application_confirmation" and result.get("date_evidence", {}).get("state") == "conflicted":
+            conflicting_confirmation = True
         detected_date = result.get("detected_date_applied")
         if detected_date and doc_type in date_candidates:
             date_candidates[doc_type].append((d.filename, d.id, detected_date))
@@ -186,12 +123,20 @@ def assemble_dossier(documents) -> dict:
     for doc_type in DATE_EVIDENCE_DOC_TYPES:
         candidates = sorted(date_candidates[doc_type])
         if candidates:
+            if len({candidate[2] for candidate in candidates}) > 1:
+                detected_date_evidence_tier = "conflicted"
+                break
             filename, document_id, detected_date_applied = candidates[0]
             detected_date_source_document_id = document_id
             detected_date_evidence_tier = (
                 "confirmation" if doc_type == "application_confirmation" else "posting"
             )
             break
+
+    if conflicting_confirmation:
+        detected_date_applied = None
+        detected_date_source_document_id = None
+        detected_date_evidence_tier = "conflicted"
 
     return {
         "job_posting_document_id": job_posting_document_id,

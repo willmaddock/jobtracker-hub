@@ -5,6 +5,7 @@ from .views import ApplicationViewSet, LegacyApplicationDeletionViewSet
 
 prefix = "workspaces/<int:workspace_id>/applications/"
 urlpatterns = [
+    path(prefix + "<int:pk>/derive/", ApplicationViewSet.as_view({"post": "derive"}), name="application-derive"),
     path(prefix + "<int:pk>/", ApplicationViewSet.as_view({"get": "retrieve"}), name="application-detail"),
     path(prefix, ApplicationViewSet.as_view({"get": "list", "post": "create"}), name="application-list"),
     path(prefix + "<int:pk>/documents/", ApplicationViewSet.as_view({"get": "documents", "post": "documents"}), name="application-documents"),

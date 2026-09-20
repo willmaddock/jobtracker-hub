@@ -35,7 +35,8 @@ class DocumentSerializer(serializers.ModelSerializer):
         model = Document
         fields = [
             "id", "application", "file", "filename", "doc_type", "effective_doc_type",
-            "ext", "content_hash", "size", "uploaded_at", "override", "duplicate_count",
+            "ext", "content_hash", "size", "uploaded_at", "evidence_event_at", "evidence_event_date", "evidence_event_provenance",
+            "verified_legacy_mtime", "original_upload_at", "override", "duplicate_count",
             "is_trashed", "trashed_at", "effective_trashed", "lifecycle_revision",
         ]
         read_only_fields = fields

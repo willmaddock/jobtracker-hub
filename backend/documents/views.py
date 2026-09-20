@@ -11,6 +11,8 @@ from rest_framework.response import Response
 from core.workspace_scope import WorkspaceScopedMixin, scoped_duplicate_counts
 
 from .models import Document, DocumentOverride
+from applications.derivation import derive_application
+from core.lifecycle import locked_resource
 from .serializers import (
     DocumentOverrideWriteSerializer,
     DocumentRenameSerializer,
@@ -50,7 +52,7 @@ class DocumentViewSet(LifecycleContentionMixin, WorkspaceScopedMixin, mixins.Ret
         doc-type override: DocumentOverride is a straight FK to this
         Document row, so it just carries over automatically.
         """
-        document = self.get_object()
+        document = locked_resource(self.get_workspace(), "documents", pk)
         require_live(document)
         serializer = DocumentRenameSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -62,6 +64,8 @@ class DocumentViewSet(LifecycleContentionMixin, WorkspaceScopedMixin, mixins.Ret
         document.ext = "." + new_filename.rsplit(".", 1)[-1].lower() if "." in new_filename else ""
         document.doc_type = classify_doc_type(new_filename)
         document.save(update_fields=["filename", "ext", "doc_type"])
+        document._state.fields_cache.pop("override", None)
+        derive_application(actor=request.user, workspace=self.get_workspace(), application_id=document.application_id)
         return Response(self._serialize(document))
 
     @action(detail=True, methods=["post"])
@@ -71,17 +75,22 @@ class DocumentViewSet(LifecycleContentionMixin, WorkspaceScopedMixin, mixins.Ret
         classifier can't disambiguate on its own. Never touches the
         stored file itself.
         """
-        document = self.get_object()
+        document = locked_resource(self.get_workspace(), "documents", pk)
         require_live(document)
         serializer = DocumentOverrideWriteSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         value = serializer.validated_data.get("doc_type_override") or None
+        existing = getattr(document, "override", None)
+        if (existing.doc_type_override if existing else None) == value:
+            return Response(self._serialize(document))
         if value:
             DocumentOverride.objects.update_or_create(
                 document=document, defaults={"doc_type_override": value}
             )
         else:
             DocumentOverride.objects.filter(document=document).delete()
+        document._state.fields_cache.pop("override", None)
+        derive_application(actor=request.user, workspace=self.get_workspace(), application_id=document.application_id)
         return Response(self._serialize(document))
 
 

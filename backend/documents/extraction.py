@@ -52,12 +52,8 @@ from django.utils import timezone
 from . import date_extract, role_extract
 from .models import Document, DocumentExtraction
 
-# Carried over unchanged from _app/extract.py's EXTRACTOR_VERSION -- the
-# cached shape (contacts + role sections + detected_date_applied) hasn't
-# changed in this port, so existing cache rows (if any were ever written
-# under the old app) would still be valid; a fresh Django deployment has
-# no rows to invalidate either way.
-EXTRACTOR_VERSION = "3"
+# Version 4 retains date claims and conflicts instead of selecting a first date.
+EXTRACTOR_VERSION = "4"
 
 SUPPORTED_TEXT_EXTENSIONS = {".pdf", ".txt"}
 
@@ -183,13 +179,15 @@ def extract_document(document: Document) -> dict:
     role_sections = (
         role_extract.extract_role_sections(text) if ok else role_extract.empty_role_sections()
     )
-    detected_date_applied = date_extract.extract_application_date(text) if ok else None
+    date_evidence = date_extract.extract_date_evidence(text if ok else "")
+    detected_date_applied = date_evidence["date"]
     return {
         "extraction_ok": ok,
         "error": error,
         "text_length": len(text),
         **contacts,
         "detected_date_applied": detected_date_applied,
+        "date_evidence": date_evidence,
         **role_sections,
     }
 
@@ -233,3 +231,10 @@ def get_or_extract(document: Document, force: bool = False) -> dict:
             },
         )
     return result
+
+
+def get_cached_extraction(document: Document) -> dict:
+    """Read-only dossier projection. Missing/stale work waits for explicit derive."""
+    cached = DocumentExtraction.objects.filter(workspace_id=document.workspace_id,
+        content_hash=document.content_hash, extractor_version=EXTRACTOR_VERSION).first()
+    return cached.extracted_json if cached else {"extraction_ok": False, "error": "Extraction pending"}
