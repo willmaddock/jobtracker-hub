@@ -23,9 +23,10 @@ client library.
 from __future__ import annotations
 
 import abc
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Iterable
+from uuid import uuid4
 
 from .models import EmailAccount
 
@@ -66,12 +67,11 @@ class FetchedMessage:
     are already written to treat "no raw_source" as "no HTML links
     recoverable this way," not as an error.
 
-    message_id must be the same stable identifier the provider would
-    return for this message on every future sync (Gmail's message id,
-    a Message-ID header, etc.) -- it is the dedupe key AccountMatch and
-    Discovery both enforce uniqueness on, so sync's idempotency
-    guarantee depends on it never changing between runs for the same
-    message.
+    message_id is the transitional projection/thread identifier. For Gmail it
+    is the RFC Message-ID (empty when absent), NEVER the native Gmail ID.
+    provider_message_id is a separate source locator, meaningful only with a
+    verified provider mailbox lineage. Observation identity/time belong to this
+    fetched attempt: retrying this DTO preserves them; a fresh fetch gets new ones.
     """
 
     message_id: str
@@ -85,6 +85,23 @@ class FetchedMessage:
     # Raw MIME source, used for extract_html_source_urls when the
     # plain-text body doesn't carry the underlying <a href> links.
     raw_source: str | None = None
+
+    provider_message_id: str | None = None
+    provider_thread_id: str | None = None
+    provider_internal_at: datetime | None = None
+    # Structured, decoded MIME material; no raw MIME or attachments are persisted.
+    text_body: str | None = None
+    html_body: str | None = None
+    selected_headers: tuple[tuple[str, str], ...] = ()
+    addresses: dict = field(default_factory=dict)
+    header_sent: dict | None = None
+    observed_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    observation_key: str = field(default_factory=lambda: uuid4().hex)
+
+    @property
+    def rfc_message_id(self) -> str:
+        """Explicit name for the Gmail compatibility header identity."""
+        return self.message_id
 
 
 class EmailProvider(abc.ABC):

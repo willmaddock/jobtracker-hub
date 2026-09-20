@@ -30,6 +30,7 @@ accumulate duplicates"):
 """
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -37,6 +38,9 @@ from django.db import transaction
 from django.utils import timezone
 
 from applications.models import Application
+from applications.creation import lock_workspace
+
+from .gmail_retention import mailbox_for_account, retain_gmail_message
 
 from .matching import (
     extract_html_source_urls,
@@ -115,7 +119,7 @@ def _thread_trusted_application(
     this deliberately declines to guess and falls through to ordinary
     term matching instead.
     """
-    candidate_ids = {message.message_id, *thread_ids}
+    candidate_ids = {value for value in (message.message_id, *thread_ids) if value}
     if not candidate_ids:
         return None
     app_ids = [app.id for app in applications]
@@ -215,7 +219,47 @@ def _create_discovery(
     return discovery, created
 
 
-@transaction.atomic
+def _classify_message(message, applications, always_posting_senders):
+    """Existing relevance order, with no retention or projection effects."""
+    thread_ids = extract_thread_message_ids(message.raw_headers or "")
+    trusted = _thread_trusted_application(message, thread_ids, applications)
+    if trusted is not None:
+        return ("match", [trusted], thread_ids)
+    general, posting = looks_like_untracked_application(
+        message.subject, message.sender, always_posting_senders
+    )
+    if posting or is_job_posting_style_subject(message.subject):
+        return ("posting", [], thread_ids)
+    hits = _term_matching_applications(message, applications)
+    if len(hits) == 1:
+        return ("match", hits, thread_ids)
+    if len(hits) > 1:
+        return ("ambiguous", hits, thread_ids)
+    if general:
+        return ("application", [], thread_ids)
+    return None
+
+
+def _project_message(account, message, classification, result):
+    """The single transitional RFC-ID projection path; never source authority."""
+    kind, applications, thread_ids = classification
+    if kind == "match":
+        application = applications[0]
+        _, created = _create_confirmed_match(account, application, message)
+        if created:
+            _record_thread(application, message, thread_ids)
+            result.new_matches += 1
+    else:
+        _, created = _create_discovery(
+            account, message,
+            match_kind="ambiguous" if kind == "ambiguous" else "unmatched",
+            kind="posting" if kind == "posting" else "application",
+            candidate_applications=applications,
+        )
+        if created:
+            result.new_discoveries += 1
+
+
 def sync_account(
     account: EmailAccount,
     provider: EmailProvider,
@@ -223,38 +267,27 @@ def sync_account(
     since: datetime | None = None,
     now: datetime | None = None,
 ) -> SyncResult:
-    """Run one sync pass for `account` against `provider`, creating
-    AccountMatch/Discovery/ThreadIdentifier rows as appropriate and
-    updating the account's sync bookkeeping. `provider` is always
-    passed explicitly rather than resolved via providers.get_provider()
-    internally -- callers (a future management command or Celery task)
-    are expected to resolve the provider once per account and hand it
-    in, which is also what lets tests exercise this function against a
-    fake provider with no registry entry at all.
+    """Gmail fetches outside transactions and persists each relevant message atomically.
 
-    `since` defaults to `account.last_synced_at` (a full backfill the
-    first time an account is synced, an incremental sync thereafter).
-    `now` defaults to timezone.now() and exists purely so tests can
-    pass a fixed timestamp.
-
-    Wrapped in a single transaction: a provider failure partway through
-    (ProviderAuthError, or any other exception) rolls back every match/
-    discovery created so far in this run rather than leaving the
-    account half-synced, since the next successful sync will just
-    fetch the same messages again from `since` onward.
+    Other providers keep their existing whole-pass transaction. Failed Gmail units
+    roll back retention and projection together; earlier committed units are replay
+    safe and the sync cursor advances only after the complete pass succeeds.
     """
+    with nullcontext() if account.provider == "gmail" else transaction.atomic():
+        return _sync_account(account, provider, since=since, now=now)
+
+
+def _sync_account(account, provider, *, since, now):
     result = SyncResult(account_id=account.id)
     now = now or timezone.now()
     effective_since = since if since is not None else account.last_synced_at
-
+    gmail = account.provider == "gmail"
+    mailbox_id = mailbox_for_account(account) if gmail else None
     always_posting_senders = set(
-        JobPostingSender.objects.filter(workspace_id=account.workspace_id).values_list(
-            "sender", flat=True
-        )
+        JobPostingSender.objects.filter(workspace_id=account.workspace_id).values_list("sender", flat=True)
     )
     applications = list(Application.objects.filter(workspace_id=account.workspace_id))
     terms = _all_search_terms(applications)
-
     try:
         messages = list(provider.fetch_messages(account, terms, since=effective_since))
     except ProviderAuthError as exc:
@@ -264,13 +297,6 @@ def sync_account(
         result.error = str(exc)
         return result
     except ProviderTemporaryError as exc:
-        # Retryable (rate limiting, a network timeout, a provider-side
-        # 5xx) -- see ProviderTemporaryError's own docstring. Unlike
-        # ProviderAuthError, this must NOT touch account.status: the
-        # credential is fine, nothing here implies the user needs to
-        # reconnect anything, and a later sync (the next scheduled
-        # beat tick, or a manual retry) can simply pick this account
-        # back up on its own.
         result.ok = False
         result.error = str(exc)
         return result
@@ -278,74 +304,48 @@ def sync_account(
     already_seen = set(
         AccountMatch.objects.filter(account=account).values_list("message_id", flat=True)
     ) | set(Discovery.objects.filter(account=account).values_list("message_id", flat=True))
-
     for message in messages:
         result.messages_seen += 1
-        if message.message_id in already_seen:
+        # RFC duplicate suppression must never hide native Gmail sources.
+        if not gmail and message.message_id in already_seen:
             result.skipped_existing += 1
             continue
-
-        thread_ids = extract_thread_message_ids(message.raw_headers or "")
-
-        trusted_application = _thread_trusted_application(message, thread_ids, applications)
-        if trusted_application is not None:
-            _, created = _create_confirmed_match(account, trusted_application, message)
-            if created:
-                _record_thread(trusted_application, message, thread_ids)
-                result.new_matches += 1
+        classification = _classify_message(message, applications, always_posting_senders)
+        if classification is None:
+            if message.message_id in already_seen:
+                result.skipped_existing += 1
             continue
+        with transaction.atomic() if gmail else nullcontext():
+            if gmail:
+                lock_workspace(account.workspace.owner, account.workspace)
+                kind = classification[0]
+                reason = {"match": "application_evidence", "posting": "posting_source"}.get(kind, "discovery_review")
+                retained = retain_gmail_message(account, message, reason, mailbox_id)
+                # Conflicts preserve evidence but cannot cause new automatic effects.
+                if retained.state == "conflict":
+                    continue
+                if not message.rfc_message_id:
+                    continue
+                # Recheck inside the gate for competing syncs. Legacy rows remain
+                # account/RFC scoped; they are not canonical source deduplication.
+                seen = (AccountMatch.objects.filter(account=account, message_id=message.message_id).exists()
+                        or Discovery.objects.filter(account=account, message_id=message.message_id).exists())
+            else:
+                seen = message.message_id in already_seen
+            if seen:
+                result.skipped_existing += 1
+                continue
+            _project_message(account, message, classification, result)
 
-        # Job-alert/listing notices are checked before term matching,
-        # not after: a message can mention an existing tracked
-        # company's name (or even match it as the sole term hit) and
-        # still just be "KPMG just posted a 92% match ..." -- a
-        # digest-style listing notice, not a reply about the user's
-        # own application. Routing these to kind="posting" up front
-        # means they're never mistaken for a confirmed AccountMatch or
-        # swept into an ambiguous-application Discovery purely on
-        # company-name overlap; see is_job_posting_style_subject's own
-        # docstring for the real case this guards against. A
-        # whitelisted sender (force_posting) gets the same treatment
-        # unconditionally, per looks_like_untracked_application's
-        # contract.
-        is_general_candidate, force_posting = looks_like_untracked_application(
-            message.subject, message.sender, always_posting_senders
-        )
-        if force_posting or is_job_posting_style_subject(message.subject):
-            _, created = _create_discovery(account, message, match_kind="unmatched", kind="posting")
-            if created:
-                result.new_discoveries += 1
-            continue
-
-        term_hits = _term_matching_applications(message, applications)
-        if len(term_hits) == 1:
-            application = term_hits[0]
-            _, created = _create_confirmed_match(account, application, message)
-            if created:
-                _record_thread(application, message, thread_ids)
-                result.new_matches += 1
-            continue
-
-        if len(term_hits) > 1:
-            _, created = _create_discovery(
-                account,
-                message,
-                match_kind="ambiguous",
-                kind="application",
-                candidate_applications=term_hits,
-            )
-            if created:
-                result.new_discoveries += 1
-            continue
-
-        if is_general_candidate:
-            _, created = _create_discovery(account, message, match_kind="unmatched", kind="application")
-            if created:
-                result.new_discoveries += 1
-
-    account.last_synced_at = now
-    account.matched_email_count = AccountMatch.objects.filter(account=account).count()
-    if account.status != "blocked":
-        account.status = "connected"
-    account.save(update_fields=["last_synced_at", "matched_email_count", "status", "updated_at"])
+    with transaction.atomic() if gmail else nullcontext():
+        if gmail:
+            lock_workspace(account.workspace.owner, account.workspace)
+            # Do not resurrect a concurrently disconnected account's status.
+            current = EmailAccount.objects.get(pk=account.pk, workspace_id=account.workspace_id)
+            account.status = current.status
+        account.last_synced_at = now
+        account.matched_email_count = AccountMatch.objects.filter(account=account).count()
+        if account.status != "blocked" and (not gmail or account.status != "disconnected"):
+            account.status = "connected"
+        account.save(update_fields=["last_synced_at", "matched_email_count", "status", "updated_at"])
     return result

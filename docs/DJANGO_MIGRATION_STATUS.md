@@ -1,12 +1,12 @@
 # Django migration: current status
 
-Maintained checkpoint: 2026-09-20. Backend Retained Email Source Identity and
-Content Foundation is committed at `2f0cd1f62ae52d7a3695d05925eb9ad5353a849a`
-on `django-migration`, following Deterministic Derivation, Trash & Restore,
-Named Categories and Application Identity. Gmail Mailbox Identity and Durable
-Lineage Foundation is the current **uncommitted** review slice. Gmail retained-
-message producer adoption, frontend integration, historical bulk reconciliation,
-email derivation integration and operational cutover remain pending.
+Maintained checkpoint: 2026-09-20. Retained Email Source Identity and Content
+Foundation is committed at `2f0cd1f`; Gmail Mailbox Identity and Durable Lineage
+Foundation is committed at `9f6627770c43fd3b3af492d2201e647af77cc53f` on
+`django-migration`. **Gmail Provider Adoption into Retained-Source Authority** is
+implemented and uncommitted for review. Frontend integration, historical bulk
+reconciliation, retained review/relationships, email derivation and operational
+cutover remain pending.
 
 ## 1. Scope and source of truth
 
@@ -25,7 +25,28 @@ email derivation integration and operational cutover remain pending.
 
 ## 2. Current verification evidence
 
-### Gmail mailbox identity — current automated verification, 2026-09-20
+### Gmail provider adoption — current verification, 2026-09-20
+
+Started from the exact clean `9f66277` checkpoint; local/tracking/live remote matched.
+HEAD is unchanged and implementation remains uncommitted. See the
+[Gmail adoption review](DJANGO_GMAIL_ADOPTION_REVIEW.md) for inspection, contracts,
+changed files, exact commands and limitations.
+
+- Final focused `email_sync core.tests_workspace_scope core.tests
+  applications.tests.test_derivation`: **394 passed**, exit 0, including 30 new
+  producer/adoption tests. Full Django: **671 passed**, exit 0.
+- Django system check, whitespace and local documentation links pass.
+- Migration dry run exits 1 only for the pre-existing EmailAccount.provider choice
+  drift (`0008_alter_emailaccount_provider`), independently reproduced before edits;
+  no schema migration or new drift. No real tracker database was migrated.
+- No fresh legacy `_app` or frontend run is claimed; those trees are unchanged.
+  Historical legacy failures below remain separately scoped. Django compatibility
+  matching/discovery/posting, identity/lifecycle and retained inspection tests pass.
+- SQLite verifies logical convergence/rollback/replay, not PostgreSQL operations.
+  Synthetic Gmail fixtures are not live-provider certification. Review relationships,
+  frontend, historical reconciliation and production cutover remain pending.
+
+### Gmail mailbox identity — historical verification at `9f66277`, 2026-09-20
 
 The clean committed baseline and later intentional partial tree were inspected on
 `django-migration` at `2f0cd1f`; all changes are confined to this bounded slice.
@@ -307,8 +328,8 @@ No newly accepted capability is marked verified merely because it is designed.
 | Trash/recovery | Application/Document/Category Trash and Restore, revisions, mutation/admin guards; old deletes retired | Current lifecycle/migration/SQLite race coverage in §2 | Workspace lifecycle, purge, frontend and operational validation deferred |
 | Search/dashboards/settings | Included reads, counts, search, section adapters, merges, and settings scoped to URL workspace; search parity and Ghosted still pending | Scoped isolation coverage; broader target parity pending | Frontend integration pending |
 | Provider connections | Gmail/Outlook/IMAP connect/sync/disconnect; encrypted credentials | Baseline provider/view coverage, mocked external seams | Historical Gmail OAuth/live-sync checkpoint; complete target flows unvalidated; Outlook/IMAP live validation unestablished |
-| Sync/jobs | Match/discovery/thread writes; inline single sync, queued bulk/Beat | Existing sync/task coverage; not real-broker proof | Real Redis/worker/Beat operation unestablished |
-| Retained messages/review | Four protected source/observation models, explicit retention service and workspace-scoped read-only inspection; provider sync remains unadopted | Retention, API, migration and SQLite race coverage in §2 | Provider adoption, review actions, frontend and operational validation pending |
+| Sync/jobs | Gmail per-message retention plus transitional match/discovery/thread projection; inline single sync, queued bulk/Beat | Gmail adoption/replay and existing sync/task coverage; not real-broker proof | Real Redis/worker/Beat operation unestablished |
+| Retained messages/review | Protected source/observation models, verified Gmail lineage and native-ID producer adoption; workspace-scoped read-only inspection | Retention, Gmail adoption, API, migration and SQLite logical concurrency coverage in §2 | Other-provider adoption, review actions, frontend and operational validation pending |
 | Postings | Fixture-tested extractor, ingestion helper, list/save/dismiss/restore/apply APIs | Baseline component/fixture coverage | Sync does not call ingestion; apply lacks evidence; full workflow pending |
 | Import/export | No Django legacy importer or portable export/restore | Unimplemented/unverified | Reconciliation/cutover pending |
 | Production | Partial settings/storage/task scaffolding; SQLite inherited, development fallbacks remain | Suite success is not deployment verification | PostgreSQL/storage/jobs/backup/restore/rollback pending |
@@ -318,7 +339,7 @@ No newly accepted capability is marked verified merely because it is designed.
 - Connect `email_sync/sync_service.py` to `postings/services.py` ingestion;
   currently sync writes discoveries/matches, not JobPosting rows. Carry over
   safe job/URL association and evidence behavior.
-- Review the retained-source foundation; separately authorize provider adoption,
+- Review Gmail producer adoption; separately authorize other-provider adoption,
   account listing, discovery preview/attach/accept/dismiss/restore/sender
   classification, and evidence/backfill.
 - Per-Application derivation is committed at `120d493`. Historical rows are
@@ -572,12 +593,13 @@ and `accounts.0001_initial`, creates only four tables/five constraints, and perf
 no historical backfill or existing-field alteration. See the
 [retained-email review](DJANGO_RETAINED_EMAIL_REVIEW.md) for contracts and evidence.
 
-Current sync remains transitional and unadopted. No review actions, posting ingestion,
-generated Documents, derivation hooks, frontend integration, purge, import/export,
+Gmail producer adoption is described below; other providers remain unadopted. No
+review actions, posting ingestion, generated Documents, derivation hooks, frontend
+integration, purge, import/export,
 workers or historical reconstruction are included. PostgreSQL and operational
 validation remain open; SQLite race tests are not production concurrency proof.
 
-### Gmail Mailbox Identity and Durable Lineage Foundation — uncommitted
+### Gmail Mailbox Identity and Durable Lineage Foundation — committed at `9f66277`
 
 New Gmail authorization requests only the approved `openid email gmail.readonly`
 scopes (the last uses its full Google scope URI). The callback verifies the exchange
@@ -601,15 +623,56 @@ Workspace-gated identity/account/credential writes are atomic; lineage/principal
 retained evidence survive disconnect and account deletion. New identity admin is
 read-only, and bound account workspace/provider cannot be changed by ordinary saves.
 
-Current sync message identities, retained read APIs, downstream review/posting/evidence
-workflows and Outlook/IMAP remain unchanged. No Gmail retained-message adoption is
-included. See the [review](DJANGO_GMAIL_IDENTITY_REVIEW.md) for limits and verification.
+That identity slice left provider adoption for the next bounded slice below. Its
+retained read APIs and downstream review/posting/evidence workflows are unchanged;
+Outlook/IMAP identity is not adopted. See the
+[identity review](DJANGO_GMAIL_IDENTITY_REVIEW.md) for historical limits/evidence.
+
+### Gmail Provider Adoption into Retained-Source Authority — uncommitted
+
+Newly fetched, relevance-qualified Gmail messages now call `retain_observation`
+using native Gmail message ID under verified workspace-owned durable MailboxLineage.
+The provider DTO keeps native ID, RFC Message-ID, provider thread metadata and
+source/observation timestamps separate. Missing RFC ID no longer discards canonical
+evidence. `threadId` is conversation metadata only; equal RFC/thread values never
+merge different native sources.
+
+Binding/principal/provider/workspace are checked before fetch and revalidated during
+persistence; a changed binding requires another fetch. Missing verified lineage or
+native identity produces an unresolved observation, with no email/header identity
+guess. Same-principal reconnect and account recreation reuse the durable namespace.
+
+Existing relevance order and search semantics are preserved. Retention happens
+before legacy RFC duplicate suppression. Selected repeated headers, structured
+addresses and available inline plain/HTML MIME bodies pass through existing limits
+and truncation. Raw MIME, file parts and nested attachment bodies are not retained.
+InternalDate has explicit Gmail provenance; missing/invalid values remain unknown,
+with no RFC Date fallback. Header-sent precision, observation and retention stay
+separate; Application activity/derivation is untouched.
+
+Gmail fetch/decode/classification is outside persistence transactions. One relevant
+message's retention and compatibility projection commit together under the existing
+Workspace gate. Fresh fetches produce new observations against one native source;
+reusing an attempt replays the original observation. Conflicts preserve variants and
+canonical content and suppress new projections. Unresolved cases preserve existing
+legacy compatibility behavior without establishing canonical downstream authority.
+Earlier committed units survive a later failure, but the sync cursor does not advance;
+retry is safe. Other providers keep their existing transaction behavior.
+
+Matches/discoveries/posting discoveries remain one transitional RFC-based projection
+path, preserving dismissed state and replay behavior. Missing RFC ID can have no
+legacy projection, and two native sources with one RFC ID can have only one legacy
+projection. Replace these consumers with retained-backed relationships before legacy
+retirement. No schema migration, historical backfill/reconciliation, review mutations,
+ApplicationMessage/PostingSource, JobPosting ingestion, generated evidence, Outlook/IMAP
+adoption or frontend work is included. Inspection/admin remain read-only. See the
+[adoption review](DJANGO_GMAIL_ADOPTION_REVIEW.md).
 
 ## 8. Next recommended implementation actions
 
-1. Review the uncommitted Gmail mailbox identity foundation and verification limitations above.
+1. Review the uncommitted Gmail producer adoption and verification limitations above.
 2. Resolve the legacy verification blockers under separately approved scope before declaring a fully green checkpoint.
-3. Separately authorize Gmail retained-source producer adoption; retained email/job integration and broader frontend workflows remain pending.
+3. Separately scope retained review/relationship integration now that relevant Gmail sources reach retained authority; broader email/job and frontend work remains pending.
 4. Plan provenance-aware historical reconciliation with importer/cutover work; do not silently backfill current records.
 5. Connect core browser workflows, then retained email/review/postings/evidence.
 6. Develop import/export alongside models; rehearse representative workspaces.

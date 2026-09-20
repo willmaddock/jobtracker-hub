@@ -195,7 +195,7 @@ class GmailProviderFetchTests(TestCase):
             msg.received_at, datetime.fromtimestamp(1700000000, tz=dt_timezone.utc)
         )
 
-    def test_drops_message_with_no_message_id_header(self):
+    def test_preserves_native_identity_without_message_id_header(self):
         # Build a raw message with no Message-ID header at all.
         source = (
             "Subject: no id here\r\n"
@@ -210,7 +210,9 @@ class GmailProviderFetchTests(TestCase):
         )
         provider = self._provider_for(service)
         results = list(provider.fetch_messages(self.account, terms=["Acme"]))
-        self.assertEqual(results, [])
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].rfc_message_id, "")
+        self.assertEqual(results[0].provider_message_id, "g1")
 
     def test_paginates_across_multiple_list_pages(self):
         raw1 = _raw_message("<m1@mail.gmail.com>")

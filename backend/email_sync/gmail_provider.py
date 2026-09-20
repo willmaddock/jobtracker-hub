@@ -33,8 +33,8 @@ Message-ID terms -- a message's In-Reply-To/References headers cite
 *other messages' Message-ID header values*, never Gmail's own id.
 Using Gmail's id as message_id would silently break every thread-based
 match: a reply's References header would never line up with anything
-ThreadIdentifier has on file. Gmail's own id is only ever used
-internally here, to fetch each message's full content.
+ThreadIdentifier has on file. Gmail's native ID is carried separately as
+provider_message_id for retained source authority; threadId is metadata only.
 """
 from __future__ import annotations
 import time
@@ -43,11 +43,15 @@ import base64
 from datetime import datetime, timedelta, timezone as dt_timezone
 from email import message_from_bytes
 from email.message import Message
+from email.header import decode_header, make_header
+from email.utils import getaddresses, parsedate_to_datetime
+import re
 from typing import Any, Callable, Iterable
 
 from .matching import ATS_SENDER_DOMAINS
 from .models import EmailAccount
 from .providers import EmailProvider, FetchedMessage, ProviderAuthError, ProviderTemporaryError
+from .retention import HEADERS
 
 # Gmail list() pages are capped at this many fetches per sync as a
 # safety valve against an unbounded loop (a malformed query, or an API
@@ -219,51 +223,108 @@ def _plain_text_body(msg: Message) -> str | None:
 
 
 def _received_at(gmail_message: dict) -> datetime | None:
-    """Gmail's own `internalDate` (epoch milliseconds, always present,
-    server-assigned) rather than the message's own `Date` header -- the
-    header is client-supplied and occasionally missing, malformed, or
-    simply wrong (a misconfigured sender's clock); internalDate is
-    Gmail's own receipt timestamp and always parses cleanly."""
+    """Provider internal epoch milliseconds, not an assertion of SMTP receipt.
+
+    Missing/invalid values stay unknown; never fall back to the RFC Date header.
+    """
     raw = gmail_message.get("internalDate")
-    if raw is None:
+    if not isinstance(raw, (str, int)) or isinstance(raw, bool) or not re.fullmatch(r"[0-9]+", str(raw)):
         return None
     try:
-        return datetime.fromtimestamp(int(raw) / 1000, tz=dt_timezone.utc)
+        return datetime(1970, 1, 1, tzinfo=dt_timezone.utc) + timedelta(milliseconds=int(raw))
     except (ValueError, TypeError, OverflowError):
         return None
 
 
+def _decoded_header(value: str) -> str:
+    try:
+        return str(make_header(decode_header(value)))
+    except (LookupError, UnicodeError):
+        return value
+
+
+def _header_sent(msg: Message) -> dict:
+    raw = msg.get("Date")
+    if not raw:
+        return {"precision": "unknown", "value": None, "source": "header_date"}
+    # Preserve honest date-only/uncertain claims; do not invent midnight or a zone.
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
+        try:
+            return {"precision": "date", "value": datetime.strptime(raw, "%Y-%m-%d").date().isoformat(), "source": "header_date"}
+        except ValueError:
+            pass
+    try:
+        value = parsedate_to_datetime(raw)
+        if value.tzinfo is not None and value.utcoffset() is not None:
+            return {"precision": "instant", "value": value.isoformat(), "source": "header_date"}
+    except (TypeError, ValueError, OverflowError):
+        pass
+    return {"precision": "uncertain", "value": raw, "source": "header_date"}
+
+
+def _body_parts(msg: Message):
+    # Do not descend into attached/forwarded messages or attachment containers.
+    if (msg.get_content_disposition() == "attachment" or msg.get_filename() is not None
+            or msg.get_content_maintype() == "message"):
+        return
+    if msg.is_multipart():
+        for part in msg.get_payload():
+            yield from _body_parts(part)
+    else:
+        yield msg
+
+
+def _retained_body(msg: Message, content_type: str) -> str | None:
+    """First inline part of this type, preserving available empty bodies.
+
+    Matching retains its pre-existing plain-text selection independently.
+    """
+    for part in _body_parts(msg):
+        if part.get_content_type() != content_type or part.get_content_disposition() == "attachment":
+            continue
+        payload = part.get_payload(decode=True)
+        if payload is None:
+            continue
+        try:
+            return payload.decode(part.get_content_charset() or "utf-8", errors="replace")
+        except (LookupError, UnicodeError):
+            return payload.decode("utf-8", errors="replace")
+    return None
+
+
 def _to_fetched_message(gmail_message: dict) -> FetchedMessage | None:
-    """Build a FetchedMessage from one Gmail API `messages.get(...,
-    format="raw")` response. Returns None (never raises) for a message
-    with no RFC 5322 Message-ID header -- vanishingly rare in
-    practice, but such a message can never participate in thread-based
-    matching (see the module docstring's message_id design note) and
-    dropping it here is simpler and safer than fabricating an id that
-    would collide with nothing real."""
+    """Decode transient raw MIME; missing RFC Message-ID does not discard mail."""
     raw_field = gmail_message.get("raw")
     if not raw_field:
         return None
     raw_bytes = _decode_raw(raw_field)
     msg = message_from_bytes(raw_bytes)
-
-    message_id = msg.get("Message-ID")
-    if not message_id:
-        return None
-
-    # HeaderParser (used by matching.extract_thread_message_ids) only
-    # ever reads up to the first blank line, so handing it the full
-    # raw source instead of a headers-only slice is safe and avoids
-    # re-parsing the message a second time just to split headers out.
     raw_source = raw_bytes.decode("utf-8", errors="replace")
+    internal_at = _received_at(gmail_message)
+    addresses = {}
+    for header in ("From", "Sender", "Reply-To", "To", "Cc", "Bcc"):
+        values = msg.get_all(header, [])
+        if values:
+            addresses[header.lower().replace("-", "_")] = [
+                {"name": _decoded_header(name), "address": address}
+                for name, address in getaddresses(values)
+            ]
     return FetchedMessage(
-        message_id=message_id.strip(),
+        message_id=(msg.get("Message-ID") or "").strip(),
         subject=msg.get("Subject"),
         sender=msg.get("From"),
-        received_at=_received_at(gmail_message),
+        received_at=internal_at,
         body=_plain_text_body(msg),
         raw_headers=raw_source,
         raw_source=raw_source,
+        provider_message_id=gmail_message.get("id"),
+        provider_thread_id=gmail_message.get("threadId"),
+        provider_internal_at=internal_at,
+        text_body=_retained_body(msg, "text/plain"),
+        html_body=_retained_body(msg, "text/html"),
+        selected_headers=tuple((name, value) for name, value in msg.items() if name.lower() in HEADERS),
+        addresses=addresses,
+        header_sent=_header_sent(msg),
     )
 
 
@@ -336,7 +397,11 @@ class GmailProvider(EmailProvider):
                     raise  # pragma: no cover -- _raise_classified always raises
             time.sleep(0.3)
 
-            fetched = _to_fetched_message(gmail_message)
+            # The list locator is already native provider identity. Some responses
+            # omit the redundant id; never substitute an RFC header for it.
+            if gmail_message.get("id") not in (None, gmail_id):
+                raise ProviderTemporaryError("Gmail returned a mismatched message locator.")
+            fetched = _to_fetched_message({**gmail_message, "id": gmail_id})
             if fetched is not None:
                 results.append(fetched)
 
