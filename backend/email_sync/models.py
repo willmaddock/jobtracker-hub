@@ -14,6 +14,7 @@ Named EmailAccount (not Account) to avoid colliding with the
 `accounts` Django app from Phase 1+2.
 """
 from django.db import models
+from django.core.exceptions import ValidationError
 
 from applications.models import Application
 
@@ -63,6 +64,13 @@ class EmailAccount(models.Model):
 
     def __str__(self) -> str:
         return self.account_name or self.email
+
+    def save(self, *args, **kwargs):
+        if self.pk and AccountMailboxBinding.objects.filter(account_id=self.pk).exists():
+            old = type(self).objects.get(pk=self.pk)
+            if (old.workspace_id, old.provider) != (self.workspace_id, self.provider):
+                raise ValidationError("A bound account cannot change workspace or provider.")
+        return super().save(*args, **kwargs)
 
 
 class GmailCredential(models.Model):
@@ -334,4 +342,4 @@ class ThreadIdentifier(models.Model):
         return f"{self.application} <{self.message_id}>"
 
 # Kept separate from the existing, unadopted sync/workflow models.
-from .retained_models import MailboxLineage, RetainedMessage, RetentionKey, RetainedObservation  # noqa: E402,F401
+from .retained_models import (MailboxLineage, MailboxPrincipal, AccountMailboxBinding, RetainedMessage, RetentionKey, RetainedObservation)  # noqa: E402,F401

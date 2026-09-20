@@ -16,7 +16,7 @@ from rest_framework.exceptions import NotFound, ValidationError
 
 from accounts.models import Workspace
 from applications.creation import lock_workspace
-from .models import MailboxLineage, RetainedMessage, RetainedObservation, RetentionKey
+from .models import MailboxLineage, MailboxPrincipal, RetainedMessage, RetainedObservation, RetentionKey
 
 VERSION = 1
 MAX_INPUT_BYTES = 2 * 1024 * 1024
@@ -223,6 +223,32 @@ performed here. Reuse the returned ID, not this allocator, on observation retrie
     with transaction.atomic():
         lock_workspace(actor, workspace)
         return MailboxLineage.objects.create(workspace=workspace, provider=provider, evidence=evidence)
+
+
+def resolve_google_mailbox(*, actor, workspace, verified_sub):
+    """Internal OAuth-only caller has verified the Google assertion and token binding.
+
+    This function does not authenticate a supplied string. No public write API.
+    Existing unverified lineages remain separate; never discover them by address.
+    """
+    authorize(actor, workspace)
+    if (not isinstance(verified_sub, str) or not 1 <= len(verified_sub) <= 255
+            or not verified_sub.isascii() or "\x00" in verified_sub):
+        invalid()
+    with transaction.atomic():
+        lock_workspace(actor, workspace)
+        principal = MailboxPrincipal.objects.filter(
+            workspace=workspace, provider="gmail", namespace="google_oidc_sub", value=verified_sub,
+        ).select_related("mailbox").first()
+        if principal:
+            if principal.mailbox.workspace_id != workspace.pk or principal.mailbox.provider != "gmail":
+                invalid()
+            return principal.mailbox
+        mailbox = establish_mailbox(actor=actor, workspace=workspace, provider="gmail",
+            evidence={"method": "google_oidc_verified_id_token", "reference": "google_oidc_sub"})
+        MailboxPrincipal.objects.create(workspace=workspace, mailbox=mailbox, provider="gmail",
+            namespace="google_oidc_sub", value=verified_sub)
+        return mailbox
 
 
 @dataclass(frozen=True)

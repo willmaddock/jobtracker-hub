@@ -221,11 +221,8 @@ GMAIL_TOKEN_ENCRYPTION_KEY = os.environ.get(
     'GMAIL_TOKEN_ENCRYPTION_KEY', 'fXjaJnCzcqV7qdtv8krT14nLUD6QBFScd6jZf5hzVGg='
 )
 
-# Read-only scope only -- this app never sends, deletes, or modifies
-# mail, only classifies it for matching (email_sync.matching), so the
-# OAuth consent screen a user sees should never ask for more than
-# reading.
-GMAIL_OAUTH_SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
+# OIDC identity is a prospective authorization upgrade; mail access stays read-only.
+GMAIL_OAUTH_SCOPES = ['openid', 'email', 'https://www.googleapis.com/auth/gmail.readonly']
 
 # Microsoft OAuth / Graph (Phase 9 second-provider slice,
 # docs/DJANGO_MIGRATION_PLAN.md) -- this app's own Azure AD app

@@ -1,11 +1,12 @@
 # Django migration: current status
 
-Maintained checkpoint: 2026-09-20. Backend Deterministic Application Derivation is
-committed at `120d49397297c2ba1337c88503769aec6ae87c41` on `django-migration`,
-following Trash & Restore, Named Categories and Application Identity. Backend
-Retained Email Source Identity and Content Foundation is the current **uncommitted**
-review slice. No provider adoption, frontend integration, historical bulk
-reconciliation, email derivation integration, or operational cutover is claimed.
+Maintained checkpoint: 2026-09-20. Backend Retained Email Source Identity and
+Content Foundation is committed at `2f0cd1f62ae52d7a3695d05925eb9ad5353a849a`
+on `django-migration`, following Deterministic Derivation, Trash & Restore,
+Named Categories and Application Identity. Gmail Mailbox Identity and Durable
+Lineage Foundation is the current **uncommitted** review slice. Gmail retained-
+message producer adoption, frontend integration, historical bulk reconciliation,
+email derivation integration and operational cutover remain pending.
 
 ## 1. Scope and source of truth
 
@@ -24,7 +25,28 @@ reconciliation, email derivation integration, or operational cutover is claimed.
 
 ## 2. Current verification evidence
 
-### Retained-email foundation — fresh final verification, 2026-09-20
+### Gmail mailbox identity — current automated verification, 2026-09-20
+
+The clean committed baseline and later intentional partial tree were inspected on
+`django-migration` at `2f0cd1f`; all changes are confined to this bounded slice.
+See [Gmail identity review](DJANGO_GMAIL_IDENTITY_REVIEW.md) for the Google sources,
+assertion/binding contracts, migration details, resume inventory and exact commands.
+
+- Final focused identity/OAuth/provider/retention/core and populated/historical
+  migration checks: **125 passed**, exit 0.
+- Affected `email_sync accounts core applications documents postings`: **641 passed**,
+  exit 0. Separate full Django run: **641 passed**, exit 0.
+- System check and `git diff --check`: clean. Global migration dry run exits 1 solely for the known
+  EmailAccount.provider choice AlterField; no unrelated migration was generated.
+- Frontend Node: **8 passed**. Legacy: **367 passed, 3 known failures**, 2 warnings;
+  unchanged real-path import PermissionErrors and deletion 500-versus-200 failure.
+- Populated forward migration preserves every old column/row, including retained
+  evidence; principal/binding tables remain empty with no guessed identity backfill.
+- SQLite tests cover logical convergence and stale refresh interleavings, not
+  PostgreSQL race behavior. Google consent/reconnect/Workspace-domain behavior,
+  production storage/workers and cutover are not operationally validated.
+
+### Retained-email foundation — historical verification at `2f0cd1f`, 2026-09-20
 
 Continuation verified the canonical root, `django-migration`, HEAD/local tracking
 and live remote at `120d493`, preserving the intentional four-modified/seven-new-file
@@ -527,7 +549,7 @@ mutations record real effective changes once, using recorded-now history timesta
 rather than source dates. Existing duplicate history is preserved. Missing, failed,
 and conflicting evidence is reported; no cross-workspace evidence is admitted.
 
-### Backend Retained Email Source Identity and Content Foundation — uncommitted
+### Backend Retained Email Source Identity and Content Foundation — committed at `2f0cd1f`
 
 `MailboxLineage`, `RetainedMessage`, `RetentionKey` and `RetainedObservation` separate
 established mailbox lineage, strong source identity and exact observation retry.
@@ -555,11 +577,39 @@ generated Documents, derivation hooks, frontend integration, purge, import/expor
 workers or historical reconstruction are included. PostgreSQL and operational
 validation remain open; SQLite race tests are not production concurrency proof.
 
+### Gmail Mailbox Identity and Durable Lineage Foundation — uncommitted
+
+New Gmail authorization requests only the approved `openid email gmail.readonly`
+scopes (the last uses its full Google scope URI). The callback verifies the exchange
+ID token through the installed Google verifier, checks issuer/audience/signature,
+subject/times, optional authorized presenter and access-token hash binding, then
+uses Google OIDC `sub` as opaque account identity. Email remains metadata.
+
+Additive `email_sync.0007_gmail_mailbox_identity` creates MailboxPrincipal and
+AccountMailboxBinding only. The existing retention authority resolves unique
+workspace/provider/namespace/principal identity to MailboxLineage. Same-principal
+reconnect or account recreation resolves the same lineage; changed email can update
+ordinary account metadata without changing lineage. Conflicting principals, ambiguous
+legacy accounts and address collisions return a deterministic conflict without merging
+or overwriting credentials/history. New bindings require fresh offline authorization.
+
+Legacy accounts/lineages are preserved unverified until prospective authorization;
+no historical identity or message backfill runs. Empty stored refresh scopes retain
+the old read-only fallback, and refresh never establishes identity. Stale refresh
+results cannot overwrite a replacement grant or recreate disconnected credentials.
+Workspace-gated identity/account/credential writes are atomic; lineage/principal and
+retained evidence survive disconnect and account deletion. New identity admin is
+read-only, and bound account workspace/provider cannot be changed by ordinary saves.
+
+Current sync message identities, retained read APIs, downstream review/posting/evidence
+workflows and Outlook/IMAP remain unchanged. No Gmail retained-message adoption is
+included. See the [review](DJANGO_GMAIL_IDENTITY_REVIEW.md) for limits and verification.
+
 ## 8. Next recommended implementation actions
 
-1. Review the uncommitted retained-email foundation and verification limitations above.
+1. Review the uncommitted Gmail mailbox identity foundation and verification limitations above.
 2. Resolve the legacy verification blockers under separately approved scope before declaring a fully green checkpoint.
-3. Separately authorize the next slice; retained email/job integration and broader frontend workflows remain pending.
+3. Separately authorize Gmail retained-source producer adoption; retained email/job integration and broader frontend workflows remain pending.
 4. Plan provenance-aware historical reconciliation with importer/cutover work; do not silently backfill current records.
 5. Connect core browser workflows, then retained email/review/postings/evidence.
 6. Develop import/export alongside models; rehearse representative workspaces.

@@ -1,7 +1,7 @@
-"""Workspace-owned email evidence. Only retention.py writes these records.
+"""Workspace-owned email evidence and prospective authentication bindings.
 
-No FK to authorization episodes or workflow consumers: deleting/disconnecting an
-EmailAccount cannot delete or reassign mailbox lineage or retained evidence.
+retention.py owns evidence/principal writes; OAuth owns account bindings. Deleting
+an EmailAccount removes its binding only, never lineage, principal or evidence.
 """
 import uuid
 
@@ -36,6 +36,44 @@ class MailboxLineage(ImmutableEvidence):
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=["workspace", "portable_id"], name="retained_mailbox_portable")]
+
+
+class MailboxPrincipal(ImmutableEvidence):
+    """Verified identity extension; old lineages are never guessed into this table."""
+    workspace = models.ForeignKey("accounts.Workspace", on_delete=models.PROTECT)
+    mailbox = models.OneToOneField(MailboxLineage, on_delete=models.PROTECT, related_name="principal")
+    provider = models.CharField(max_length=16)
+    namespace = models.CharField(max_length=64)
+    value = models.CharField(max_length=255)
+    verified_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(
+            fields=["workspace", "provider", "namespace", "value"], name="mailbox_verified_principal")]
+
+    def save(self, *args, **kwargs):
+        if self.pk and type(self).objects.filter(pk=self.pk).exists():
+            raise ValidationError("Verified mailbox identity is immutable.")
+        if self.mailbox.workspace_id != self.workspace_id or self.mailbox.provider != self.provider:
+            raise ValidationError("Mailbox principal scope mismatch.")
+        return super().save(*args, **kwargs)
+
+
+class AccountMailboxBinding(ImmutableEvidence):
+    """Prospective connection link, never evidence about historical account messages.
+
+    Account deletion removes only this link. The durable principal/lineage survives.
+    """
+    account = models.OneToOneField("email_sync.EmailAccount", on_delete=models.CASCADE, related_name="mailbox_binding")
+    mailbox = models.OneToOneField(MailboxLineage, on_delete=models.PROTECT, related_name="account_binding")
+    bound_at = models.DateTimeField(auto_now_add=True)
+
+    def save(self, *args, **kwargs):
+        if self.pk and type(self).objects.filter(pk=self.pk).exists():
+            raise ValidationError("Verified account binding is immutable.")
+        if self.account.workspace_id != self.mailbox.workspace_id or self.account.provider != self.mailbox.provider:
+            raise ValidationError("Account mailbox scope mismatch.")
+        return super().save(*args, **kwargs)
 
 
 class RetainedMessage(ImmutableEvidence):

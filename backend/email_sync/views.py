@@ -24,6 +24,7 @@ from __future__ import annotations
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from django.db import OperationalError, connection
 
 from accounts.models import Workspace
 
@@ -146,19 +147,29 @@ class GmailOAuthCallbackView(APIView):
             )
 
         code_verifier = request.session.get(_SESSION_VERIFIER_KEY)
+        # Consume before exchange, including failures returning 5xx (Django's
+        # session middleware does not persist session changes on those responses).
+        request.session.pop(_SESSION_STATE_KEY, None)
+        request.session.pop(_SESSION_WORKSPACE_KEY, None)
+        request.session.pop(_SESSION_VERIFIER_KEY, None)
+        request.session.save()
         try:
             account = oauth.complete_gmail_connection(
                 workspace, code=code, state=state, code_verifier=code_verifier
             )
         except OAuthConfigError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-        finally:
-            # One-time-use state regardless of outcome -- a failed
-            # exchange shouldn't leave a replayable state (or PKCE
-            # verifier) hanging around in the session.
-            request.session.pop(_SESSION_STATE_KEY, None)
-            request.session.pop(_SESSION_WORKSPACE_KEY, None)
-            request.session.pop(_SESSION_VERIFIER_KEY, None)
+        except oauth.GmailIdentityConflict:
+            return Response({"code": "gmail_identity_conflict", "detail": "Gmail identity conflicts with preserved account state."},
+                            status=status.HTTP_409_CONFLICT)
+        except ProviderAuthError:
+            return Response({"code": "gmail_identity_unverified", "detail": "Gmail identity could not be established; authorize Gmail again."},
+                            status=status.HTTP_400_BAD_REQUEST)
+        except OperationalError as exc:
+            if connection.vendor != "sqlite" or "locked" not in str(exc).lower():
+                raise
+            return Response({"code": "gmail_connection_busy", "detail": "Database busy; start a new Gmail authorization."},
+                            status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
         return Response(
             {"id": account.id, "email": account.email, "status": account.status},

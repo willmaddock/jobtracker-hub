@@ -116,6 +116,9 @@ class BuildAuthorizationUrlTests(TestCase):
 @override_settings(GOOGLE_OAUTH_CLIENT_ID="client-id", GOOGLE_OAUTH_CLIENT_SECRET="client-secret")
 class CompleteGmailConnectionTests(TestCase):
     def setUp(self):
+        identity = patch.object(oauth, "_verified_google_sub", return_value="synthetic-alice")
+        identity.start()
+        self.addCleanup(identity.stop)
         User = get_user_model()
         user = User.objects.create_user(username="alice", password="pw123456")
         self.workspace = Workspace.objects.create(owner=user, name="Alice's workspace")

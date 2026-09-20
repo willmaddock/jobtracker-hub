@@ -27,19 +27,28 @@ radius than "anyone who can read the database."
 from __future__ import annotations
 
 from datetime import datetime, timezone as dt_timezone
+import base64
+import hashlib
+import hmac
 
 import requests
 from cryptography.fernet import Fernet, InvalidToken
 from django.conf import settings
-from google.auth.exceptions import RefreshError
+from django.core.exceptions import ValidationError
+from django.core.validators import validate_email
+from django.db import transaction
+from google.auth.exceptions import GoogleAuthError, RefreshError
 from google.auth.transport.requests import Request as GoogleAuthRequest
 from google.oauth2.credentials import Credentials
+from google.oauth2 import id_token
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build as build_gmail_client
 
 from .gmail_provider import GmailProvider
-from .models import EmailAccount, GmailCredential
-from .providers import ProviderAuthError, ProviderError, register_provider
+from applications.creation import lock_workspace
+from .models import AccountMailboxBinding, EmailAccount, GmailCredential
+from .retention import resolve_google_mailbox
+from .providers import ProviderAuthError, ProviderError, ProviderTemporaryError, register_provider
 
 _TOKEN_URI = "https://oauth2.googleapis.com/token"
 _AUTH_URI = "https://accounts.google.com/o/oauth2/auth"
@@ -52,6 +61,44 @@ class OAuthConfigError(Exception):
     with a Google Cloud project, not that any particular user's
     credentials are invalid, so it shouldn't be caught anywhere
     sync_service.sync_account() handles per-account failures."""
+
+
+class GmailIdentityConflict(ProviderAuthError):
+    """Preserved account state needs explicit resolution; never merge by address."""
+
+
+def _verified_google_sub(credentials):
+    """Verify the code-exchange assertion using google-auth, not JWT decoding.
+
+    Google's RS256 server-flow at_hash binds this assertion to the access token
+    used for Gmail users/me. State and PKCE remain the existing code-flow replay
+    protection; this flow does not request an OIDC nonce.
+    """
+    failure = "Google account identity could not be verified; authorize Gmail again."
+    if not isinstance(credentials.id_token, str) or not credentials.id_token:
+        raise ProviderAuthError(failure)
+    try:
+        claims = id_token.verify_oauth2_token(
+            credentials.id_token, GoogleAuthRequest(), audience=settings.GOOGLE_OAUTH_CLIENT_ID,
+        )
+        sub = claims.get("sub")
+        if (not isinstance(sub, str) or not 1 <= len(sub) <= 255 or not sub.isascii()
+                or "\x00" in sub
+                or claims.get("aud") != settings.GOOGLE_OAUTH_CLIENT_ID
+                or claims.get("azp", settings.GOOGLE_OAUTH_CLIENT_ID) != settings.GOOGLE_OAUTH_CLIENT_ID
+                or type(claims.get("iat")) is not int or type(claims.get("exp")) is not int
+                or datetime.now(dt_timezone.utc).timestamp() >= claims["exp"]):
+            raise ValueError()
+        # verify_oauth2_token validates authenticity, issuer, audience, iat/exp.
+        # Google server ID tokens use RS256; no raw token or claims are persisted.
+        token_hash = base64.urlsafe_b64encode(
+            hashlib.sha256(credentials.token.encode("ascii")).digest()[:16]
+        ).rstrip(b"=").decode("ascii")
+        if not isinstance(claims.get("at_hash"), str) or not hmac.compare_digest(claims["at_hash"], token_hash):
+            raise ValueError()
+        return sub
+    except (GoogleAuthError, ValueError, TypeError, KeyError, AttributeError):
+        raise ProviderAuthError(failure) from None
 
 
 def _require_client_config() -> dict:
@@ -214,12 +261,9 @@ def complete_gmail_connection(
     address, which every downstream matching/dossier view treats as
     authoritative.
 
-    get_or_create on (workspace, email, provider) rather than always
-    inserting: reconnecting an account that was previously
-    disconnected (status="disconnected") should revive the same
-    EmailAccount row -- and its sync history (last_synced_at,
-    matched_email_count, existing AccountMatch/Discovery rows) -- not
-    fork a second row for the same mailbox.
+    Verified Google sub resolves durable lineage first. A unique unbound legacy
+    account can be bound prospectively; this does not prove its historical mail.
+    Conflicting/ambiguous accounts fail without replacing credentials or history.
 
     `code_verifier` must be the same value build_authorization_url()
     returned for this flow (GmailOAuthCallbackView pulls it back out
@@ -230,24 +274,58 @@ def complete_gmail_connection(
     flow = build_flow(state=state, code_verifier=code_verifier)
     flow.fetch_token(code=code)
     credentials = flow.credentials
+    sub = _verified_google_sub(credentials)
 
     profile_service = build_gmail_client(
         "gmail", "v1", credentials=credentials, cache_discovery=False
     )
     profile = profile_service.users().getProfile(userId="me").execute()
-    email = profile["emailAddress"]
+    try:
+        email = profile["emailAddress"]
+        if not isinstance(email, str) or len(email) > 254:
+            raise ValueError()
+        validate_email(email)
+    except (KeyError, TypeError, ValueError, ValidationError):
+        raise ProviderAuthError("Google returned an invalid Gmail profile.") from None
 
-    account, _created = EmailAccount.objects.get_or_create(
-        workspace=workspace,
-        email=email,
-        provider="gmail",
-        defaults={"account_name": email},
-    )
-    account.status = "connected"
-    account.save(update_fields=["status", "updated_at"])
-
-    _store_credentials(account, credentials)
-    return account
+    with transaction.atomic():
+        lock_workspace(workspace.owner, workspace)
+        mailbox = resolve_google_mailbox(actor=workspace.owner, workspace=workspace, verified_sub=sub)
+        binding = AccountMailboxBinding.objects.select_related("account").filter(mailbox=mailbox).first()
+        candidates = EmailAccount.objects.filter(workspace=workspace, provider="gmail", email=email)
+        if binding:
+            account = binding.account
+            if (account.workspace_id != workspace.pk or account.provider != "gmail"
+                    or candidates.exclude(pk=account.pk).exists()):
+                raise GmailIdentityConflict("Gmail account identity conflicts with preserved account state.")
+        else:
+            matches = list(candidates[:2])
+            if len(matches) > 1 or (matches and AccountMailboxBinding.objects.filter(account=matches[0]).exists()):
+                raise GmailIdentityConflict("Gmail account identity conflicts with preserved account state.")
+            # Never carry forward an unverified legacy refresh token into a newly
+            # proven connection. Offline consent must supply its own fresh token.
+            if not credentials.refresh_token:
+                raise ProviderAuthError("A new Gmail identity binding requires fresh offline authorization.")
+            account = matches[0] if matches else EmailAccount.objects.create(
+                workspace=workspace, provider="gmail", email=email, account_name=email,
+            )
+            AccountMailboxBinding.objects.create(account=account, mailbox=mailbox)
+        if not credentials.refresh_token and not GmailCredential.objects.filter(account=account).exclude(refresh_token="").exists():
+            raise ProviderAuthError("Gmail offline authorization is missing; authorize Gmail again.")
+        changed = []
+        if account.email != email:
+            if account.account_name == account.email:
+                account.account_name = email
+                changed.append("account_name")
+            account.email = email
+            changed.append("email")
+        if account.status != "connected":
+            account.status = "connected"
+            changed.append("status")
+        if changed:
+            account.save(update_fields=changed + ["updated_at"])
+        _store_credentials(account, credentials)
+        return account
 
 
 def _load_google_credentials(account: EmailAccount) -> Credentials:
@@ -276,7 +354,9 @@ def _load_google_credentials(account: EmailAccount) -> Credentials:
         token_uri=_TOKEN_URI,
         client_id=client_config["client_id"],
         client_secret=client_config["client_secret"],
-        scopes=cred_row.scopes.split() if cred_row.scopes else settings.GMAIL_OAUTH_SCOPES,
+        # Blank historical scope metadata predates the OIDC upgrade. Refresh is
+        # not consent: never request new identity scopes for that old grant.
+        scopes=cred_row.scopes.split() if cred_row.scopes else ["https://www.googleapis.com/auth/gmail.readonly"],
         expiry=cred_row.token_expiry.replace(tzinfo=None) if cred_row.token_expiry else None,
     )
 
@@ -288,7 +368,19 @@ def _load_google_credentials(account: EmailAccount) -> Credentials:
                 f"Gmail credential for {account.email!r} could not be refreshed "
                 "-- the grant was likely revoked; reconnect this account"
             ) from exc
-        _store_credentials(account, credentials)
+        # A slow refresh may overlap reconnect or disconnect. In particular, an
+        # unverified legacy refresh must never overwrite the freshly verified
+        # OAuth grant. Serialize persistence with connection establishment and
+        # compare the exact credential episode observed before provider I/O.
+        with transaction.atomic():
+            lock_workspace(account.workspace.owner, account.workspace)
+            current = GmailCredential.objects.select_for_update().filter(account=account).first()
+            if current is None or any(
+                getattr(current, field) != getattr(cred_row, field)
+                for field in ("pk", "access_token", "refresh_token", "updated_at")
+            ):
+                raise ProviderTemporaryError("Gmail authorization changed during refresh; retry with the current connection.")
+            _store_credentials(account, credentials)
 
     return credentials
 

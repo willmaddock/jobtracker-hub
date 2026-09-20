@@ -115,7 +115,7 @@ class GmailOAuthCallbackViewTests(APITestCase):
 
         with patch.object(oauth.Flow, "from_client_config", return_value=fake_flow), patch.object(
             oauth, "build_gmail_client", return_value=fake_profile_service
-        ):
+        ), patch.object(oauth, "_verified_google_sub", return_value="synthetic-alice"):
             response = self.client.get(self.url, {"code": "auth-code", "state": "state-abc"})
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)

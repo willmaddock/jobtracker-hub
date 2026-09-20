@@ -18,6 +18,11 @@ class EmailAccountAdmin(admin.ModelAdmin):
     list_filter = ("provider", "status", "workspace")
     search_fields = ("email", "account_name")
 
+    def get_readonly_fields(self, request, obj=None):
+        if obj and AccountMailboxBinding.objects.filter(account=obj).exists():
+            return ("workspace", "provider")
+        return ()
+
 
 @admin.register(GmailCredential)
 class GmailCredentialAdmin(admin.ModelAdmin):
@@ -81,10 +86,10 @@ class ThreadIdentifierAdmin(admin.ModelAdmin):
     list_display = ("application", "message_id")
     search_fields = ("message_id",)
 
-from .models import MailboxLineage, RetainedMessage, RetentionKey, RetainedObservation
+from .models import MailboxLineage, MailboxPrincipal, AccountMailboxBinding, RetainedMessage, RetentionKey, RetainedObservation
 
 
-@admin.register(MailboxLineage, RetainedMessage, RetentionKey, RetainedObservation)
+@admin.register(MailboxLineage, MailboxPrincipal, AccountMailboxBinding, RetainedMessage, RetentionKey, RetainedObservation)
 class RetainedEvidenceAdmin(admin.ModelAdmin):
     """Privileged inspection only; canonical writes belong to retention.py."""
     actions = None
