@@ -332,3 +332,6 @@ class ThreadIdentifier(models.Model):
 
     def __str__(self) -> str:
         return f"{self.application} <{self.message_id}>"
+
+# Kept separate from the existing, unadopted sync/workflow models.
+from .retained_models import MailboxLineage, RetainedMessage, RetentionKey, RetainedObservation  # noqa: E402,F401

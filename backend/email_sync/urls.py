@@ -49,3 +49,16 @@ urlpatterns = [
         name="email-account-disconnect",
     ),
 ]
+
+from .retained_views import (
+    MailboxLineageDetail, RetainedMessageDetail, RetainedMessageList,
+    RetainedObservationDetail, RetainedObservationList,
+)
+
+urlpatterns += [
+    path("workspaces/<int:workspace_id>/retained-messages/", RetainedMessageList.as_view(), name="retained-message-list"),
+    path("workspaces/<int:workspace_id>/retained-messages/<int:pk>/", RetainedMessageDetail.as_view(), name="retained-message-detail"),
+    path("workspaces/<int:workspace_id>/retained-observations/", RetainedObservationList.as_view(), name="retained-observation-list"),
+    path("workspaces/<int:workspace_id>/retained-observations/<int:pk>/", RetainedObservationDetail.as_view(), name="retained-observation-detail"),
+    path("workspaces/<int:workspace_id>/mailbox-lineages/<int:pk>/", MailboxLineageDetail.as_view(), name="mailbox-lineage-detail"),
+]

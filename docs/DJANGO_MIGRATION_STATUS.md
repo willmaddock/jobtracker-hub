@@ -1,10 +1,11 @@
 # Django migration: current status
 
-Maintained checkpoint: 2026-09-19. Backend Trash & Restore is committed and pushed
-at `74f1e916d83a1865a93962e37243f2c1b96694bd` on `django-migration`, following Named
-Categories at `3f564ba` and Application Identity at `3a62b58`. Backend Deterministic
-Application Derivation is the current **uncommitted** review slice. No frontend
-integration, historical bulk reconciliation, or operational cutover is claimed.
+Maintained checkpoint: 2026-09-20. Backend Deterministic Application Derivation is
+committed at `120d49397297c2ba1337c88503769aec6ae87c41` on `django-migration`,
+following Trash & Restore, Named Categories and Application Identity. Backend
+Retained Email Source Identity and Content Foundation is the current **uncommitted**
+review slice. No provider adoption, frontend integration, historical bulk
+reconciliation, email derivation integration, or operational cutover is claimed.
 
 ## 1. Scope and source of truth
 
@@ -22,6 +23,38 @@ integration, historical bulk reconciliation, or operational cutover is claimed.
   accepted decisions implicitly or append a chronological session transcript.
 
 ## 2. Current verification evidence
+
+### Retained-email foundation — fresh final verification, 2026-09-20
+
+Continuation verified the canonical root, `django-migration`, HEAD/local tracking
+and live remote at `120d493`, preserving the intentional four-modified/seven-new-file
+implementation tree. Review required no code/test correction; this continuation
+completed documentation and verification only. See the
+[retained-email review](DJANGO_RETAINED_EMAIL_REVIEW.md) for exact commands,
+contracts, complete inventory and limitations.
+
+- Focused retention/service/API/concurrency, populated migration and core tests:
+  **36 passed**, exit 0. Affected `email_sync accounts core applications documents
+  postings`: **606 passed**, exit 0. Full Django: **606 passed**, exit 0.
+- System check: no issues, exit 0. Scoped/global migration checks: exit 1 solely
+  for the pre-existing EmailAccount.provider choice AlterField; verbose dry run
+  confirms no retained-model or unrelated drift. Proposed filename is now
+  `0007_alter_emailaccount_provider`; no file was generated.
+- Migration plan: exit 0; additive `email_sync.0006_retained_email_foundation`
+  follows `email_sync.0005_imapcredential` and `accounts.0001_initial`, and is
+  unapplied locally. Populated disposable SQLite preservation passed; no real
+  tracker database was migrated.
+- Frontend Node: **8 passed**, exit 0. Full legacy: **367 passed, exactly the same
+  3 known failures**, 2 warnings, exit 1: two portability real-path PermissionErrors
+  and deletion 500-versus-200. Names/signatures match the supplied baseline below.
+- Final whitespace check passes. Six modified tracked files and seven new files
+  remain uncommitted for review; no dependency/environment changes. Every required
+  final run completed; the known exceptions prevent a fully green repository claim.
+- Provider adoption, live-provider behavior, PostgreSQL concurrency, frontend/domain
+  integration, retained-email derivation, storage/Redis/Celery, backup/restore and
+  operational cutover remain unvalidated or unimplemented as specified in §7.
+
+### Historical derivation verification (`120d493`)
 
 The interrupted implementation started from `74f1e91`. This continuation verified
 the canonical root, branch and local/tracking HEAD and preserved the intentional
@@ -227,7 +260,8 @@ All ten decisions are approved; full boundaries and consequences live in the
 - Django has owned workspaces, stable IDs/FKs, admin, file storage abstraction,
   provider integrations, Celery tasks, and Redis configuration. Included synchronous
   core/application/document/posting APIs now require a selected workspace in the
-  URL. Email APIs and legacy deletion paths remain outside this slice.
+  URL. New retained-email inspection is also workspace-scoped; transitional
+  provider APIs remain separate, and old destructive deletion routes are retired.
   Production settings still inherit SQLite.
 - Environments: `.venv/` for legacy tests; `backend/venv/` for Django. Manifests:
   `_app/requirements.txt`, `requirements-dev.txt`, `desktop/requirements.txt`,
@@ -252,7 +286,7 @@ No newly accepted capability is marked verified merely because it is designed.
 | Search/dashboards/settings | Included reads, counts, search, section adapters, merges, and settings scoped to URL workspace; search parity and Ghosted still pending | Scoped isolation coverage; broader target parity pending | Frontend integration pending |
 | Provider connections | Gmail/Outlook/IMAP connect/sync/disconnect; encrypted credentials | Baseline provider/view coverage, mocked external seams | Historical Gmail OAuth/live-sync checkpoint; complete target flows unvalidated; Outlook/IMAP live validation unestablished |
 | Sync/jobs | Match/discovery/thread writes; inline single sync, queued bulk/Beat | Existing sync/task coverage; not real-broker proof | Real Redis/worker/Beat operation unestablished |
-| Retained messages/review | Metadata records only; no durable source model or discovery review API/account-list API | Target retention/review unimplemented/unverified | Pending |
+| Retained messages/review | Four protected source/observation models, explicit retention service and workspace-scoped read-only inspection; provider sync remains unadopted | Retention, API, migration and SQLite race coverage in §2 | Provider adoption, review actions, frontend and operational validation pending |
 | Postings | Fixture-tested extractor, ingestion helper, list/save/dismiss/restore/apply APIs | Baseline component/fixture coverage | Sync does not call ingestion; apply lacks evidence; full workflow pending |
 | Import/export | No Django legacy importer or portable export/restore | Unimplemented/unverified | Reconciliation/cutover pending |
 | Production | Partial settings/storage/task scaffolding; SQLite inherited, development fallbacks remain | Suite success is not deployment verification | PostgreSQL/storage/jobs/backup/restore/rollback pending |
@@ -262,9 +296,10 @@ No newly accepted capability is marked verified merely because it is designed.
 - Connect `email_sync/sync_service.py` to `postings/services.py` ingestion;
   currently sync writes discoveries/matches, not JobPosting rows. Carry over
   safe job/URL association and evidence behavior.
-- Implement retained sources, account listing, discovery preview/attach/accept/
-  dismiss/restore/sender classification, and evidence/backfill.
-- Review the uncommitted per-Application derivation slice. Historical rows are
+- Review the retained-source foundation; separately authorize provider adoption,
+  account listing, discovery preview/attach/accept/dismiss/restore/sender
+  classification, and evidence/backfill.
+- Per-Application derivation is committed at `120d493`. Historical rows are
   intentionally not bulk-reconciled; missing source facts remain unknown. Future
   importer/cutover work must supply verified provenance and preserve history.
 - Add Ghosted choices/metrics/UI parity. This main-branch change exists only
@@ -460,7 +495,7 @@ No permanent purge, physical file deletion, Workspace Trash, frontend changes,
 automatic expiration, provider/background work or unrelated migration fixes are
 implemented. PostgreSQL concurrency and operational recovery remain unvalidated.
 
-### Backend Deterministic Application Derivation — current uncommitted slice
+### Backend Deterministic Application Derivation — committed at `120d493`
 
 `applications.derivation` applies effective Document type priority
 `rejected > interviewing > applied > drafted > unknown`; non-pipeline is `n/a`.
@@ -492,9 +527,37 @@ mutations record real effective changes once, using recorded-now history timesta
 rather than source dates. Existing duplicate history is preserved. Missing, failed,
 and conflicting evidence is reported; no cross-workspace evidence is admitted.
 
+### Backend Retained Email Source Identity and Content Foundation — uncommitted
+
+`MailboxLineage`, `RetainedMessage`, `RetentionKey` and `RetainedObservation` separate
+established mailbox lineage, strong source identity and exact observation retry.
+Workspace-owned portable identities and complete source namespaces are unique;
+weak IDs/content hashes cannot merge messages. Changed-key and source-content
+conflicts preserve canonical content and candidate observations, with sticky
+ineligibility. Incomplete identity remains inspectable and unresolved.
+
+The explicit internal service validates ownership/references and bounded content,
+then commits under the existing Workspace gate. It performs no provider/network
+work. Default UTF-8 text/HTML limits are 128/256 KiB, with explicit truncation;
+observations over 2 MiB are rejected. Source time precision/offset/provenance remains
+separate from observation and retention times. JSON-only read APIs omit original
+HTML and expose authorized state/content without writes. Admin is read-only.
+
+All new FKs use PROTECT, with no EmailAccount/credential or workflow ownership link;
+account disconnect/deletion preserves retained data. Additive
+`email_sync.0006_retained_email_foundation` follows `email_sync.0005_imapcredential`
+and `accounts.0001_initial`, creates only four tables/five constraints, and performs
+no historical backfill or existing-field alteration. See the
+[retained-email review](DJANGO_RETAINED_EMAIL_REVIEW.md) for contracts and evidence.
+
+Current sync remains transitional and unadopted. No review actions, posting ingestion,
+generated Documents, derivation hooks, frontend integration, purge, import/export,
+workers or historical reconstruction are included. PostgreSQL and operational
+validation remain open; SQLite race tests are not production concurrency proof.
+
 ## 8. Next recommended implementation actions
 
-1. Review the uncommitted derivation slice and verification limitations above.
+1. Review the uncommitted retained-email foundation and verification limitations above.
 2. Resolve the legacy verification blockers under separately approved scope before declaring a fully green checkpoint.
 3. Separately authorize the next slice; retained email/job integration and broader frontend workflows remain pending.
 4. Plan provenance-aware historical reconciliation with importer/cutover work; do not silently backfill current records.

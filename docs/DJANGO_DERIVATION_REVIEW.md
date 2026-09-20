@@ -1,7 +1,10 @@
 # Backend Deterministic Application Derivation — review
 
-2026-09-19. Uncommitted continuation of the interrupted implementation. No commit,
-push, dependency change, real-data migration, or production configuration performed.
+Historical pre-commit review, 2026-09-19. This slice subsequently committed at
+`120d49397297c2ba1337c88503769aec6ae87c41` (`Implement deterministic application
+derivation`). The continuation described below made no commit, push, dependency
+change, real-data migration, or production configuration change; its verification
+results remain historical evidence, not a fresh retained-email verification run.
 
 ## Repository and review scope
 
