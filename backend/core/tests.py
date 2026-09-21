@@ -59,7 +59,7 @@ class AdminSiteSmokeTests(TestCase):
             model_name = model._meta.model_name
             url = f"/admin/{app_label}/{model_name}/add/"
             response = self.client.get(url)
-            expected = 403 if model._meta.label in {"applications.Application", "documents.Category", "documents.CategoryMembership", "documents.FolderOverride", "documents.Document", "documents.DocumentOverride", "documents.DocumentExtraction", "email_sync.MailboxLineage", "email_sync.MailboxPrincipal", "email_sync.AccountMailboxBinding", "email_sync.RetainedMessage", "email_sync.RetentionKey", "email_sync.RetainedObservation"} else 200
+            expected = 403 if model._meta.label in {"applications.Application", "applications.ApplicationMessage", "documents.Category", "documents.CategoryMembership", "documents.FolderOverride", "documents.Document", "documents.DocumentOverride", "documents.DocumentExtraction", "email_sync.MailboxLineage", "email_sync.MailboxPrincipal", "email_sync.AccountMailboxBinding", "email_sync.RetainedMessage", "email_sync.RetentionKey", "email_sync.RetainedObservation"} else 200
             if response.status_code != expected:
                 failures.append((url, response.status_code))
         self.assertEqual(failures, [], f"admin add form(s) failed to load: {failures}")

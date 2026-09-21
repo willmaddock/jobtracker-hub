@@ -200,3 +200,42 @@ class CompanyAlias(models.Model):
 
     def __str__(self) -> str:
         return f"{self.alias} -> {self.canonical}"
+
+
+class ApplicationMessage(models.Model):
+    """Immutable manual link; message_relationships.attach_message owns writes.
+
+    Application owns this relationship, never the retained source. QuerySet/raw
+    SQL are privileged maintenance surfaces, as for retained evidence itself.
+    """
+    class Origin(models.TextChoices):
+        MANUAL = "manual", "Explicit manual attachment"
+
+    workspace = models.ForeignKey(Workspace, on_delete=models.PROTECT)
+    application = models.ForeignKey(Application, on_delete=models.PROTECT, related_name="message_relationships")
+    retained_message = models.ForeignKey("email_sync.RetainedMessage", on_delete=models.PROTECT,
+                                        related_name="application_relationships")
+    portable_id = models.UUIDField(default=uuid.uuid4, editable=False)
+    origin = models.CharField(max_length=16, choices=Origin.choices, default=Origin.MANUAL, editable=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["application", "retained_message"], name="application_message_pair"),
+            models.UniqueConstraint(fields=["workspace", "portable_id"], name="application_message_portable"),
+            models.CheckConstraint(condition=models.Q(origin="manual"), name="application_message_origin"),
+        ]
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding or (self.pk and type(self).objects.filter(pk=self.pk).exists()):
+            raise ValidationError("Application message relationships are immutable.")
+        if (self.application.workspace_id != self.workspace_id
+                or self.retained_message.workspace_id != self.workspace_id
+                or self.retained_message.mailbox.workspace_id != self.workspace_id):
+            raise ValidationError("Application message workspace mismatch.")
+        if self.origin != self.Origin.MANUAL:
+            raise ValidationError("Unknown Application message origin.")
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("Application message deletion is not implemented.")

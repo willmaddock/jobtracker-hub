@@ -2,9 +2,11 @@ from django.urls import path
 from core.lifecycle_views import LifecycleView
 from rest_framework.urlpatterns import format_suffix_patterns
 from .views import ApplicationViewSet, LegacyApplicationDeletionViewSet
+from .message_views import ApplicationMessages
 
 prefix = "workspaces/<int:workspace_id>/applications/"
 urlpatterns = [
+    path(prefix + "<int:pk>/messages/", ApplicationMessages.as_view(), name="application-messages"),
     path(prefix + "<int:pk>/derive/", ApplicationViewSet.as_view({"post": "derive"}), name="application-derive"),
     path(prefix + "<int:pk>/", ApplicationViewSet.as_view({"get": "retrieve"}), name="application-detail"),
     path(prefix, ApplicationViewSet.as_view({"get": "list", "post": "create"}), name="application-list"),

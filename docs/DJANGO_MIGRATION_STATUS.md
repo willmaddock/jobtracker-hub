@@ -3,9 +3,10 @@
 Maintained checkpoint: 2026-09-20. Retained Email Source Identity and Content
 Foundation is committed at `2f0cd1f`; Gmail Mailbox Identity and Durable Lineage
 Foundation is committed at `9f6627770c43fd3b3af492d2201e647af77cc53f` on
-`django-migration`. **Gmail Provider Adoption into Retained-Source Authority** is
-implemented and uncommitted for review. Frontend integration, historical bulk
-reconciliation, retained review/relationships, email derivation and operational
+`django-migration`. Gmail Provider Adoption into Retained-Source Authority is committed
+at `fcbfcf353201552d4a579408299323e0bf731b21`. **Backend ApplicationMessage Relationship
+Foundation** is implemented and uncommitted for review. Frontend integration,
+historical reconciliation, retained review behavior, email derivation and operational
 cutover remain pending.
 
 ## 1. Scope and source of truth
@@ -25,10 +26,38 @@ cutover remain pending.
 
 ## 2. Current verification evidence
 
-### Gmail provider adoption — current verification, 2026-09-20
+### ApplicationMessage relationship foundation — current verification, 2026-09-20
+
+Started from clean `fcbfcf3`; root, branch, HEAD, tracking and live remote matched.
+Continuation preserved the intentional diff at the same HEAD. See the
+[ApplicationMessage review](DJANGO_APPLICATION_MESSAGE_REVIEW.md) for exact contracts,
+changed files, historical migration-test rationale, verification and limitations.
+
+- Final focused relationships, populated/historical migrations and admin: **22 passed**,
+  exit 0. Affected `applications email_sync core postings`: **615 passed**, exit 0.
+  Full Django: **688 passed**, exit 0. System, whitespace and local documentation-link
+  checks pass.
+- System check passes. Scoped Application migration check reports no changes;
+  global dry run reports only the pre-existing EmailAccount.provider choice drift.
+  Sole new migration: `applications.0007_application_message`; additive CreateModel,
+  no historical backfill. Fresh and populated disposable database upgrades pass.
+- Two historical migration tests pin their original Application `0006` schema while
+  retaining the original email `0005`/`0006` baselines; explicit absence assertions
+  prevent later schema from silently entering those baselines.
+- Unexpected local `backend/db.sqlite3` already records `0007` as applied at
+  `2026-09-20 20:12:32 UTC`; the user did not apply it. Read-only investigation found
+  the table and record but cannot attribute the writer. This run did not migrate or
+  alter that database; subsequent verification checks its hash/size/mtime unchanged.
+  This is unresolved local provenance, not operational migration validation.
+- No fresh legacy or frontend suite is claimed. SQLite logical concurrency, synthetic
+  Gmail and API checks do not validate PostgreSQL, live Gmail or browser workflows.
+  Review mutations, generated evidence, historical reconciliation and cutover remain
+  separately scoped; replacement versus supersession remains unresolved.
+
+### Gmail provider adoption — historical verification at `fcbfcf3`, 2026-09-20
 
 Started from the exact clean `9f66277` checkpoint; local/tracking/live remote matched.
-HEAD is unchanged and implementation remains uncommitted. See the
+The implementation was subsequently committed at `fcbfcf3`. See the
 [Gmail adoption review](DJANGO_GMAIL_ADOPTION_REVIEW.md) for inspection, contracts,
 changed files, exact commands and limitations.
 
@@ -628,7 +657,7 @@ retained read APIs and downstream review/posting/evidence workflows are unchange
 Outlook/IMAP identity is not adopted. See the
 [identity review](DJANGO_GMAIL_IDENTITY_REVIEW.md) for historical limits/evidence.
 
-### Gmail Provider Adoption into Retained-Source Authority — uncommitted
+### Gmail Provider Adoption into Retained-Source Authority — committed at `fcbfcf3`
 
 Newly fetched, relevance-qualified Gmail messages now call `retain_observation`
 using native Gmail message ID under verified workspace-owned durable MailboxLineage.
@@ -663,16 +692,44 @@ Matches/discoveries/posting discoveries remain one transitional RFC-based projec
 path, preserving dismissed state and replay behavior. Missing RFC ID can have no
 legacy projection, and two native sources with one RFC ID can have only one legacy
 projection. Replace these consumers with retained-backed relationships before legacy
-retirement. No schema migration, historical backfill/reconciliation, review mutations,
-ApplicationMessage/PostingSource, JobPosting ingestion, generated evidence, Outlook/IMAP
-adoption or frontend work is included. Inspection/admin remain read-only. See the
+retirement. That adoption slice included no schema migration, historical backfill/
+reconciliation, review mutations, ApplicationMessage/PostingSource, JobPosting ingestion,
+generated evidence, Outlook/IMAP adoption or frontend work. Retained inspection/admin
+remain read-only. See the
 [adoption review](DJANGO_GMAIL_ADOPTION_REVIEW.md).
+
+### Backend ApplicationMessage Relationship Foundation — uncommitted
+
+`RetainedMessage → ApplicationMessage → specific Application` is now the canonical
+explicit relationship path. Immutable runtime/portable link identities, original
+creation time and bounded manual origin preserve provenance. Database uniqueness per
+Application/source supports many-to-many links and distinct repeated attempts.
+
+One atomic service uses the Workspace gate, then Application and retained-message
+locks, validates same-workspace ownership and source eligibility, rejects direct
+Application Trash or source conflict, and resolves/creates the pair. POST
+`applications/{id}/messages/` under the explicit workspace route takes only
+`retained_message_id`: 201 first creation, 200 eligible replay without provenance or
+revision churn. GET provides paginated live-Application inspection with existing
+retained summaries. No provider calls, alternate writer or request-intent model.
+
+Trash preserves links/sources and Restore exposes the same relationships. Ordinary
+model edits/deletion are blocked, ancestor FKs PROTECT, and admin is read-only.
+No independent relationship Trash, detach, review decisions or permanent purge.
+Attachment does not modify Application status/activity/history, Documents, retained
+source/observation identity, legacy AccountMatch/Discovery (including posting kind),
+thread hints or postings. Gmail compatibility projection cannot allocate links.
+
+No inference/backfill, generated evidence, PostingSource, JobPosting ingestion,
+provider changes or frontend work is included. Legacy consumers remain temporary
+compatibility and must be replaced before retirement. See the
+[ApplicationMessage review](DJANGO_APPLICATION_MESSAGE_REVIEW.md).
 
 ## 8. Next recommended implementation actions
 
-1. Review the uncommitted Gmail producer adoption and verification limitations above.
+1. Review the uncommitted ApplicationMessage foundation and unresolved local database provenance above.
 2. Resolve the legacy verification blockers under separately approved scope before declaring a fully green checkpoint.
-3. Separately scope retained review/relationship integration now that relevant Gmail sources reach retained authority; broader email/job and frontend work remains pending.
+3. Separately scope retained review behavior using the canonical attachment service; broader email/job and frontend work remains pending.
 4. Plan provenance-aware historical reconciliation with importer/cutover work; do not silently backfill current records.
 5. Connect core browser workflows, then retained email/review/postings/evidence.
 6. Develop import/export alongside models; rehearse representative workspaces.

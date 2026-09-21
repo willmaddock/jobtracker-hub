@@ -19,8 +19,14 @@ class RetentionMigrationTests(TransactionTestCase):
             try:
                 executor = MigrationExecutor(db)
                 leaves = executor.loader.graph.leaf_nodes()
-                baseline = [node for node in leaves if node[0] != "email_sync"] + [("email_sync", "0005_imapcredential")]
+                # Freeze the historical Application checkpoint: its later message
+                # relationship depends on the retained schema being tested here.
+                baseline = [node for node in leaves if node[0] not in {"email_sync", "applications"}] + [
+                    ("applications", "0006_deterministic_derivation"), ("email_sync", "0005_imapcredential")]
                 executor.migrate(baseline)
+                baseline_tables = db.introspection.table_names()
+                self.assertNotIn("email_sync_retainedmessage", baseline_tables)
+                self.assertNotIn("applications_applicationmessage", baseline_tables)
                 old = executor.loader.project_state(baseline).apps
                 def create(app, model, **values):
                     return old.get_model(app, model).objects.using(alias).create(**values)

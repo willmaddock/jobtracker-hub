@@ -1,7 +1,7 @@
 from django.contrib import admin
 from core.lifecycle_admin import LifecycleAdminMixin
 
-from .models import Application, CompanyAlias, Override, StatusHistory
+from .models import Application, ApplicationMessage, CompanyAlias, Override, StatusHistory
 
 
 class OverrideInline(admin.StackedInline):
@@ -68,3 +68,22 @@ class CompanyAliasAdmin(admin.ModelAdmin):
     list_display = ("alias", "canonical", "workspace")
     list_filter = ("workspace",)
     search_fields = ("alias", "canonical")
+
+
+@admin.register(ApplicationMessage)
+class ApplicationMessageAdmin(admin.ModelAdmin):
+    """Inspection only; there is one canonical service writer."""
+    actions = None
+    list_display = ("id", "workspace", "application", "retained_message", "origin", "created_at")
+
+    def get_readonly_fields(self, request, obj=None):
+        return tuple(field.name for field in self.model._meta.fields)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
