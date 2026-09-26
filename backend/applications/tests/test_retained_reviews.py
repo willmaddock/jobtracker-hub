@@ -180,7 +180,7 @@ class ReviewTests(ReviewFixtures, TestCase):
         for url in (self.review_url(), self.review_url(row)):
             for method in ('post', 'put', 'patch', 'delete'):
                 self.assertEqual(getattr(self.client, method)(url, {}, format='json').status_code, 405)
-        for action in ('accept', 'attach', 'dismiss', 'restore', 'resolve', 'reevaluate'):
+        for action in ('accept', 'dismiss', 'restore', 'resolve', 'reevaluate'):
             self.assertEqual(self.client.post(self.review_url(row) + action + '/', {}, format='json').status_code, 404)
         detail = self.detail(row)
         self.assertNotIn('content', detail['retained_message'])

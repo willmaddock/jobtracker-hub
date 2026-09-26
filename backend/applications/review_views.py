@@ -1,23 +1,38 @@
-"""Read-only canonical review inspection; content stays in retained inspection."""
+"""Canonical review inspection and explicit attachment to existing Applications."""
 from django.db.models import Count, F, Q
 from django.shortcuts import get_object_or_404
 from rest_framework.response import Response
+from rest_framework.exceptions import ValidationError
+
+from core.lifecycle import LifecycleContentionMixin
+from .message_views import relationship_data
+from .retained_reviews import attach_review, scoped_reviews
 
 from email_sync.retained_views import Inspection, message_summary
-from .models import ApplicationMessage, RetainedApplicationReview
+from .models import ApplicationMessage
 
 
 def reviews(workspace):
-    return RetainedApplicationReview.objects.filter(workspace=workspace,
-        retained_message__workspace=workspace, retained_message__mailbox__workspace=workspace,
-        originating_observation__workspace=workspace, originating_observation__key__workspace=workspace,
-        originating_observation__message_id=F("retained_message_id"),
-        originating_observation__mailbox_id=F("retained_message__mailbox_id")
-    ).select_related("retained_message", "originating_observation").annotate(candidate_count=Count("candidates"))
+    return scoped_reviews(workspace).select_related(
+        "retained_message", "originating_observation").annotate(
+            candidate_count=Count("candidates", distinct=True),
+            relationship_count=Count("retained_message__application_relationships", distinct=True,
+                filter=Q(retained_message__application_relationships__workspace=workspace,
+                         retained_message__application_relationships__application__workspace=workspace)))
+
+
+def attachment_data(count):
+    return {"attachment_status": "attached" if count else "unattached", "relationship_count": count}
+
+
+def review_relationships(workspace, message_id):
+    return ApplicationMessage.objects.filter(workspace=workspace,
+        retained_message_id=message_id, retained_message__workspace=workspace,
+        retained_message__mailbox__workspace=workspace, application__workspace=workspace)
 
 
 def review_summary(row):
-    return {"id": row.pk, "portable_id": str(row.portable_id), "workspace_id": row.workspace_id,
+    return {**attachment_data(row.relationship_count), "id": row.pk, "portable_id": str(row.portable_id), "workspace_id": row.workspace_id,
             "retained_message": message_summary(row.retained_message),
             "subject": row.retained_message.content.get("subject"),
             "initial_classification": row.initial_classification, "candidate_count": row.candidate_count,
@@ -49,9 +64,24 @@ class RetainedApplicationReviewDetail(Inspection):
                 "current_application": None if app is None else {
                     "company": app.company, "role_label": app.role_label, "section": app.section,
                     "trashed_at": app.trashed_at, "lifecycle_revision": app.lifecycle_revision}})
-        relationships = ApplicationMessage.objects.filter(workspace=workspace,
-            retained_message=row.retained_message, application__workspace=workspace).order_by("pk")
+        relationships = review_relationships(workspace, row.retained_message_id).select_related("application").order_by("pk")
         return Response({**review_summary(row), "candidates": suggestions,
             "relationships": [{"id": link.pk, "portable_id": str(link.portable_id),
                 "application_id": link.application_id, "origin": link.origin,
-                "created_at": link.created_at} for link in relationships]})
+                "created_at": link.created_at,
+                "availability": "trashed" if link.application.is_trashed else "live"} for link in relationships]})
+
+
+class RetainedApplicationReviewAttach(LifecycleContentionMixin, Inspection):
+    http_method_names = ["post", "options"]
+
+    def post(self, request, workspace_id, pk, format=None):
+        if not isinstance(request.data, dict) or set(request.data) != {"application_id"}:
+            raise ValidationError("Supply only application_id.")
+        workspace = self.get_workspace()
+        row, created = attach_review(actor=request.user, workspace=workspace,
+                                     review_id=pk, application_id=request.data["application_id"])
+        # A fresh derived read after commit; no stored state or response-time writes.
+        count = review_relationships(workspace, row.retained_message_id).count()
+        return Response({**relationship_data(row), **attachment_data(count)},
+                        status=201 if created else 200)

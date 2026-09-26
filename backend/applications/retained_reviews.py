@@ -5,6 +5,7 @@ Gmail calls inside its existing message transaction after retention. Database
 uniqueness is the final guard; SQLite lock refusal requires caller replay.
 """
 from django.db import transaction
+from django.db.models import F
 from django.shortcuts import get_object_or_404
 from rest_framework.exceptions import NotFound, ValidationError
 
@@ -55,3 +56,30 @@ def ensure_application_review(*, actor, workspace, retained_message_id, observat
                 RetainedApplicationReviewCandidate.objects.create(review=review, application=application,
                     application_portable_id=application.portable_id)
         return review, created
+
+
+def scoped_reviews(workspace):
+    """Validate immutable review/source/provenance references for reads and attach."""
+    return RetainedApplicationReview.objects.filter(workspace=workspace,
+        retained_message__workspace=workspace, retained_message__mailbox__workspace=workspace,
+        originating_observation__workspace=workspace, originating_observation__key__workspace=workspace,
+        originating_observation__message_id=F("retained_message_id"),
+        originating_observation__mailbox_id=F("retained_message__mailbox_id"))
+
+
+def attach_review(*, actor, workspace, review_id, application_id):
+    """Resolve immutable provenance, then delegate all creation/locking authority.
+
+    No outer transaction or source/review locks: supported writers cannot reparent
+    or delete reviews. attach_message reauthorizes ownership and checks mutable
+    target/source eligibility inside its Workspace → Application → source transaction.
+    """
+    from .message_relationships import attach_message
+
+    if not actor.is_authenticated or workspace.owner_id != actor.pk:
+        raise NotFound()
+    if type(review_id) is not int or not 0 < review_id <= 9223372036854775807:
+        raise ValidationError("A positive canonical integer identity is required.")
+    review = get_object_or_404(scoped_reviews(workspace), pk=review_id)
+    return attach_message(actor=actor, workspace=workspace, application_id=application_id,
+                          retained_message_id=review.retained_message_id)

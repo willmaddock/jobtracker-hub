@@ -1,6 +1,9 @@
 # Retained Application Review Identity & Candidate Snapshot Foundation
 
-Bounded implementation for human review, 2026-09-26. Uncommitted; no push.
+Historical foundation implementation record, 2026-09-26. Subsequently committed at
+`eedf57abbdf98f05d430ac116941fc447336f87b`; the final-state inventory below records
+the original pre-commit run. Current attachment behavior is documented in the
+[attachment review report](DJANGO_RETAINED_REVIEW_ATTACH_REVIEW.md).
 
 ## Repository checkpoint before work
 
