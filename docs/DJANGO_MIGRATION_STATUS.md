@@ -1,13 +1,14 @@
 # Django migration: current status
 
-Maintained checkpoint: 2026-09-20. Retained Email Source Identity and Content
+Maintained checkpoint: 2026-09-26. Retained Email Source Identity and Content
 Foundation is committed at `2f0cd1f`; Gmail Mailbox Identity and Durable Lineage
 Foundation is committed at `9f6627770c43fd3b3af492d2201e647af77cc53f` on
 `django-migration`. Gmail Provider Adoption into Retained-Source Authority is committed
 at `fcbfcf353201552d4a579408299323e0bf731b21`. **Backend ApplicationMessage Relationship
-Foundation** is implemented and uncommitted for review. Frontend integration,
-historical reconciliation, retained review behavior, email derivation and operational
-cutover remain pending.
+Foundation** is committed at `b5c1faf1ad100acfd3d24aead679c3a1831f3a48`.
+**Retained Application Review Identity & Candidate Snapshot Foundation** is implemented
+and uncommitted for review. Review mutations, frontend integration, historical
+reconciliation, email derivation and operational cutover remain pending.
 
 ## 1. Scope and source of truth
 
@@ -26,7 +27,31 @@ cutover remain pending.
 
 ## 2. Current verification evidence
 
-### ApplicationMessage relationship foundation — current verification, 2026-09-20
+### Retained Application review foundation — current verification, 2026-09-26
+
+Started from clean `b5c1faf`; root, branch, HEAD, tracking reference and live remote
+matched. See the [review record](DJANGO_RETAINED_APPLICATION_REVIEW.md) for exact
+commands, schema/API contracts, file inventory and limitations.
+
+- Final focused review/relationship/historical migration/admin run: **47 passed**.
+  Affected `applications email_sync core postings`: **638 passed** before two further
+  tests. Final full Django, including those tests and a strengthened fresh-observation
+  replay assertion: **713 passed**, exit 0. **25 new tests** including migration safety.
+- System check, documentation links and whitespace checks pass. Scoped Application
+  migration check has no changes; global dry run reports only known
+  `email_sync.0008_alter_emailaccount_provider` choice drift. No new unexpected drift.
+- Sole new migration: `applications.0008_retained_application_review`, additive schema
+  only. Populated pre-review tables/rows remain unchanged and zero historical reviews/
+  candidates are created. Plans were inspected using disposable settings.
+- Missing `backend/venv` was created and declared requirements installed with explicit
+  user approval; dependency declarations are unchanged. `backend/db.sqlite3` was absent
+  at inspection and remains absent. All database verification used in-memory/disposable
+  SQLite; the previous run's unresolved local provenance is not resolved by this run.
+- No PostgreSQL, live Gmail, browser, worker/storage or cutover validation. No fresh
+  legacy/frontend suite is claimed. Review actions, historical reconciliation, evidence
+  generation and frontend integration remain separately scoped.
+
+### ApplicationMessage relationship foundation — historical verification at `b5c1faf`, 2026-09-20
 
 Started from clean `fcbfcf3`; root, branch, HEAD, tracking and live remote matched.
 Continuation preserved the intentional diff at the same HEAD. See the
@@ -698,7 +723,7 @@ generated evidence, Outlook/IMAP adoption or frontend work. Retained inspection/
 remain read-only. See the
 [adoption review](DJANGO_GMAIL_ADOPTION_REVIEW.md).
 
-### Backend ApplicationMessage Relationship Foundation — uncommitted
+### Backend ApplicationMessage Relationship Foundation — committed `b5c1faf`
 
 `RetainedMessage → ApplicationMessage → specific Application` is now the canonical
 explicit relationship path. Immutable runtime/portable link identities, original
@@ -725,11 +750,36 @@ provider changes or frontend work is included. Legacy consumers remain temporary
 compatibility and must be replaced before retirement. See the
 [ApplicationMessage review](DJANGO_APPLICATION_MESSAGE_REVIEW.md).
 
+### Retained Application Review Identity & Candidate Snapshot Foundation — uncommitted
+
+`RetainedMessage → RetainedApplicationReview → RetainedApplicationReviewCandidate`
+separates review identity from source identity and canonical ApplicationMessage links.
+One workspace-owned portable review identity per source retains the first zero/one/many
+candidate snapshot and originating observation. Candidates preserve specific attempt
+portable IDs, with nullable current Application references; replay never replaces the
+set when matching facts change. Trash/Restore preserves provenance and only changes
+current target availability. Source conflicts remain inspectable and ineligible.
+
+One internal atomic ensure service validates Workspace/source/observation/candidates,
+using Workspace → source → review locks, without Application locks. Gmail invokes it
+after retention and before legacy projection/RFC suppression for match, ambiguous and
+unmatched Application classifications. Posting and unresolved observations do not enter
+this domain. Legacy matching/classification/projections and frontend consumers remain.
+
+Workspace-scoped `application-reviews/` list/detail routes are JSON inspection only;
+source content stays in existing retained inspection. Detail shows candidates' current
+availability and existing relationships. Admin is read-only. Additive Application
+migration `0008_retained_application_review` creates no historical reviews/candidates.
+No review decisions, attachment, detach, evidence, posting-source ingestion, provider
+expansion, permanent purge or frontend integration. See the
+[retained Application review](DJANGO_RETAINED_APPLICATION_REVIEW.md) for full contracts,
+verification, changed files and limitations. The queue does not cover all legacy history.
+
 ## 8. Next recommended implementation actions
 
-1. Review the uncommitted ApplicationMessage foundation and unresolved local database provenance above.
+1. Review the uncommitted retained Application review foundation; prior local database provenance remains unresolved.
 2. Resolve the legacy verification blockers under separately approved scope before declaring a fully green checkpoint.
-3. Separately scope retained review behavior using the canonical attachment service; broader email/job and frontend work remains pending.
+3. Separately scope review mutations using the canonical attachment service; dismiss/restore semantics, broader email/job and frontend work remain pending.
 4. Plan provenance-aware historical reconciliation with importer/cutover work; do not silently backfill current records.
 5. Connect core browser workflows, then retained email/review/postings/evidence.
 6. Develop import/export alongside models; rehearse representative workspaces.

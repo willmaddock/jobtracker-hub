@@ -39,6 +39,7 @@ from django.utils import timezone
 
 from applications.models import Application
 from applications.creation import lock_workspace
+from applications.retained_reviews import ensure_application_review
 
 from .gmail_retention import mailbox_for_account, retain_gmail_message
 
@@ -324,6 +325,10 @@ def _sync_account(account, provider, *, since, now):
                 # Conflicts preserve evidence but cannot cause new automatic effects.
                 if retained.state == "conflict":
                     continue
+                if retained.message_id is not None and kind in {"match", "ambiguous", "application"}:
+                    ensure_application_review(actor=account.workspace.owner, workspace=account.workspace,
+                        retained_message_id=retained.message_id, observation_id=retained.observation_id,
+                        classification=kind, candidate_ids=[app.pk for app in classification[1]])
                 if not message.rfc_message_id:
                     continue
                 # Recheck inside the gate for competing syncs. Legacy rows remain

@@ -1,7 +1,8 @@
 from django.contrib import admin
 from core.lifecycle_admin import LifecycleAdminMixin
 
-from .models import Application, ApplicationMessage, CompanyAlias, Override, StatusHistory
+from .models import (Application, ApplicationMessage, CompanyAlias, Override, StatusHistory,
+                     RetainedApplicationReview, RetainedApplicationReviewCandidate)
 
 
 class OverrideInline(admin.StackedInline):
@@ -87,3 +88,13 @@ class ApplicationMessageAdmin(admin.ModelAdmin):
 
     def has_delete_permission(self, request, obj=None):
         return False
+
+
+@admin.register(RetainedApplicationReview)
+class RetainedApplicationReviewAdmin(ApplicationMessageAdmin):
+    list_display = ("id", "workspace", "retained_message", "initial_classification", "created_at")
+
+
+@admin.register(RetainedApplicationReviewCandidate)
+class RetainedApplicationReviewCandidateAdmin(ApplicationMessageAdmin):
+    list_display = ("id", "review", "application_portable_id", "application", "created_at")

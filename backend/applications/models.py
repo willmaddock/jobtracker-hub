@@ -239,3 +239,74 @@ class ApplicationMessage(models.Model):
 
     def delete(self, *args, **kwargs):
         raise ValidationError("Application message deletion is not implemented.")
+
+
+class ReviewProvenance(models.Model):
+    """Ordinary writes are insert-only; queryset/raw SQL are maintenance surfaces."""
+    class Meta:
+        abstract = True
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding or (self.pk and type(self).objects.filter(pk=self.pk).exists()):
+            raise ValidationError("Application review provenance is immutable.")
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("Application review deletion is not implemented.")
+
+
+class RetainedApplicationReview(ReviewProvenance):
+    """One Application-association review per source; no user decision state."""
+    class Classification(models.TextChoices):
+        MATCH = "match", "Single candidate"
+        AMBIGUOUS = "ambiguous", "Multiple candidates"
+        APPLICATION = "application", "No candidate"
+
+    workspace = models.ForeignKey(Workspace, on_delete=models.PROTECT)
+    retained_message = models.OneToOneField("email_sync.RetainedMessage", on_delete=models.PROTECT,
+                                           related_name="application_review")
+    portable_id = models.UUIDField(default=uuid.uuid4, editable=False)
+    originating_observation = models.ForeignKey("email_sync.RetainedObservation", on_delete=models.PROTECT)
+    initial_classification = models.CharField(max_length=16, choices=Classification.choices, editable=False)
+    snapshot_version = models.PositiveSmallIntegerField(default=1, editable=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["workspace", "portable_id"], name="application_review_portable"),
+            models.CheckConstraint(condition=models.Q(initial_classification__in=["match", "ambiguous", "application"]),
+                                   name="application_review_class"),
+        ]
+
+    def save(self, *args, **kwargs):
+        observation = self.originating_observation
+        if (self.retained_message.workspace_id != self.workspace_id
+                or self.retained_message.mailbox.workspace_id != self.workspace_id
+                or observation.workspace_id != self.workspace_id
+                or observation.key.workspace_id != self.workspace_id
+                or observation.message_id != self.retained_message_id
+                or observation.mailbox_id != self.retained_message.mailbox_id):
+            raise ValidationError("Application review workspace/source mismatch.")
+        if self.initial_classification not in self.Classification.values:
+            raise ValidationError("Unknown Application review classification.")
+        return super().save(*args, **kwargs)
+
+
+class RetainedApplicationReviewCandidate(ReviewProvenance):
+    """Suggestion identity survives target removal; never a relationship or owner."""
+    review = models.ForeignKey(RetainedApplicationReview, on_delete=models.PROTECT, related_name="candidates")
+    application = models.ForeignKey(Application, null=True, on_delete=models.SET_NULL,
+                                    related_name="retained_review_candidates")
+    application_portable_id = models.UUIDField(editable=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["review", "application_portable_id"],
+                                              name="application_review_candidate")]
+
+    def save(self, *args, **kwargs):
+        if self.application_id is not None and (
+                self.application.workspace_id != self.review.workspace_id
+                or self.application.portable_id != self.application_portable_id):
+            raise ValidationError("Application candidate workspace/identity mismatch.")
+        return super().save(*args, **kwargs)
