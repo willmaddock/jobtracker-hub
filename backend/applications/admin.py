@@ -2,7 +2,7 @@ from django.contrib import admin
 from core.lifecycle_admin import LifecycleAdminMixin
 
 from .models import (Application, ApplicationMessage, CompanyAlias, Override, StatusHistory,
-                     RetainedApplicationReview, RetainedApplicationReviewCandidate)
+                     RetainedApplicationReview, RetainedApplicationReviewCandidate, RetainedApplicationReviewDisposition)
 
 
 class OverrideInline(admin.StackedInline):
@@ -98,3 +98,8 @@ class RetainedApplicationReviewAdmin(ApplicationMessageAdmin):
 @admin.register(RetainedApplicationReviewCandidate)
 class RetainedApplicationReviewCandidateAdmin(ApplicationMessageAdmin):
     list_display = ("id", "review", "application_portable_id", "application", "created_at")
+
+
+@admin.register(RetainedApplicationReviewDisposition)
+class RetainedApplicationReviewDispositionAdmin(ApplicationMessageAdmin):
+    list_display = ("review", "dismissed_at", "revision")

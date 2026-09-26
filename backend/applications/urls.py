@@ -3,7 +3,7 @@ from core.lifecycle_views import LifecycleView
 from rest_framework.urlpatterns import format_suffix_patterns
 from .views import ApplicationViewSet, LegacyApplicationDeletionViewSet
 from .message_views import ApplicationMessages
-from .review_views import RetainedApplicationReviewList, RetainedApplicationReviewDetail, RetainedApplicationReviewAttach
+from .review_views import RetainedApplicationReviewList, RetainedApplicationReviewDetail, RetainedApplicationReviewAttach, RetainedApplicationReviewDispositionView
 
 prefix = "workspaces/<int:workspace_id>/applications/"
 urlpatterns = [
@@ -21,6 +21,12 @@ urlpatterns = [
     path("applications/<int:pk>/delete/", LegacyApplicationDeletionViewSet.as_view({"post": "delete"}), name="application-delete"),
     path("applications/bulk-delete/", LegacyApplicationDeletionViewSet.as_view({"post": "bulk_delete"}), name="application-bulk-delete"),
 ]
+
+for transition in ("dismiss", "restore"):
+    urlpatterns.append(path(
+        f"workspaces/<int:workspace_id>/application-reviews/<int:pk>/{transition}/",
+        RetainedApplicationReviewDispositionView.as_view(), {"transition": transition},
+        name=f"application-review-{transition}"))
 
 # Preserve the suffix variants previously supplied by DefaultRouter.
 urlpatterns = format_suffix_patterns(urlpatterns)

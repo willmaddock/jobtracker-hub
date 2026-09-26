@@ -1,17 +1,20 @@
-"""Canonical initial snapshot writer; no relationship or review decision effects.
+"""Immutable review snapshots, mutable disposition, and attachment admission.
 
-Lock order: Workspace gate → RetainedMessage → review. No Application row locks.
-Gmail calls inside its existing message transaction after retention. Database
-uniqueness is the final guard; SQLite lock refusal requires caller replay.
+Snapshot creation takes Workspace → RetainedMessage → review, without Application
+locks. Disposition takes only the Workspace gate. Attachment holds that gate
+through admission and delegates Workspace → Application → source to attach_message.
+SQLite lock refusal requires caller replay; no automatic retries.
 """
 from django.db import transaction
 from django.db.models import F
+from django.utils import timezone
 from django.shortcuts import get_object_or_404
-from rest_framework.exceptions import NotFound, ValidationError
+from rest_framework.exceptions import APIException, NotFound, ValidationError
 
 from email_sync.models import RetainedMessage, RetainedObservation
 from .creation import lock_workspace
-from .models import Application, RetainedApplicationReview, RetainedApplicationReviewCandidate
+from .models import (Application, ApplicationMessage, RetainedApplicationReview,
+                     RetainedApplicationReviewCandidate, RetainedApplicationReviewDisposition)
 
 
 def ensure_application_review(*, actor, workspace, retained_message_id, observation_id,
@@ -67,19 +70,71 @@ def scoped_reviews(workspace):
         originating_observation__mailbox_id=F("retained_message__mailbox_id"))
 
 
-def attach_review(*, actor, workspace, review_id, application_id):
-    """Resolve immutable provenance, then delegate all creation/locking authority.
+class ReviewDispositionConflict(APIException):
+    status_code = 409
+    default_code = "review_dismissed"
+    default_detail = "Restore this review before attaching a new Application."
 
-    No outer transaction or source/review locks: supported writers cannot reparent
-    or delete reviews. attach_message reauthorizes ownership and checks mutable
-    target/source eligibility inside its Workspace → Application → source transaction.
-    """
-    from .message_relationships import attach_message
 
+def disposition_data(disposition):
+    return {"state": "dismissed" if disposition and disposition.dismissed_at else "active",
+            "revision": disposition.revision if disposition else 0,
+            "dismissed_at": disposition.dismissed_at if disposition else None}
+
+
+def validate_review_actor(actor, workspace, review_id):
     if not actor.is_authenticated or workspace.owner_id != actor.pk:
         raise NotFound()
     if type(review_id) is not int or not 0 < review_id <= 9223372036854775807:
         raise ValidationError("A positive canonical integer identity is required.")
-    review = get_object_or_404(scoped_reviews(workspace), pk=review_id)
-    return attach_message(actor=actor, workspace=workspace, application_id=application_id,
-                          retained_message_id=review.retained_message_id)
+
+
+def set_review_dismissal(*, actor, workspace, review_id, dismissed, expected_revision):
+    """One desired-state writer; Workspace serializes even absent sidecars."""
+    validate_review_actor(actor, workspace, review_id)
+    if type(dismissed) is not bool:
+        raise ValidationError("A boolean desired dismissal state is required.")
+    if type(expected_revision) is not int or not 0 <= expected_revision <= 9223372036854775807:
+        raise ValidationError({"expected_revision": "A nonnegative canonical integer is required."})
+    with transaction.atomic():
+        lock_workspace(actor, workspace)
+        review = get_object_or_404(scoped_reviews(workspace), pk=review_id)
+        disposition = RetainedApplicationReviewDisposition.objects.filter(review=review).first()
+        current = disposition_data(disposition)
+        if expected_revision != current["revision"]:
+            raise ReviewDispositionConflict("Review disposition revision changed. Refetch current state.",
+                                           code="stale_revision")
+        if dismissed != (current["state"] == "dismissed"):
+            if disposition is None:
+                disposition = RetainedApplicationReviewDisposition(review=review)
+            disposition.dismissed_at = timezone.now() if dismissed else None
+            disposition.revision += 1
+            disposition.save()
+        return {"id": review.pk, "workspace_id": workspace.pk,
+                "disposition": disposition_data(disposition)}
+
+
+def attach_review(*, actor, workspace, review_id, application_id):
+    """Hold Workspace through disposition admission and canonical pair delegation.
+
+    No review/source row locks precede Application locks. attach_message retains
+    sole creation authority and its Workspace → Application → source lock order.
+    """
+    from .message_relationships import attach_message
+
+    validate_review_actor(actor, workspace, review_id)
+    if type(application_id) is not int or not 0 < application_id <= 9223372036854775807:
+        raise ValidationError("A positive canonical integer identity is required.")
+    with transaction.atomic():
+        lock_workspace(actor, workspace)
+        review = get_object_or_404(scoped_reviews(workspace), pk=review_id)
+        disposition = RetainedApplicationReviewDisposition.objects.filter(review=review).first()
+        application = get_object_or_404(Application, pk=application_id, workspace=workspace)
+        pair = ApplicationMessage.objects.filter(application=application,
+                                                 retained_message_id=review.retained_message_id).first()
+        if pair is not None and pair.workspace_id != workspace.pk:
+            raise NotFound()
+        if disposition and disposition.dismissed_at and pair is None:
+            raise ReviewDispositionConflict()
+        return attach_message(actor=actor, workspace=workspace, application_id=application_id,
+                              retained_message_id=review.retained_message_id)

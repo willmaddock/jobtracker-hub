@@ -8,9 +8,10 @@ at `fcbfcf353201552d4a579408299323e0bf731b21`. **Backend ApplicationMessage Rela
 Foundation** is committed at `b5c1faf1ad100acfd3d24aead679c3a1831f3a48`.
 **Retained Application Review Identity & Candidate Snapshot Foundation** is committed
 at `eedf57abbdf98f05d430ac116941fc447336f87b`. **Retained Review Attach to Existing
-Application** is implemented and uncommitted for review. Broader review actions,
-frontend integration, historical reconciliation, email derivation and operational
-cutover remain pending.
+Application** is committed at `4d545820f62d92c76cf4da189706f17b3832949f`.
+**Retained Review Disposition — Dismiss / Restore Foundation** is implemented and
+uncommitted for review. Broader review actions, frontend integration, historical
+reconciliation, email derivation and operational cutover remain pending.
 
 ## 1. Scope and source of truth
 
@@ -29,7 +30,32 @@ cutover remain pending.
 
 ## 2. Current verification evidence
 
-### Retained review attachment — current verification, 2026-09-26
+### Retained review disposition — current verification, 2026-09-26
+
+Base `4d545820f62d92c76cf4da189706f17b3832949f` on `django-migration`; local HEAD,
+tracking and live remote verified before edits and again when recovering the eight-file
+interrupted implementation. No commit/push or unrelated changes. See the
+[disposition review report](DJANGO_RETAINED_REVIEW_DISPOSITION_REVIEW.md) for exact
+commands, file inventory, transaction reasoning and test-harness correction.
+
+- Focused review/disposition/attachment/relationship/historical migration/lifecycle/admin:
+  **93 passed**, exit 0, 6.000s.
+- Affected `applications documents email_sync core postings`: **726 passed**, exit 0,
+  96.230s. Full Django: **744 passed**, exit 0, 102.982s, final code/test state.
+  **19 new tests** cover disposition, serialization, preservation and migration.
+- System checks, whitespace and local documentation links pass. Application model drift
+  check has no changes; new `0009` fully represents the sidecar. Global dry run reports
+  only known `email_sync.0008_alter_emailaccount_provider` drift; no file generated.
+- Populated forward upgrade from Application `0008` preserves every old table/column,
+  fabricates zero dispositions, enforces one-to-one identity and supports forward replay.
+  Existing historical migration tests pass unchanged. No data migration/backfill.
+- Tests and management checks use external in-memory SQLite settings; historical
+  migration fixtures use disposable files. `backend/db.sqlite3` remains absent.
+  No real data or dependency changes. PostgreSQL locking/deadlocks, live Gmail, browser,
+  Redis/Celery, storage, deployment, backup/restore and cutover remain unvalidated.
+  No fresh legacy FastAPI/frontend suite is claimed.
+
+### Retained review attachment — historical verification at `4d54582`, 2026-09-26
 
 Verified clean checkpoint `eedf57a`, including exact live remote SHA after authorized
 network escalation. The [attachment review report](DJANGO_RETAINED_REVIEW_ATTACH_REVIEW.md)
@@ -46,8 +72,8 @@ records exact commands, API and transaction boundaries, files and limitations.
   use disposable databases. `backend/db.sqlite3` remains absent; no real data changed.
 - No dependency, frontend, provider or legacy implementation changes. No PostgreSQL,
   live Gmail, browser, Redis/Celery, storage, backup/restore or cutover validation.
-  Dismiss/restore semantics remain unapproved and deferred; broader review workflow
-  completion is not claimed. No commit or push.
+  Dismiss/restore was deferred at this checkpoint; the approved disposition slice is
+  recorded separately below. These results predate that implementation.
 
 ### Retained Application review foundation — historical verification at `eedf57a`, 2026-09-26
 
@@ -405,7 +431,7 @@ No newly accepted capability is marked verified merely because it is designed.
 | Search/dashboards/settings | Included reads, counts, search, section adapters, merges, and settings scoped to URL workspace; search parity and Ghosted still pending | Scoped isolation coverage; broader target parity pending | Frontend integration pending |
 | Provider connections | Gmail/Outlook/IMAP connect/sync/disconnect; encrypted credentials | Baseline provider/view coverage, mocked external seams | Historical Gmail OAuth/live-sync checkpoint; complete target flows unvalidated; Outlook/IMAP live validation unestablished |
 | Sync/jobs | Gmail per-message retention plus transitional match/discovery/thread projection; inline single sync, queued bulk/Beat | Gmail adoption/replay and existing sync/task coverage; not real-broker proof | Real Redis/worker/Beat operation unestablished |
-| Retained messages/review | Protected source/observation models, verified Gmail lineage and native-ID producer adoption; scoped review inspection and explicit existing-Application attachment with derived status | Retention, Gmail adoption, attachment API, migration preservation and SQLite logical concurrency coverage in §2 | Other-provider adoption, broader review actions, frontend and operational validation pending |
+| Retained messages/review | Protected source/observation models, verified Gmail lineage and native-ID producer adoption; scoped review inspection, explicit existing-Application attachment with derived status and independent whole-review disposition | Retention, Gmail adoption, attachment/disposition APIs, migration preservation and SQLite logical concurrency coverage in §2 | Other-provider adoption, broader review actions, frontend and operational validation pending |
 | Postings | Fixture-tested extractor, ingestion helper, list/save/dismiss/restore/apply APIs | Baseline component/fixture coverage | Sync does not call ingestion; apply lacks evidence; full workflow pending |
 | Import/export | No Django legacy importer or portable export/restore | Unimplemented/unverified | Reconciliation/cutover pending |
 | Production | Partial settings/storage/task scaffolding; SQLite inherited, development fallbacks remain | Suite success is not deployment verification | PostgreSQL/storage/jobs/backup/restore/rollback pending |
@@ -798,12 +824,14 @@ attachment is now added below. See the
 [retained Application review](DJANGO_RETAINED_APPLICATION_REVIEW.md) for full contracts,
 verification, changed files and limitations. The queue does not cover all legacy history.
 
-### Retained Review Attach to Existing Application — uncommitted
+### Retained Review Attach to Existing Application — committed at `4d54582`
 
 `POST /api/workspaces/{workspace_id}/application-reviews/{id}/attach/` accepts only
 `{"application_id": positive_integer}`. Scoped immutable review provenance supplies
 the canonical source ID; `attach_message()` remains the sole relationship writer and
-transaction/lock authority. No outer transaction or extra review/source locks.
+creation/lock authority. At the attachment checkpoint there was no outer
+transaction. Disposition admission now holds the Workspace gate around delegation,
+as described below, without extra review/source locks.
 Creation returns 201; eligible existing-pair replay returns 200. Trash, source conflict,
 ownership, strict payload and contention behavior follow the canonical service.
 
@@ -817,15 +845,39 @@ availability. Existing direct relationship writes are immediately reflected.
 
 No schema/data migration, historical scan, legacy write, provider change, evidence,
 derivation or frontend change. No terminal acceptance or stored attachment state.
-Dismiss/restore semantics remain unapproved and deferred. See the
+Dismiss/restore was outside that attachment slice and is now implemented below. See the
 [attachment review report](DJANGO_RETAINED_REVIEW_ATTACH_REVIEW.md) for verification,
 transaction reasoning and operational limits.
 
+### Retained Review Disposition — uncommitted
+
+`RetainedApplicationReviewDisposition` is a mutable one-to-one sidecar using review
+identity, nullable `dismissed_at` and a nonnegative revision. No disposition row means
+active/revision 0. The first actual dismissal allocates revision 1; restore clears the
+timestamp while keeping the row. Current-revision no-ops do not write; stale revision
+rejects before no-op detection. Ordinary deletion/reparenting and admin mutation are
+blocked. One additive schema-only Application `0009` has no historical backfill.
+
+`POST .../application-reviews/{id}/dismiss/` and `/restore/` accept exactly
+`{"expected_revision": nonnegative_integer}` and return identity plus nested disposition.
+The scoped desired-state service owns both transitions; conflict does not prevent
+review dismissal/restoration. List/detail expose state/revision/timestamp and remain
+inclusive. No disposition filter, handled state, candidate decision or generalized Trash.
+
+Review attachment holds the Workspace gate before disposition admission through
+unchanged canonical `attach_message()` delegation. Dismissed new pairs return
+`409 review_dismissed`; existing pairs still recheck canonical Trash/conflict eligibility.
+The direct ApplicationMessage API remains independent. No relationship or provenance
+changes occur during disposition transitions, and attachment never changes disposition.
+Application Trash/Restore remains independent. Historical Discovery is never inferred
+or rewritten. See the [disposition review report](DJANGO_RETAINED_REVIEW_DISPOSITION_REVIEW.md)
+for transaction reasoning, actual verification and operational limitations.
+
 ## 8. Next recommended implementation actions
 
-1. Review the uncommitted retained review attachment slice; prior local database provenance remains unresolved.
+1. Review the uncommitted retained review disposition slice; prior local database provenance remains unresolved.
 2. Resolve the legacy verification blockers under separately approved scope before declaring a fully green checkpoint.
-3. Separately scope further review actions; dismiss/restore semantics remain unapproved and deferred, along with broader email/job and frontend work.
+3. Separately scope further review actions and future filtering/queue UX, along with broader email/job and frontend work.
 4. Plan provenance-aware historical reconciliation with importer/cutover work; do not silently backfill current records.
 5. Connect core browser workflows, then retained email/review/postings/evidence.
 6. Develop import/export alongside models; rehearse representative workspaces.

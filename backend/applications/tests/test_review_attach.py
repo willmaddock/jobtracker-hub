@@ -256,11 +256,11 @@ class ReviewAttachConcurrencyTests(AttachFixtures, TransactionTestCase):
         self.assertEqual(self.submit(review).data['code'], 'retained_source_ineligible')
         self.assertEqual(before, list(ApplicationMessage.objects.values()))
 
-    def test_no_outer_transaction_and_lock_refusal(self):
+    def test_outer_admission_transaction_and_lock_refusal(self):
         review, _ = self.ensure()
         from applications.message_relationships import attach_message
         def delegate(**kwargs):
-            self.assertFalse(connection.in_atomic_block)
+            self.assertTrue(connection.in_atomic_block)
             return attach_message(**kwargs)
         with patch('applications.message_relationships.attach_message', side_effect=delegate):
             self.assertEqual(self.submit(review).status_code, 201)

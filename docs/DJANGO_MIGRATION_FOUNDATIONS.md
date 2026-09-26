@@ -370,6 +370,45 @@ Exports include approved content/provenance/relationships/terminal state, never
 credentials or live authorization. Each launch provider separately validates locator,
 reconnect, folder movement, timestamps, missing IDs, pagination/retry and thread semantics.
 
+### Retained Application review disposition — approved bounded contract, 2026-09-26
+
+Whole-review dismissal means the retained review is no longer an active Application-
+association review. It is not candidate rejection, generic handled/accepted state,
+source-global irrelevance, Trash, or deletion of sources, evidence or relationships.
+Immutable RetainedApplicationReview and candidate snapshots remain provenance;
+a separate mutable one-to-one disposition owns only dismissal and its revision.
+
+Nullable `dismissed_at` represents active (null) or dismissed (timestamp); no redundant
+boolean is stored. Missing disposition means active/revision 0 and creates no row on
+read or restore no-op. First actual dismissal allocates revision 1. Restore clears
+the timestamp, increments revision and retains the sidecar. Current-revision no-ops
+preserve revision/timestamp. Check revision before no-op detection; stale requests
+return `409 stale_revision`. One desired-state setter handles both actions, without
+a toggle or required HTTP Idempotency-Key. Ordinary deletion must not reset history.
+The timestamp records the current dismissal, not a complete transition audit log.
+
+Disposition and review-mediated attachment serialize through the Workspace gate.
+Check current disposition under that gate and hold it through relationship delegation.
+A dismissed review cannot create a new Application/source pair (`409 review_dismissed`);
+an existing canonical pair still delegates to `attach_message()` for current Trash/
+source-conflict eligibility. Corrupt references reject, never authorize creation.
+`attach_message()` remains the sole relationship writer; the direct relationship API
+is independent of disposition. Attachment never dismisses or alters disposition.
+
+If attachment wins serialization, its pair survives later dismissal. If dismissal
+wins, subsequent new review-mediated attachment rejects. No source/review row lock
+may precede Application locking in a conflicting order. Disposition itself does not
+need Application/source locks or relationship writes. Source conflict permits dismiss/
+restore. Application Trash/Restore and review disposition never update each other.
+Zero, one and many relationships remain valid with either review disposition.
+
+Expose explicit nested disposition in review list/detail and action responses. Keep
+list defaults inclusive; disposition filtering/queue UX is deferred to frontend scope.
+No data backfill or inference from legacy Discovery; historical reviews, sources,
+observations, candidates, relationships and legacy state remain unchanged. This bounded
+contract adds no candidate decisions, accept/create, detach, evidence generation,
+PostingSource/ingestion, historical reconciliation, provider actions or generalized Trash.
+
 ## 7. Topic 6 — Workspace scoping contract
 
 Normal resources/actions use `/api/workspaces/{workspace_id}/...`, including object,

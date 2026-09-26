@@ -310,3 +310,31 @@ class RetainedApplicationReviewCandidate(ReviewProvenance):
                 or self.application.portable_id != self.application_portable_id):
             raise ValidationError("Application candidate workspace/identity mismatch.")
         return super().save(*args, **kwargs)
+
+
+class RetainedApplicationReviewDisposition(models.Model):
+    """Mutable whole-review state; retained_reviews.set_review_dismissal owns writes.
+
+    No ordinary reparenting/deletion or admin mutation. QuerySet/bulk/raw SQL
+    remain privileged maintenance surfaces, as for review provenance itself.
+    """
+    review = models.OneToOneField(RetainedApplicationReview, primary_key=True,
+        related_name="disposition", on_delete=models.PROTECT)
+    dismissed_at = models.DateTimeField(null=True, blank=True, default=None, editable=False)
+    revision = models.PositiveBigIntegerField(default=0, editable=False)
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding and self.pk != self._loaded_review_id:
+            raise ValidationError("Review disposition identity is immutable.")
+        result = super().save(*args, **kwargs)
+        self._loaded_review_id = self.pk
+        return result
+
+    @classmethod
+    def from_db(cls, db, field_names, values):
+        instance = super().from_db(db, field_names, values)
+        instance._loaded_review_id = instance.pk
+        return instance
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("Review disposition deletion is not implemented.")
