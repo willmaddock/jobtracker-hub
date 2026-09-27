@@ -6,6 +6,8 @@ of docs/DJANGO_MIGRATION_PLAN.md for making JobPosting fully
 first-class (this model already matches that phase's target shape,
 just without the extraction pipeline behind it yet).
 """
+import uuid
+
 from django.core.exceptions import ValidationError
 from django.db import models, router
 
@@ -20,6 +22,9 @@ class JobPosting(models.Model):
     but with different dedupe_key values (see posting_extract.
     compute_dedupe_key()).
     """
+
+    # PK is runtime identity; UUID is portable identity within the Workspace.
+    portable_id = models.UUIDField(default=uuid.uuid4, editable=False)
 
     STATUS_CHOICES = [
         ("new", "New"),
@@ -57,19 +62,22 @@ class JobPosting(models.Model):
     dedupe_key = models.CharField(max_length=512, unique=True)
 
     class Meta:
+        constraints = [models.UniqueConstraint(
+            fields=["workspace", "portable_id"], name="unique_posting_portable_per_ws")]
         indexes = [models.Index(fields=["status"], name="postings_status_idx")]
 
     def save(self, *args, **kwargs):
         if self.pk:
             using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
             original = type(self).objects.using(using).filter(pk=self.pk).values(
-                "workspace_id", "account_id"
+                "workspace_id", "account_id", "portable_id"
             ).first()
             if original and (
                 original["workspace_id"] != self.workspace_id
                 or original["account_id"] != self.account_id
+                or original["portable_id"] != self.portable_id
             ):
-                raise ValidationError("Existing posting workspace and account are immutable.")
+                raise ValidationError("Existing posting workspace, account and portable identity are immutable.")
         return super().save(*args, **kwargs)
 
     def __str__(self) -> str:

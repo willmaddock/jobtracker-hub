@@ -130,3 +130,33 @@ class IngestExtractedPostingsTests(TestCase):
         self.assertEqual(
             JobPosting.objects.filter(dedupe_key=posting.dedupe_key).count(), 1
         )
+
+    def test_linkless_reingestion_preserves_pk_uuid_and_dedupe(self):
+        first = ingest_extracted_postings(self.account, "stable", self.LINKEDIN_SENDER,
+            "Jobs", self.LINKEDIN_BODY)[0]
+        second = ingest_extracted_postings(self.account, "stable", self.LINKEDIN_SENDER,
+            "Jobs", self.LINKEDIN_BODY.replace("$100K-$120K", "$140K-$160K"))[0]
+        self.assertEqual((second.pk, second.portable_id, second.dedupe_key),
+                         (first.pk, first.portable_id, first.dedupe_key))
+        self.assertEqual(second.salary, "$140K-$160K / year")
+        self.assertEqual(JobPosting.objects.count(), 1)
+
+    def test_url_reingestion_preserves_identity_and_positional_compatibility(self):
+        from unittest.mock import patch
+        jobs = [{"title": "First", "company": "One"}, {"title": "Second", "company": "Two"}]
+        urls = ["https://example.test/jobs/1?tracking=old", "https://example.test/jobs/2"]
+        with patch("postings.extraction.extract_postings", return_value=jobs):
+            first = ingest_extracted_postings(self.account, "old", "sender", "subject", "body", posting_urls=urls)
+        self.assertEqual([p.posting_url for p in first], urls)
+        self.assertEqual([p.title for p in first], ["First", "Second"])
+        revised = [{"title": "Revised second", "company": "Two"}, {"title": "Revised first", "company": "One"}]
+        new_urls = ["https://example.test/jobs/1?tracking=new", urls[1]]
+        with patch("postings.extraction.extract_postings", return_value=revised):
+            second = ingest_extracted_postings(self.account, "new", "sender", "new subject", "body", posting_urls=new_urls)
+        # Preserve the existing positional association, even when descriptions reorder.
+        self.assertEqual([(p.pk, p.portable_id, p.dedupe_key) for p in first],
+                         [(p.pk, p.portable_id, p.dedupe_key) for p in second])
+        self.assertEqual([p.title for p in second], ["Revised second", "Revised first"])
+        self.assertEqual([p.message_id for p in second], ["new", "new"])
+        self.assertEqual([p.posting_url for p in second], new_urls)
+        self.assertEqual(JobPosting.objects.count(), 2)

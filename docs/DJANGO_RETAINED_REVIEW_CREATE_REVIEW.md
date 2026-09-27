@@ -1,6 +1,9 @@
 # Retained Review Create Application Orchestration
 
-Bounded implementation for review, 2026-09-26. Uncommitted; no staging, commit or push.
+Bounded implementation reviewed on 2026-09-26/27; subsequently committed and pushed as
+`ab1cb0e5e37faff606b1be7c84cf83fb99f77e30`
+(`Implement retained review create application orchestration`).
+The implementation and pre-commit verification below are historical evidence.
 
 ## Checkpoint
 
@@ -245,8 +248,8 @@ Legacy FastAPI/frontend behavior remains unchanged; no dual writes or legacy-ID 
 SQLite automated verification does not validate PostgreSQL locking/deadlocks/isolation,
 live Gmail, browser workflow, Redis/Celery, storage, deployment, backup/restore or cutover.
 No fresh legacy suite or operational validation is claimed. No dependency updates or real
-tracker data changes. Leave the slice uncommitted for separate diff review and explicit
-commit/push authorization.
+tracker data changes occurred during implementation. The slice was left uncommitted
+for separate diff review and explicit commit/push authorization, subsequently completed.
 
 ## Bounded pre-commit correction, 2026-09-27
 
@@ -277,4 +280,7 @@ pass; Application drift is absent; global dry-run drift remains only EmailAccoun
 (exit 1, no generated file). Python AST, whitespace, local Markdown references and
 `git diff --check` pass. Migration 0010 is byte-for-byte unchanged. Foundations already
 expresses the durable contract and was not changed by this correction. No staging,
-commit or push; the same 18-file slice remains for final read-only review.
+commit or push occurred during that correction; the same 18-file slice was left for
+final read-only review. It was subsequently committed/pushed at `ab1cb0e` with parent
+`5e25093a62a6c908d2da8123d1d6a7323eca2cd5`; local/tracking/live remote matched and the
+working tree was clean. The 2/193/758/776 verification ledger above remains historical.

@@ -237,8 +237,13 @@ class PostingOwnershipTests(JobPostingAPITestCase):
         request = RequestFactory().get("/admin/")
         request.user = self.user
         model_admin = admin.site._registry[JobPosting]
+        identity = self.posting.portable_id
+        self.assertIn("portable_id", model_admin.list_display)
+        self.assertIn("portable_id", model_admin.get_readonly_fields(request, self.posting))
         add_form = model_admin.get_form(request)
         change_form = model_admin.get_form(request, obj=self.posting)
+        self.assertNotIn("portable_id", add_form.base_fields)
+        self.assertNotIn("portable_id", change_form.base_fields)
         for field in ("workspace", "account"):
             self.assertIn(field, add_form.base_fields)
             self.assertNotIn(field, change_form.base_fields)
@@ -246,9 +251,11 @@ class PostingOwnershipTests(JobPostingAPITestCase):
             "message_id": self.posting.message_id, "status": "new", "title": "Edited title",
             "company": "Edited company", "saved": "on", "_save": "Save",
             "workspace": self.other_workspace.pk, "account": self.other_account.pk,
+            "portable_id": "22222222-2222-4222-8222-222222222222",
         })
         self.assertEqual(response.status_code, 302)
         self.posting.refresh_from_db()
+        self.assertEqual(self.posting.portable_id, identity)
         self.assertEqual(self.posting.title, "Edited title")
         self.assertTrue(self.posting.saved)
         self.assertEqual(self.posting.workspace_id, self.workspace.pk)
@@ -278,3 +285,23 @@ class PostingOwnershipTests(JobPostingAPITestCase):
         with self.assertRaises(ValidationError):
             JobPosting(pk=new.pk, workspace=self.workspace, account=self.account,
                        message_id="replacement", dedupe_key="replacement").save()
+
+
+class PostingPortableRepresentationTests(JobPostingAPITestCase):
+    def test_integer_actions_preserve_uuid_and_conversion_uuid_meaning(self):
+        self.client.force_authenticate(self.user)
+        identity = self.posting.portable_id
+        for action in ("dismiss", "restore", "save"):
+            response = self.client.post(self.detail_action_url(self.posting.pk, action), {})
+            self.assertEqual(response.status_code, 200)
+            self.posting.refresh_from_db()
+            self.assertEqual(self.posting.portable_id, identity)
+        created = self.client.post(self.detail_action_url(self.posting.pk, "apply"), {},
+                                   HTTP_IDEMPOTENCY_KEY="portable-conversion-key")
+        self.assertEqual(created.status_code, 201)
+        rows = self.client.get(self.list_url()).data
+        row = next(r for r in rows if r["id"] == self.posting.pk)
+        self.assertIsInstance(row["id"], int)
+        self.assertEqual(row["portable_id"], str(identity))
+        self.assertEqual(row["conversions"][0]["portable_id"], created.data["portable_id"])
+        self.assertEqual(row["conversions"][0]["application_id"], created.data["application_id"])

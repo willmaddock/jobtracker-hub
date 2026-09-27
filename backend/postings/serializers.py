@@ -26,7 +26,7 @@ class JobPostingSerializer(serializers.ModelSerializer):
     class Meta:
         model = JobPosting
         fields = [
-            "id", "source", "title", "company", "location", "salary",
+            "id", "portable_id", "source", "title", "company", "location", "salary",
             "employment_type", "posting_url", "received_at", "email_subject",
             "sender", "status", "saved", "applied_application", "conversions", "created_at",
         ]

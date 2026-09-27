@@ -7,12 +7,12 @@ from .models import JobPosting
 class JobPostingAdmin(admin.ModelAdmin):
     list_display = (
         "title", "company", "source", "status", "saved", "account", "workspace",
-        "received_at",
+        "received_at", "portable_id",
     )
     list_filter = ("status", "saved", "source", "account", "workspace")
     search_fields = ("title", "company", "location", "email_subject", "message_id")
     date_hierarchy = "received_at"
-    readonly_fields = ("dedupe_key", "created_at")
+    readonly_fields = ("dedupe_key", "created_at", "portable_id")
 
     def get_readonly_fields(self, request, obj=None):
         fields = super().get_readonly_fields(request, obj)
