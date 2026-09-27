@@ -338,3 +338,46 @@ class RetainedApplicationReviewDisposition(models.Model):
 
     def delete(self, *args, **kwargs):
         raise ValidationError("Review disposition deletion is not implemented.")
+
+
+class RetainedReviewCreationResult(ReviewProvenance):
+    """Immutable successful creation provenance, not disposition or replay authority."""
+    review = models.ForeignKey(RetainedApplicationReview, on_delete=models.PROTECT,
+                               related_name="creation_results")
+    request_intent = models.OneToOneField("core.ApplicationRequestIntent", on_delete=models.PROTECT,
+                                         related_name="review_creation_result")
+    candidate = models.ForeignKey(RetainedApplicationReviewCandidate, null=True, blank=True,
+                                  on_delete=models.PROTECT)
+    application_message = models.OneToOneField(ApplicationMessage, on_delete=models.PROTECT,
+                                              related_name="review_creation_result")
+    created_at = models.DateTimeField(auto_now_add=True)
+    snapshot_version = models.PositiveSmallIntegerField(default=1, editable=False)
+    input_snapshot = models.JSONField(editable=False)
+
+    class Meta:
+        constraints = [models.CheckConstraint(condition=models.Q(snapshot_version=1),
+                                              name="review_creation_snapshot_version")]
+
+    def save(self, *args, **kwargs):
+        from .serializers import ReviewCreateSerializer
+        snapshot = self.input_snapshot
+        serializer = ReviewCreateSerializer(data=snapshot)
+        if (not isinstance(snapshot, dict) or set(snapshot) - set(serializer.fields)
+                or not serializer.is_valid() or dict(serializer.validated_data) != snapshot
+                or self.snapshot_version != 1):
+            raise ValidationError("Invalid review creation input snapshot.")
+        review, intent, link = self.review, self.request_intent, self.application_message
+        if (intent.kind != "review_create" or intent.workspace_id != review.workspace_id
+                or link.workspace_id != review.workspace_id
+                or link.application.workspace_id != review.workspace_id
+                or link.retained_message_id != review.retained_message_id
+                or link.retained_message.workspace_id != review.workspace_id
+                or link.retained_message.mailbox.workspace_id != review.workspace_id
+                or intent.application_id != link.application_id
+                or intent.result_portable_id != link.application.portable_id
+                or snapshot.get("candidate_id") != self.candidate_id
+                or (self.candidate_id and self.candidate.review_id != review.pk)):
+            raise ValidationError("Review creation result identity/scope mismatch.")
+        # Intent identity is populated in memory before insertion. Completion is
+        # persisted last by the same transaction, never required before this insert.
+        return super().save(*args, **kwargs)

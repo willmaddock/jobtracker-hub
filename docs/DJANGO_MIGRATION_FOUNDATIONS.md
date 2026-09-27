@@ -409,6 +409,55 @@ observations, candidates, relationships and legacy state remain unchanged. This 
 contract adds no candidate decisions, accept/create, detach, evidence generation,
 PostingSource/ingestion, historical reconciliation, provider actions or generalized Trash.
 
+### Retained review Create Application — approved bounded contract, 2026-09-26
+
+Create Application is explicit new-attempt orchestration, not review acceptance,
+handled state or dismissal. It uses the existing Application allocator/RequestIntent
+and canonical `attach_message()` writer. Successful creation, source attachment,
+immutable review-creation result and request completion commit atomically; a pending
+confirmation may persist without allocation. No partial Application/link/result is
+published. Review/source row locking must not precede Application locking; Workspace
+serialization covers admission through final completion.
+
+`RetainedReviewCreationResult` records protected review, one request intent, optional
+candidate and one canonical ApplicationMessage, plus insertion timestamp and versioned
+explicit-input snapshot. Many results per review are valid; each successful intent and
+relationship has at most one result. The relationship supplies Application/source
+identity. No redundant Workspace/Application/source identity or new portable UUID is
+required. Ordinary result edits/deletion and admin mutation are prohibited. Protected
+references do not implement purge: future purge must explicitly compact terminal replay
+facts and remove descriptive provenance under its approved policy.
+
+Inputs explicitly supply company and optionally role, manual status, Category and
+candidate. Section is fixed to applications; absent/null Category means uncategorized.
+Candidates are immutable suggestion provenance, not live field defaults; a removed or
+trashed candidate target may still inform a creation if its remaining provenance is
+valid. No email-derived status/date/activity or evidence generation is implied.
+Snapshot version 1 retains only explicitly supplied validated company, role_label,
+status, category_id and candidate_id, distinguishing omission/blank/null. It excludes
+challenge, key, credentials, source contents and inferred defaults, and never becomes
+editable Application truth or request identity authority.
+
+Review creation has its own versioned RequestIntent digest binding Workspace, review
+and explicit fields. Existing manual/posting digests remain stable. A fresh key cannot
+bypass confirmation when prior review-created results, existing source relationships
+or ordinary descriptive duplicate candidates exist. These signals remain distinct;
+confirmation creates a new Application, never merges/reuses an attached one. Challenges
+bind request identity, disposition revision, relevant result/link sets and displayed
+state, duplicates and Category context. A dismiss/restore cycle stales old confirmation.
+
+New work reads current disposition under the Workspace gate, without a caller revision;
+dismissed review or ineligible source rejects. Completed replay reauthorizes and verifies
+durable result integrity before returning the original result with current lifecycle and
+disposition. It does not allocate, attach, reinsert or reapply new-work eligibility.
+Missing completed result is corruption, never permission to repair/recreate. Application
+Trash/Restore and review disposition preserve creation provenance independently.
+
+Expose creation results on bounded review detail, separately from relationships and
+disposition. List remains inclusive/lightweight; queue/filter UX is outside this slice.
+No historical Discovery/result inference, backfill, posting/provider/legacy write,
+PDF/evidence generation or generalized purge/export is authorized by this contract.
+
 ## 7. Topic 6 — Workspace scoping contract
 
 Normal resources/actions use `/api/workspaces/{workspace_id}/...`, including object,

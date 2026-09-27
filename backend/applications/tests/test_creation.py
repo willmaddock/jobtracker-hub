@@ -34,6 +34,74 @@ class CreationTests(APITestCase):
     def new_key(self):
         return uuid.uuid4().hex
 
+    def test_continuation_intent_persistence_manual_and_posting(self):
+        from django.apps import apps
+        def snapshot():
+            return {m._meta.label: list(m.objects.order_by("pk").values())
+                    for m in apps.get_models(include_auto_created=True)}
+        for posting in (False, True):
+            with self.subTest(posting=posting):
+                fresh = self.new_key()
+                before = snapshot()
+                response = self.send({**self.body, "challenge": "arbitrary"}, fresh, posting=posting)
+                self.assertEqual((response.status_code, response.data["code"]), (409, "invalid_challenge"))
+                self.assertEqual(before, snapshot())
+                # Seed a real duplicate, then issue a legitimate pending challenge.
+                if not Application.objects.exists():
+                    self.assertEqual(self.send(key=self.new_key()).status_code, 201)
+                key = self.new_key()
+                count = ApplicationRequestIntent.objects.count()
+                warning = self.send(key=key, posting=posting)
+                self.assertEqual(warning.data["code"], "new_attempt_confirmation_required")
+                self.assertEqual(ApplicationRequestIntent.objects.count(), count + 1)
+                intent = ApplicationRequestIntent.objects.get(key=key)
+                self.assertFalse(intent.completed)
+                self.assertEqual(intent.challenge_token, warning.data["challenge"])
+                self.assertTrue(intent.challenge_revision)
+                self.assertIsNotNone(intent.challenge_expires_at)
+                before = snapshot()
+                for token, target in (("wrong", key), (warning.data["challenge"], self.new_key())):
+                    response = self.send({**self.body, "challenge": token}, target, posting=posting)
+                    self.assertEqual(response.data["code"], "invalid_challenge")
+                    self.assertEqual(before, snapshot())
+                changed = {**self.body, "company": "Changed", "challenge": "wrong"}
+                self.assertEqual(self.send(changed, key, posting=posting).data["code"], "idempotency_key_reused")
+                self.assertEqual(before, snapshot())
+                body = {**self.body, "challenge": warning.data["challenge"]}
+                created = self.send(body, key, posting=posting)
+                self.assertEqual(created.status_code, 201)
+                before = snapshot()
+                replay = self.send({**self.body, "challenge": "wrong"}, key, posting=posting)
+                self.assertEqual(replay.status_code, 200)
+                self.assertEqual(replay.data, created.data)
+                self.assertEqual(before, snapshot())
+
+    def test_existing_digest_and_challenge_fingerprints_remain_compatible(self):
+        # Freeze the pre-review digest construction, including omission and the
+        # exact old warning context. Review creation must not version old keys.
+        import hashlib
+        import json
+        def old_digest(value):
+            return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"),
+                ensure_ascii=False).encode()).hexdigest()
+        self.send()
+        for posting in (False, True):
+            key = self.new_key()
+            warning = self.send(key=key, posting=posting)
+            self.assertEqual(warning.status_code, 409)
+            intent = ApplicationRequestIntent.objects.get(key=key)
+            self.assertEqual(intent.digest, old_digest({"version": 1,
+                "kind": "posting" if posting else "manual",
+                "posting_id": self.posting.pk if posting else None, "fields": self.body}))
+            self.assertEqual(intent.challenge_revision, old_digest({
+                "candidates": warning.data["candidates"], "conversions": [],
+                "posting": [self.posting.company, self.posting.title, self.posting.status] if posting else None,
+                "category": None}))
+            created = self.send({**self.body, "challenge": warning.data["challenge"]}, key, posting=posting)
+            self.assertEqual(created.status_code, 201)
+            self.assertEqual(self.send({**self.body, "challenge": warning.data["challenge"]}, key,
+                                       posting=posting).data, created.data)
+
     def test_non_ascii_challenge_is_validation_error_without_effects(self):
         self.send()
         for posting in (False, True):

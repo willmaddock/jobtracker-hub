@@ -21,6 +21,12 @@ class SourceIneligible(APIException):
     default_detail = "Retained source identity must be resolved and unconflicted."
 
 
+def require_eligible_source(message):
+    """Shared new-work admission; attachment rechecks under canonical locks."""
+    if message.has_conflict:
+        raise SourceIneligible()
+
+
 def attach_message(*, actor, workspace, application_id, retained_message_id):
     if not actor.is_authenticated:
         raise NotFound()
@@ -36,8 +42,7 @@ def attach_message(*, actor, workspace, application_id, retained_message_id):
             pk=retained_message_id, workspace=workspace, mailbox__workspace=workspace)
         # Canonical rows are allocated only by retention.py with a complete strong
         # namespace. Observations are not accepted or promoted by this service.
-        if message.has_conflict:
-            raise SourceIneligible()
+        require_eligible_source(message)
         row, created = ApplicationMessage.objects.get_or_create(
             application=application, retained_message=message,
             defaults={"workspace": workspace, "origin": ApplicationMessage.Origin.MANUAL})

@@ -1,6 +1,7 @@
 # Retained Review Disposition — Dismiss / Restore Foundation
 
-Bounded implementation for review, 2026-09-26. Uncommitted; no push.
+Bounded implementation reviewed on 2026-09-26; subsequently committed and pushed at
+`5e25093a62a6c908d2da8123d1d6a7323eca2cd5` (`Implement retained review disposition`).
 
 ## Verified base and recovery
 
@@ -189,13 +190,24 @@ SQLite logical/concurrent tests do not establish PostgreSQL row locking, deadloc
 production isolation or worker concurrency. No live Gmail/provider, browser/frontend,
 Redis/Celery, storage, deployment, backup/restore or cutover validation. No fresh legacy
 FastAPI/frontend suite is claimed. This slice is not full retained-review workflow
-completion. No real tracker data or local database was modified; no commit or push.
+completion. No real tracker data or local database was modified. No commit or push
+occurred during implementation; the later authorized checkpoint is recorded below.
 
-## Final working tree
+## Historical pre-commit working tree
 
-HEAD remains `4d545820f62d92c76cf4da189706f17b3832949f` on `django-migration`.
+At pre-commit review, HEAD remained `4d545820f62d92c76cf4da189706f17b3832949f` on `django-migration`.
 Exactly the ten modified and four added files listed above comprise the slice.
 Full tracked diff and new files inspected; whitespace/local-link checks pass.
-No staging, commit or push. `backend/db.sqlite3` and the proposed unrelated provider
+No staging, commit or push occurred during that review. `backend/db.sqlite3` and the proposed unrelated provider
 migration file remain absent. Nineteen new tests bring the historical full count of
 725 to the freshly verified 744; these are automated SQLite results only.
+
+
+## Subsequently verified committed checkpoint
+
+The authorized 14-file slice was committed and pushed as
+`5e25093a62a6c908d2da8123d1d6a7323eca2cd5`, subject
+`Implement retained review disposition`, parent
+`4d545820f62d92c76cf4da189706f17b3832949f`. Local HEAD, tracking and live remote
+matched; post-push status was clean and `backend/db.sqlite3` remained absent.
+The original verification/recovery ledger above is historical evidence, unchanged.

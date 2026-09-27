@@ -3,10 +3,11 @@ from core.lifecycle_views import LifecycleView
 from rest_framework.urlpatterns import format_suffix_patterns
 from .views import ApplicationViewSet, LegacyApplicationDeletionViewSet
 from .message_views import ApplicationMessages
-from .review_views import RetainedApplicationReviewList, RetainedApplicationReviewDetail, RetainedApplicationReviewAttach, RetainedApplicationReviewDispositionView
+from .review_views import RetainedApplicationReviewList, RetainedApplicationReviewDetail, RetainedApplicationReviewAttach, RetainedApplicationReviewDispositionView, RetainedApplicationReviewCreate
 
 prefix = "workspaces/<int:workspace_id>/applications/"
 urlpatterns = [
+    path("workspaces/<int:workspace_id>/application-reviews/<int:pk>/create-application/", RetainedApplicationReviewCreate.as_view(), name="application-review-create"),
     path("workspaces/<int:workspace_id>/application-reviews/<int:pk>/attach/", RetainedApplicationReviewAttach.as_view(), name="application-review-attach"),
     path("workspaces/<int:workspace_id>/application-reviews/", RetainedApplicationReviewList.as_view(), name="application-review-list"),
     path("workspaces/<int:workspace_id>/application-reviews/<int:pk>/", RetainedApplicationReviewDetail.as_view(), name="application-review-detail"),

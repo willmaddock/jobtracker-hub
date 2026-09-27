@@ -10,6 +10,9 @@ from .retained_reviews import attach_review, scoped_reviews, disposition_data, s
 
 from email_sync.retained_views import Inspection, message_summary
 from .models import ApplicationMessage
+from .creation import CreationContentionMixin, request_creation
+from .serializers import ReviewCreateSerializer
+from .review_creation import result_page
 
 
 def reviews(workspace):
@@ -70,6 +73,7 @@ class RetainedApplicationReviewDetail(Inspection):
                     "trashed_at": app.trashed_at, "lifecycle_revision": app.lifecycle_revision}})
         relationships = review_relationships(workspace, row.retained_message_id).select_related("application").order_by("pk")
         return Response({**review_summary(row), "candidates": suggestions,
+            "creation_results": result_page(row, request.query_params.get("creation_results_after", "0")),
             "relationships": [{"id": link.pk, "portable_id": str(link.portable_id),
                 "application_id": link.application_id, "origin": link.origin,
                 "created_at": link.created_at,
@@ -100,3 +104,11 @@ class RetainedApplicationReviewDispositionView(LifecycleContentionMixin, Inspect
         return Response(set_review_dismissal(actor=request.user, workspace=self.get_workspace(),
             review_id=pk, dismissed=transition == "dismiss",
             expected_revision=request.data["expected_revision"]))
+
+
+class RetainedApplicationReviewCreate(CreationContentionMixin, Inspection):
+    http_method_names = ["post", "options"]
+    creation_action = True
+
+    def post(self, request, workspace_id, pk, format=None):
+        return request_creation(request, self.get_workspace(), ReviewCreateSerializer(data=request.data), review_id=pk)

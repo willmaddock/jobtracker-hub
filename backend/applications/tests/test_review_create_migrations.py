@@ -1,4 +1,4 @@
-"""Additive disposition upgrade from Application 0008; isolated populated fixtures only."""
+"""Additive creation-result upgrade from Application 0009; isolated populated fixtures only."""
 import tempfile
 
 from django.db import IntegrityError, connections, transaction
@@ -7,10 +7,10 @@ from django.test import TransactionTestCase
 from django.utils import timezone
 
 
-class ReviewDispositionMigrationTests(TransactionTestCase):
-    def test_populated_reviews_preserved_without_disposition_backfill(self):
+class ReviewCreateMigrationTests(TransactionTestCase):
+    def test_populated_graph_preserved_without_creation_backfill(self):
         with tempfile.TemporaryDirectory() as temp:
-            alias = "review_disposition_fixture"
+            alias = "review_create_fixture"
             config = dict(connections["default"].settings_dict)
             config.update(NAME=temp + "/fixture.sqlite3", ENGINE="django.db.backends.sqlite3", OPTIONS={})
             original = self.databases
@@ -21,13 +21,13 @@ class ReviewDispositionMigrationTests(TransactionTestCase):
                 executor = MigrationExecutor(db)
                 # Pin this historical contract; later additive migrations have their own tests.
                 leaves = [node for node in executor.loader.graph.leaf_nodes() if node[0] != "applications"] + [
-                    ("applications", "0009_retained_application_review_disposition")]
+                    ("applications", "0010_retained_review_creation_result")]
                 baseline = [node for node in leaves if node[0] != "applications"] + [
-                    ("applications", "0008_retained_application_review")]
+                    ("applications", "0009_retained_application_review_disposition")]
                 executor.migrate(baseline)
                 self.assertIn("applications_applicationmessage", db.introspection.table_names())
                 self.assertIn("applications_retainedapplicationreview", db.introspection.table_names())
-                self.assertNotIn("applications_retainedapplicationreviewdisposition", db.introspection.table_names())
+                self.assertNotIn("applications_retainedreviewcreationresult", db.introspection.table_names())
                 old = executor.loader.project_state(baseline).apps
 
                 def create(app, model, **values):
@@ -35,6 +35,7 @@ class ReviewDispositionMigrationTests(TransactionTestCase):
 
                 user = create("accounts", "User", username="fixture")
                 stamp = timezone.now()
+                links = []
                 for n in range(3):
                     ws = create("accounts", "Workspace", owner_id=user.pk, name=str(n))
                     account = create("email_sync", "EmailAccount", workspace_id=ws.pk, provider="gmail", email="fixture@example.test")
@@ -58,6 +59,8 @@ class ReviewDispositionMigrationTests(TransactionTestCase):
                     review = create("applications", "RetainedApplicationReview", workspace_id=ws.pk,
                         retained_message_id=message.pk, originating_observation_id=observation.pk,
                         initial_classification="ambiguous")
+                    create("applications", "RetainedApplicationReviewDisposition", review_id=review.pk,
+                           dismissed_at=stamp if n else None, revision=n)
                     for attempt in range(2):
                         application = create("applications", "Application", workspace_id=ws.pk, company="Same", role_label="Role",
                             section="applications", status="applied", first_activity=stamp, last_activity=stamp,
@@ -66,8 +69,12 @@ class ReviewDispositionMigrationTests(TransactionTestCase):
                         create("applications", "RetainedApplicationReviewCandidate", review_id=review.pk,
                             application_id=application.pk, application_portable_id=application.portable_id)
                         if attempt < n:
-                            create("applications", "ApplicationMessage", workspace_id=ws.pk,
+                            link = create("applications", "ApplicationMessage", workspace_id=ws.pk,
                                 application_id=application.pk, retained_message_id=message.pk)
+                            links.append(link)
+                        create("core", "ApplicationRequestIntent", actor_id=user.pk, workspace_id=ws.pk,
+                               key=f"historical-{n}-{attempt}", digest="historical", kind="manual",
+                               completed=True, application_id=application.pk, result_portable_id=application.portable_id)
                         create("applications", "Override", application_id=application.pk, archived=True, notes="preserve")
                         create("applications", "StatusHistory", application_id=application.pk, status="applied", changed_at=stamp)
                         create("documents", "Document", workspace_id=ws.pk, application_id=application.pk,
@@ -87,29 +94,33 @@ class ReviewDispositionMigrationTests(TransactionTestCase):
 
                 before = {table: snapshot(table) for table in tables}
                 executor = MigrationExecutor(db)
-                migration = executor.loader.get_migration("applications", "0009_retained_application_review_disposition")
-                self.assertEqual(migration.dependencies, [("applications", "0008_retained_application_review")])
+                migration = executor.loader.get_migration("applications", "0010_retained_review_creation_result")
+                self.assertEqual(migration.dependencies, [("applications", "0009_retained_application_review_disposition"),
+                                                          ("core", "0004_applicationrequestintent_category")])
                 self.assertEqual([type(op).__name__ for op in migration.operations], ["CreateModel"])
                 self.assertEqual([m.name for m, backwards in executor.migration_plan(leaves)],
-                                 ["0009_retained_application_review_disposition"])
+                                 ["0010_retained_review_creation_result"])
                 executor.migrate(leaves)
                 new = executor.loader.project_state(leaves).apps
-                disposition = new.get_model("applications", "RetainedApplicationReviewDisposition")
-                self.assertEqual(disposition.objects.using(alias).count(), 0)
+                result = new.get_model("applications", "RetainedReviewCreationResult")
+                self.assertEqual(result.objects.using(alias).count(), 0)
                 for table in tables:
                     self.assertEqual(before[table], snapshot(table), table)
-                # A second forward run must not synthesize defaults either.
                 MigrationExecutor(db).migrate(leaves)
-                self.assertEqual(disposition.objects.using(alias).count(), 0)
-                # DB identity is one disposition per review. These synthetic rows
-                # are explicit test writes after upgrade, never migration effects.
-                row = disposition.objects.using(alias).create(review_id=review.pk, dismissed_at=stamp, revision=1)
-                self.assertEqual(row.pk, review.pk)
-                with self.assertRaises(IntegrityError), transaction.atomic(using=alias):
-                    disposition.objects.using(alias).create(review_id=review.pk, revision=0)
-                recorded = list(disposition.objects.using(alias).values())
+                self.assertEqual(result.objects.using(alias).count(), 0)
+                # Explicit synthetic post-upgrade inserts test each uniqueness and version constraint.
+                intent_model = new.get_model("core", "ApplicationRequestIntent")
+                intents = list(intent_model.objects.using(alias).order_by("pk"))
+                row = result.objects.using(alias).create(review_id=review.pk, request_intent_id=intents[0].pk,
+                    application_message_id=links[0].pk, input_snapshot={"company": "Fixture"})
+                for intent_id, link_id, version in ((intents[0].pk, links[1].pk, 1),
+                        (intents[1].pk, links[0].pk, 1), (intents[1].pk, links[1].pk, 2)):
+                    with self.assertRaises(IntegrityError), transaction.atomic(using=alias):
+                        result.objects.using(alias).create(review_id=review.pk, request_intent_id=intent_id,
+                            application_message_id=link_id, input_snapshot={"company": "Fixture"}, snapshot_version=version)
+                recorded = list(result.objects.using(alias).values())
                 MigrationExecutor(db).migrate(leaves)
-                self.assertEqual(recorded, list(disposition.objects.using(alias).values()))
+                self.assertEqual(recorded, list(result.objects.using(alias).values()))
                 for table in tables:
                     self.assertEqual(before[table], snapshot(table), table)
             finally:

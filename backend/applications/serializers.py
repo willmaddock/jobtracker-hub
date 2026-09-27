@@ -143,3 +143,31 @@ class BulkOverrideWriteSerializer(ImmutableIdentityInput):
 
 class BulkDeleteSerializer(serializers.Serializer):
     item_ids = serializers.ListField(child=serializers.IntegerField(), allow_empty=False)
+
+
+class StrictCreationText(serializers.CharField):
+    def to_internal_value(self, data):
+        if not isinstance(data, str):
+            self.fail("invalid")
+        return super().to_internal_value(data)
+
+
+class StrictCreationIdentity(serializers.IntegerField):
+    def to_internal_value(self, data):
+        if type(data) is not int or not 0 < data <= 9223372036854775807:
+            self.fail("invalid")
+        return data
+
+
+class ReviewCreateSerializer(serializers.Serializer):
+    """Explicit semantic input only; no candidate defaults or inferred status."""
+    company = StrictCreationText(max_length=255)
+    role_label = StrictCreationText(required=False, allow_blank=True, max_length=255)
+    status = StrictCreationText(required=False, allow_blank=True, max_length=16)
+    category_id = StrictCreationIdentity(required=False, allow_null=True)
+    candidate_id = StrictCreationIdentity(required=False, allow_null=True)
+
+    def validate_status(self, value):
+        if value and value not in dict(Application.STATUS_CHOICES):
+            raise serializers.ValidationError("Unknown status.")
+        return value

@@ -9,9 +9,11 @@ Foundation** is committed at `b5c1faf1ad100acfd3d24aead679c3a1831f3a48`.
 **Retained Application Review Identity & Candidate Snapshot Foundation** is committed
 at `eedf57abbdf98f05d430ac116941fc447336f87b`. **Retained Review Attach to Existing
 Application** is committed at `4d545820f62d92c76cf4da189706f17b3832949f`.
-**Retained Review Disposition — Dismiss / Restore Foundation** is implemented and
-uncommitted for review. Broader review actions, frontend integration, historical
-reconciliation, email derivation and operational cutover remain pending.
+**Retained Review Disposition — Dismiss / Restore Foundation** is committed at
+`5e25093a62a6c908d2da8123d1d6a7323eca2cd5`. **Retained Review Create Application
+Orchestration** is implemented and uncommitted; verification is recorded below.
+Frontend integration, historical reconciliation, email derivation and operational
+cutover remain pending.
 
 ## 1. Scope and source of truth
 
@@ -30,11 +32,40 @@ reconciliation, email derivation and operational cutover remain pending.
 
 ## 2. Current verification evidence
 
-### Retained review disposition — current verification, 2026-09-26
+### Retained review Create Application — current verification, 2026-09-27
+
+Base `5e25093a62a6c908d2da8123d1d6a7323eca2cd5` on `django-migration`; HEAD,
+tracking and live remote matched before editing, with a clean tree and absent
+`backend/db.sqlite3`. Implementation is uncommitted. See the
+[creation review report](DJANGO_RETAINED_REVIEW_CREATE_REVIEW.md) for exact scope,
+transaction boundaries, commands and limitations.
+
+- Focused creation/review/identity/Category/derivation/lifecycle/migration/admin:
+  **193 passed**, exit 0, 11.751s.
+- Affected `applications documents email_sync core postings`: **758 passed**, exit 0,
+  102.083s. Full Django: **776 passed**, exit 0, 107.240s, final code/test state.
+- Bounded pre-commit correction rejects fresh-key continuations before intent insertion
+  under the shared Workspace gate; existing pending state, digest mismatch precedence and
+  completed replay are preserved across manual/posting/review creation. Two new persistence
+  regression tests pass (0.249s); final suite counts above supersede 191/756/774.
+- Django system checks, Python AST, whitespace and local documentation references pass.
+  Application model/migration drift is absent; global drift remains only the known
+  `EmailAccount.provider` choice change. No unrelated migration file was generated.
+- Additive `applications.0010_retained_review_creation_result` is schema-only, with
+  no historical backfill. Populated migration preservation and forward replay pass.
+  The historical disposition test is pinned to its intended `0009` target without
+  weakening preservation assertions; the new creation test is pinned to `0010`.
+- Verification uses isolated SQLite settings/fixtures; `backend/db.sqlite3` remains
+  absent. The slice is implemented and uncommitted for review; nothing is staged.
+- PostgreSQL locking/deadlocks/isolation, live Gmail, browser/frontend, Redis/Celery,
+  storage, deployment, backup/restore and cutover remain operationally unvalidated.
+
+### Retained review disposition — historical verification at `5e25093`, 2026-09-26
 
 Base `4d545820f62d92c76cf4da189706f17b3832949f` on `django-migration`; local HEAD,
 tracking and live remote verified before edits and again when recovering the eight-file
-interrupted implementation. No commit/push or unrelated changes. See the
+interrupted implementation. No commit/push occurred during that implementation stage;
+the slice was subsequently committed/pushed at `5e25093`. No unrelated changes. See the
 [disposition review report](DJANGO_RETAINED_REVIEW_DISPOSITION_REVIEW.md) for exact
 commands, file inventory, transaction reasoning and test-harness correction.
 
@@ -431,7 +462,7 @@ No newly accepted capability is marked verified merely because it is designed.
 | Search/dashboards/settings | Included reads, counts, search, section adapters, merges, and settings scoped to URL workspace; search parity and Ghosted still pending | Scoped isolation coverage; broader target parity pending | Frontend integration pending |
 | Provider connections | Gmail/Outlook/IMAP connect/sync/disconnect; encrypted credentials | Baseline provider/view coverage, mocked external seams | Historical Gmail OAuth/live-sync checkpoint; complete target flows unvalidated; Outlook/IMAP live validation unestablished |
 | Sync/jobs | Gmail per-message retention plus transitional match/discovery/thread projection; inline single sync, queued bulk/Beat | Gmail adoption/replay and existing sync/task coverage; not real-broker proof | Real Redis/worker/Beat operation unestablished |
-| Retained messages/review | Protected source/observation models, verified Gmail lineage and native-ID producer adoption; scoped review inspection, explicit existing-Application attachment with derived status and independent whole-review disposition | Retention, Gmail adoption, attachment/disposition APIs, migration preservation and SQLite logical concurrency coverage in §2 | Other-provider adoption, broader review actions, frontend and operational validation pending |
+| Retained messages/review | Protected source/observation models, verified Gmail lineage and native-ID producer adoption; scoped review inspection, explicit attachment, independent disposition and atomic create-Application orchestration with durable results | Retention, Gmail adoption, attachment/disposition/creation APIs, migration preservation and SQLite logical concurrency coverage in §2 | Other-provider adoption, broader review actions, frontend and operational validation pending |
 | Postings | Fixture-tested extractor, ingestion helper, list/save/dismiss/restore/apply APIs | Baseline component/fixture coverage | Sync does not call ingestion; apply lacks evidence; full workflow pending |
 | Import/export | No Django legacy importer or portable export/restore | Unimplemented/unverified | Reconciliation/cutover pending |
 | Production | Partial settings/storage/task scaffolding; SQLite inherited, development fallbacks remain | Suite success is not deployment verification | PostgreSQL/storage/jobs/backup/restore/rollback pending |
@@ -849,7 +880,7 @@ Dismiss/restore was outside that attachment slice and is now implemented below. 
 [attachment review report](DJANGO_RETAINED_REVIEW_ATTACH_REVIEW.md) for verification,
 transaction reasoning and operational limits.
 
-### Retained Review Disposition — uncommitted
+### Retained Review Disposition — committed at `5e25093`
 
 `RetainedApplicationReviewDisposition` is a mutable one-to-one sidecar using review
 identity, nullable `dismissed_at` and a nonnegative revision. No disposition row means
@@ -873,9 +904,30 @@ Application Trash/Restore remains independent. Historical Discovery is never inf
 or rewritten. See the [disposition review report](DJANGO_RETAINED_REVIEW_DISPOSITION_REVIEW.md)
 for transaction reasoning, actual verification and operational limitations.
 
+### Retained Review Create Application — uncommitted
+
+`POST .../application-reviews/{id}/create-application/` uses an Idempotency-Key and
+explicit company/optional role, status, Category and candidate provenance. It creates
+an Application through the existing allocator, attaches via `attach_message()`, inserts
+an immutable `RetainedReviewCreationResult`, then completes RequestIntent in one atomic
+Workspace-gated transaction. Manual/posting request digests and challenge semantics
+remain unchanged. New result schema is additive Application `0010`, without backfill.
+
+New requests require confirmation for prior results, existing source relationships or
+ordinary duplicates. A fresh key alone cannot bypass repeat protection; confirmed work
+always creates a new Application. Completed replay reads its durable result without
+allocation/attachment, including after dismissal, conflict or Application Trash. New
+work rejects dismissed reviews and conflicted sources. Missing completed result fails
+closed. Review detail adds 50-result cursor pages; list/filter behavior is unchanged.
+
+Versioned snapshots preserve explicit semantic inputs only. No candidate label copying,
+automatic disposition, email activity/status/date inference, evidence generation,
+PostingSource, provider, frontend or historical reconciliation work. Protected references
+leave future purge/terminal compaction to a separately approved lifecycle slice.
+
 ## 8. Next recommended implementation actions
 
-1. Review the uncommitted retained review disposition slice; prior local database provenance remains unresolved.
+1. Review the uncommitted retained review Create Application slice after its recorded verification; prior local database provenance remains unresolved.
 2. Resolve the legacy verification blockers under separately approved scope before declaring a fully green checkpoint.
 3. Separately scope further review actions and future filtering/queue UX, along with broader email/job and frontend work.
 4. Plan provenance-aware historical reconciliation with importer/cutover work; do not silently backfill current records.
