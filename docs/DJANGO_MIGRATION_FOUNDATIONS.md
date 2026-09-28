@@ -404,6 +404,62 @@ with source_eligible=False, never downstream authorization. Contention may requi
 explicit caller retry. This does not implement execution, task identity/dispatch or
 exactly-once scheduling. Additive schema starts empty; no historical extraction inference.
 
+### Durable posting items and initial associations — approved contract, 2026-09-28
+
+RetainedPostingItem is one explicitly established posting occurrence within exactly
+one canonical RetainedMessage, not a global vacancy, extraction observation,
+JobPosting or PostingSource. Identity survives interpretation changes. It has an
+integer PK, immutable callable UUIDv4 portable_id, protected source FK and creation
+time. UUID uniqueness is source-scoped; portable reference includes Workspace
+lineage + retained-message portable UUID + item UUID. No redundant Workspace/account
+FK, descriptive fields, current pointer or lifecycle flags.
+
+RetainedPostingItemAssociation is immutable initial assertion evidence, not guaranteed
+real-world truth or an effective/current decision. A protected OneToOne output relation
+allows at most one initial assertion; protected item and actor FKs preserve attribution.
+Many outputs, including several in one extraction operation, may describe one item.
+Item and output must resolve to the same retained source. The service and ordinary
+model insertion enforce that invariant using persisted endpoints. Database checks
+restrict mode to allocate_new/attach_existing, method to explicit_owner and version to 1.
+
+The sole internal writer associate_posting_output requires a persisted authenticated
+current Workspace owner. No staff override, actorless/system path or automatic parser
+integration. It records the caller's deliberate assertion; authentication cannot prove
+human review. allocate_new atomically creates the item and its first association;
+attach_existing requires a same-source item. No canonical orphan-item allocator.
+Unassigned output means unresolved; no ambiguity row or automatic first-observation
+allocation. Labels, URL equality, positions, hashes and extraction versions never
+establish continuity. Existing outputs serve as interpretation evidence without copies.
+
+Output identity is the one-shot initial-decision key. Same allocation replays its original
+item; same attachment replays its original association. Different mode/target/method/
+version conflicts. A different currently authorized owner can replay, preserving the
+original actor and timestamps. No RequestIntent or new caller key. Invalid shape gives
+400 invalid_posting_item_association; missing/foreign/inconsistent endpoints give 404;
+changed decision gives 409 posting_item_association_conflict. Existing retained source
+integrity/ineligibility errors remain unchanged.
+
+Writer order is bounded validation, atomic Workspace gate/ownership revalidation,
+Workspace-scoped output lookup, derived source lock/integrity, item/output endpoint
+validation, existing assertion lookup and replay/conflict, new-work source eligibility,
+then atomic inserts. No item/output/mailbox/JobPosting/Application locks or hidden retries.
+Integrity is required even for replay; later sticky conflict allows exact replay/read
+with source_eligible=False but blocks new work. Insert failure leaves no orphan item.
+
+Ordinary edits, replacement-instance writes, reparenting and deletion reject, with
+routed write-database checks. QuerySet/bulk/raw SQL remain privileged maintenance
+surfaces. Actor PROTECT also blocks deletion after ownership changes; generalized purge
+must be separately designed. No association correction is implemented. Future explicit
+supersession/withdrawal and split/merge lineage must preserve initial assertions and
+item identity; ambiguous outputs can remain unassigned meanwhile.
+
+Owner-scoped readers expose optional initial association, item and bounded association
+history ordered by (created_at, id), default 100/max 200. A validated item-scoped
+(timestamp, id) cursor provides continuation, not a cross-page snapshot. No current
+interpretation is selected or synthesized. Admin is privileged read-only inspection.
+No public API. Additive postings 0005 starts empty; no historical backfill, JobPosting
+mapping, PostingSource, parser execution, provider integration or automatic ingestion.
+
 ### Content and relationships
 
 Messages remain transient until needed for retained evidence, Discovery/review,

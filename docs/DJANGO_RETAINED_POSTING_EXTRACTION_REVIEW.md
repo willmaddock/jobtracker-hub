@@ -1,6 +1,9 @@
 # Retained Posting Extraction Provenance Foundation
 
-Implemented for final read-only review; uncommitted. No commit/push authorization.
+Implemented and reviewed; subsequently committed as
+`c5f8e20f9db15e2cf4dc9f0e80a0929bd222fff6`
+(`Implement retained posting extraction provenance`). The verification and earlier
+review states below preserve the historical pre-commit evidence.
 This is completed-extraction recording, not parser execution, source-item identity,
 interpretation selection, PostingSource or JobPosting ingestion.
 
@@ -247,8 +250,9 @@ All test runs exited 0 using the same isolated settings as above. Correction log
 `/tmp/posting-receipt-*.log`; the four-test run and system/drift checks were also
 captured in task output. Earlier 29/1/30/98/69/797/815 counts remain historical and do
 not erase the finding. Final scope is the same thirteen files, with only the five
-files listed in this correction changed since review. Nothing staged/committed/pushed;
-HEAD remains 6863f277, local tracker DB and provider migration remain absent.
+files listed in this correction changed since review. At that pre-commit checkpoint,
+nothing was staged/committed/pushed and HEAD remained 6863f277; the local tracker DB
+and provider migration were absent. The subsequent commit is identified above.
 
 ## Exact file inventory
 
@@ -283,5 +287,6 @@ SQLite/unit tests do not establish PostgreSQL locking/contention/deadlocks, prod
 payload performance, live provider completeness, durable scheduling, export/restore,
 deployment/cutover or backup recovery. No fresh legacy-suite or operational validation
 is claimed. The recorder trusts the declared execution envelope. Real tracker data,
-dependencies and environments are unchanged. Leave uncommitted for read-only review
-and separate commit/push approval; do not begin the next dependency.
+dependencies and environments were unchanged. Implementation was left uncommitted
+for read-only review and separate commit/push approval, then committed as identified
+above. This preserves the historical stop point, not a current uncommitted status.

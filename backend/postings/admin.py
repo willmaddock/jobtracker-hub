@@ -1,6 +1,7 @@
 from django.contrib import admin
 
-from .models import JobPosting, RetainedPostingExtraction, RetainedPostingExtractionOutput
+from .models import (JobPosting, RetainedPostingExtraction, RetainedPostingExtractionOutput,
+                     RetainedPostingItem, RetainedPostingItemAssociation)
 
 
 @admin.register(JobPosting)
@@ -19,7 +20,8 @@ class JobPostingAdmin(admin.ModelAdmin):
         return fields + ("workspace", "account") if obj is not None else fields
 
 
-@admin.register(RetainedPostingExtraction, RetainedPostingExtractionOutput)
+@admin.register(RetainedPostingExtraction, RetainedPostingExtractionOutput,
+                RetainedPostingItem, RetainedPostingItemAssociation)
 class PostingExtractionAdmin(admin.ModelAdmin):
     """Privileged read-only inspection. Default field rendering escapes JSON."""
     actions = None

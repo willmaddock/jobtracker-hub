@@ -8,6 +8,7 @@ just without the extraction pipeline behind it yet).
 """
 import uuid
 
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models, router
 
@@ -171,3 +172,84 @@ class RetainedPostingExtractionOutput(PostingExtractionProvenance):
             contract.validate_fields(self.fields)
         except contract.InvalidExtraction:
             raise ValidationError("Invalid posting extraction output.") from None
+
+
+class PostingItemProvenance(models.Model):
+    """Ordinary insert-only writes; privileged bulk/raw writes are maintenance."""
+    class Meta:
+        abstract = True
+
+    def save(self, *args, **kwargs):
+        using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
+        if not self._state.adding or (self.pk and type(self).objects.using(using).filter(pk=self.pk).exists()):
+            raise ValidationError("Posting item provenance is immutable.")
+        self.validate_insertion(using)
+        return super().save(*args, **kwargs)
+
+    def clean(self):
+        super().clean()
+        self.validate_insertion(router.db_for_write(type(self), instance=self))
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("Posting item provenance deletion is not implemented.")
+
+
+class RetainedPostingItem(PostingItemProvenance):
+    """Explicit occurrence within one retained source, independent of interpretation.
+
+    retained_items atomically allocates this identity with its first association.
+    Portable reference includes Workspace lineage and retained-source portable ID.
+    """
+    retained_message = models.ForeignKey("email_sync.RetainedMessage", on_delete=models.PROTECT,
+                                         related_name="posting_items")
+    portable_id = models.UUIDField(default=uuid.uuid4, editable=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["retained_message", "portable_id"],
+                                              name="posting_item_portable")]
+
+    def validate_insertion(self, using):
+        from .extraction_contract import InvalidExtraction, operation_uuid
+        try:
+            operation_uuid(self.portable_id)
+        except InvalidExtraction:
+            raise ValidationError("Invalid posting item identity.") from None
+        if not self.retained_message_id:
+            raise ValidationError("Posting item source is required.")
+
+
+class RetainedPostingItemAssociation(PostingItemProvenance):
+    """Initial assertion only; no current interpretation or correction authority."""
+    class Mode(models.TextChoices):
+        ALLOCATE = "allocate_new", "Allocate new occurrence"
+        ATTACH = "attach_existing", "Attach to existing occurrence"
+
+    item = models.ForeignKey(RetainedPostingItem, on_delete=models.PROTECT, related_name="associations")
+    output = models.OneToOneField(RetainedPostingExtractionOutput, on_delete=models.PROTECT,
+                                  related_name="initial_item_association")
+    actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="posting_item_associations")
+    mode = models.CharField(max_length=16, choices=Mode.choices)
+    method = models.CharField(max_length=32, default="explicit_owner", editable=False)
+    decision_version = models.PositiveSmallIntegerField(default=1, editable=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(condition=models.Q(mode__in=["allocate_new", "attach_existing"]),
+                                   name="posting_item_assoc_mode"),
+            models.CheckConstraint(condition=models.Q(method="explicit_owner"), name="posting_item_assoc_method"),
+            models.CheckConstraint(condition=models.Q(decision_version=1), name="posting_item_assoc_version"),
+        ]
+
+    def validate_insertion(self, using):
+        if (self.mode not in self.Mode.values or self.method != "explicit_owner"
+                or type(self.decision_version) is not int or self.decision_version != 1 or not self.actor_id):
+            raise ValidationError("Invalid posting item decision.")
+        # Query persisted endpoints on the write database, not cached related objects.
+        source = RetainedPostingItem.objects.using(using).filter(pk=self.item_id).values_list(
+            "retained_message_id", flat=True).first()
+        output_source = RetainedPostingExtractionOutput.objects.using(using).filter(pk=self.output_id).values_list(
+            "extraction__retained_message_id", flat=True).first()
+        if source is None or source != output_source:
+            raise ValidationError("Posting item association source mismatch.")
