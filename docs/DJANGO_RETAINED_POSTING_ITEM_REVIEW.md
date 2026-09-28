@@ -1,6 +1,8 @@
 # Durable Posting Source-Item Identity + Immutable Initial Output Association
 
-Implemented and uncommitted for final read-only review. No staging, commit or push.
+Committed at `2090a61b1a43252a8eb93d82c87c7d90e4c40074`
+(`Implement retained posting item identity`). The following records its historical
+implementation and final pre-commit verification; counts and scope are preserved.
 
 ## Verified base
 
@@ -149,8 +151,9 @@ rollback before/after association insertion, four contention cases with explicit
 reorder/disappearance/unresolved observations, bounded history, admin and unchanged
 non-item tables. Migration coverage preserves all old tables and asserts no backfill.
 
-Final scope is exactly eleven authorized files, with empty index and unchanged HEAD.
-No backend/db.sqlite3 or provider migration exists. No commit or push occurred.
+At final pre-commit review, scope was exactly eleven authorized files, with empty
+index and unchanged HEAD. No backend/db.sqlite3 or provider migration existed.
+The slice was subsequently committed at the checkpoint above.
 
 ## Scope
 
@@ -175,8 +178,10 @@ Foundations records only the approved item/initial-association contract.
 
 ## Limits and deferred authority
 
-Wrong assertions cannot be reassigned here. Preserve the initial row until explicit
-correction/supersession authority exists. No active/withdrawn/current/revision flags.
+At this initial-association checkpoint, wrong assertions could not be reassigned.
+The subsequent [correction slice](DJANGO_RETAINED_POSTING_ITEM_CORRECTION_REVIEW.md)
+preserves initial assertions while adding effective membership authority.
+Initial `AssociationResult.item` continues to mean the historical initial target. No active/withdrawn/current/revision flags.
 No interpretation selection, split/merge, PostingSource, JobPosting mapping, parser
 changes/execution, automatic continuity, ingestion, provider work, frontend/API,
 Application allocation/evidence, scheduling/outbox, historical reconciliation, ownership
@@ -185,4 +190,5 @@ decoupling or generalized purge. Extraction 0004/contract/replay semantics are u
 SQLite tests do not establish PostgreSQL locking/deadlock behavior, production-scale
 performance, live-provider completeness, durable scheduling/retries, export/restore or
 cutover readiness. No fresh legacy-suite or live operational verification is claimed.
-No dependencies or real data changed. Leave unstaged/uncommitted for final review.
+No dependencies or real data changed. This slice was left unstaged/uncommitted for
+final review before the subsequent authorized commit.

@@ -449,9 +449,8 @@ with source_eligible=False but blocks new work. Insert failure leaves no orphan 
 Ordinary edits, replacement-instance writes, reparenting and deletion reject, with
 routed write-database checks. QuerySet/bulk/raw SQL remain privileged maintenance
 surfaces. Actor PROTECT also blocks deletion after ownership changes; generalized purge
-must be separately designed. No association correction is implemented. Future explicit
-supersession/withdrawal and split/merge lineage must preserve initial assertions and
-item identity; ambiguous outputs can remain unassigned meanwhile.
+must be separately designed. Corrections below preserve initial assertions and item
+identity; split/merge lineage remains deferred. Ambiguous outputs may remain unassigned.
 
 Owner-scoped readers expose optional initial association, item and bounded association
 history ordered by (created_at, id), default 100/max 200. A validated item-scoped
@@ -459,6 +458,69 @@ history ordered by (created_at, id), default 100/max 200. A validated item-scope
 interpretation is selected or synthesized. Admin is privileged read-only inspection.
 No public API. Additive postings 0005 starts empty; no historical backfill, JobPosting
 mapping, PostingSource, parser execution, provider integration or automatic ingestion.
+
+### Append-only posting-item corrections — approved contract, 2026-09-28
+
+RetainedPostingItemCorrection appends explicit owner decisions to one immutable initial
+association. It has a protected initial-association FK, caller-supplied RFC UUIDv4
+operation_id, positive BigInteger revision, associate/withdraw mode, nullable protected
+target item, protected actor, explicit_owner method, decision_version 1 and server
+creation time. No redundant source/Workspace/output FK, expected-revision column,
+mutable pointer or interpretation fields. Six constraints enforce scoped operation
+uniqueness, scoped revision uniqueness, positive revision, mode/target shape, method
+and version. Migration 0006 creates only this empty table and its constraints.
+
+No initial association means effective item/revision None; corrections reject with
+initial_association_required. Initial-only means revision 0 and initial item, without
+persisting a revision-zero row. Each successful correction appends expected_revision+1;
+associate selects the same-source target, withdraw selects None. Numeric revision,
+never timestamps, determines effect. Old items and their UUIDs survive zero effective
+membership. Membership is not lifecycle or current descriptive interpretation.
+
+The sole internal writer correct_posting_item_association authenticates the persisted
+current Workspace owner, validates bounded UUID/revision/mode/target shape, then uses
+atomic Workspace gate/ownership revalidation → scoped output → derived source lock
+and integrity → initial/target source consistency → operation lookup. Changed valid
+payload under a used UUID conflicts before chain/stale checks. Shared chain validation
+precedes exact replay; new work then checks expected revision, source eligibility,
+no-op, increment capacity and insertion. No extra endpoint locks or hidden retries.
+
+Operation identity is scoped to initial association and binds mode, target/null,
+expected revision (stored revision minus one), method and version. Actor is attribution,
+not replay identity. A later owner may replay without rewriting actor/time. Exact replay
+returns the historical correction plus separately resolved current effective state;
+old operations never reapply. Initial AssociationResult.item remains the historical
+initial target; use the correction-aware reader for effective membership.
+
+For a new UUID, association to the already-effective target or withdrawal while already
+withdrawn returns 409 posting_association_unchanged: no row, revision advance or UUID
+reservation. A future intentional request should use a new UUID. Exact successful
+replay precedes this test. expected_revision is an actual integer, excluding bool,
+in 0..9223372036854775807; new work at the upper bound returns
+posting_correction_revision_exhausted, while exact replay still works.
+
+Malformed input returns 400 invalid_posting_item_correction; missing/foreign endpoints
+return non-leaking 404. Other 409 codes are idempotency_key_reused, stale_revision,
+posting_association_history_invalid and existing retained_source_invalid/ineligible.
+Invalid representation/digest/receipt provenance blocks reads and replay. Sticky conflict
+allows reads/exact replay with source_eligible=False but blocks every new correction,
+including withdrawal. Source eligibility is not downstream authorization.
+
+One resolver validates persisted initial endpoints, count/min/max contiguity and every
+correction's method/version/mode/target/source in a captured revision prefix. Corruption
+fails closed, never repairs. Ordinary model insertion validates persisted routed-write
+endpoints, UUID, next revision and shape without relying on full_clean; ordinary edits,
+replacement saves, reparenting and deletion reject. Database uniqueness is final
+protection; direct model writes are not an independent concurrent-write protocol.
+Privileged bulk/QuerySet/raw SQL remain maintenance bypasses, not tamper-proof auditing.
+
+Owner-scoped effective reads return output, optional initial assertion, effective item,
+revision, decision type/reference and current eligibility. History uses numeric revision,
+default 100/max 200, and cursor (output, initial association, through_revision,
+last_revision); subsequent pages use last < revision <= through. Appends do not change
+that captured prefix. Readers do not write or select descriptive interpretation.
+Admin remains privileged read-only inspection. No public API, parser, PostingSource,
+JobPosting write, automatic split/merge or historical inference is introduced.
 
 ### Content and relationships
 
