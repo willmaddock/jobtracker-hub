@@ -324,6 +324,86 @@ reconciliation: preserve observations safely, never overwrite or create another
 supposedly identical source, and pause automatic effects. Harmless normalization
 changes are not material conflicts. Content hashes are comparison evidence only.
 
+### Retained posting extraction provenance — approved bounded contract, 2026-09-27
+
+RetainedPostingExtraction records one trusted producer's declared completed operation
+against one canonical RetainedMessage. RetainedPostingExtractionOutput records zero
+or more ordered immutable output observations. Neither model identifies a durable
+source item, establishes cross-run continuity, selects an interpretation, creates a
+PostingSource, or authorizes JobPosting writes. Recording never executes parsing.
+
+Workspace derives through the source; no redundant Workspace/account/domain FK.
+Both source and output-parent FKs use PROTECT. Ordinary saves (including replacement
+instances with existing PKs), reparenting and deletion are forbidden. Routed PK
+checks protect ordinary insertion; bulk/QuerySet/raw SQL remain maintenance surfaces.
+Future approved purge must explicitly handle these rows and replay protection.
+
+Extraction has integer PK, required caller UUIDv4 operation_id, method/version,
+snapshot_version=1, input_spec, SHA-256 payload_digest, producer extracted_at and
+server recorded_at. Source/operation UUID is unique; the same UUID on another source
+is permitted. Output has integer PK, callable UUIDv4 portable_id, recorder-assigned
+position and fields. Extraction/portable UUID and extraction/position are unique.
+Positions are contiguous 0..n-1 but diagnostic only. Portable output reference is
+Workspace lineage + source portable ID + operation UUID + output UUID, never proof
+that outputs of different operations are the same item.
+
+The finite initial extractor is `job_alert_rules` version `1`, naming the parser
+semantics at `6863f277`. Parser/provider/fallback/output-semantic changes increment
+that version; behavior-preserving refactors do not. Preparation changes increment
+transform version; recording shape changes increment relevant schema versions.
+Historical contracts remain recognizable. No free-form producer versions are accepted.
+
+Input specification v1 has exactly version=1, representation_version=1, selectors
+and transform. Selectors contain subject=`content.subject`, body=`content.text.value`,
+and sender={role: `from` or `sender`, index: integer 0..99 selecting an existing entry}.
+Sender may be null only if neither role has an entry. Transform is exactly
+{method: `retained_text_arguments`, version: `1`}: selected address without display
+name, unchanged subject and unchanged text value, including nulls. No HTML, stripping,
+entity decoding, concatenation, whitespace preparation or URL extraction. Existing
+retention normalization and parser-internal behavior retain their separate versions.
+This is the future producer's declared input contract, not adoption of current sync.
+
+Source representation/content versions must agree at 1; canonical content digest
+and retained shape are validated. Source, mailbox and provider scopes must agree.
+Content/completeness remains on the source, not duplicated in extraction rows.
+Partial/unavailable text stays honest; zero outputs never proves absence of jobs.
+
+Each output has exactly source/title/company/location/salary/employment_type. Source
+is non-null, at most 64 UTF-8 bytes, one of linkedin/handshake/lensa/indeed/honeywell/
+jobs2web/awseducate/builtin/symplicity. Other fields allow null or unchanged strings,
+including blanks, up to 4096 UTF-8 bytes each. At most 1000 outputs, 2048 canonical
+input-spec bytes and 2 MiB complete canonical replay payload. Unknown/missing keys,
+wrong types (including boolean indexes), NUL, invalid Unicode and non-finite numbers
+reject atomically; no truncation or normalization of output labels.
+
+extracted_at is a producer-declared RFC3339 instant with explicit Z or ±HH:MM offset,
+seconds and at most six fractional digits; invalid dates, naive times, leap seconds
+and UTC conversion overflow reject. Canonical form is UTC with six fractional digits.
+No relative-to-retention/server-time claim. recorded_at is immutable server insertion
+time. Producer must preserve UUID, completion instant and full envelope across retries.
+
+Digest version 1 binds server-resolved Workspace/source PKs, source portable UUID,
+representation version/content digest, operation UUID, extractor method/version,
+snapshot version, validated input_spec, canonical completion instant and ordered
+{position, fields} outputs. SHA-256 uses sorted JSON keys, compact separators,
+ensure_ascii=False, allow_nan=False and UTF-8. Generated output UUIDs/new PKs and
+recorded_at are excluded. This is local replay authority, not portable business identity.
+
+Sole writer `record_posting_extraction` authenticates and bounds input, then takes
+Workspace gate → scoped source lock → source integrity/selectors/digest → operation
+lookup. Exact replay returns original evidence before mutable source-conflict admission.
+Changed valid payload returns 409 idempotency_key_reused; invalid input returns
+400 invalid_posting_extraction; unauthorized/foreign/inconsistent scope returns 404.
+Malformed retained representation returns 409 retained_source_invalid. New work uses
+the existing 409 retained_source_ineligible conflict policy. Insert operation and all
+outputs atomically. No later mailbox/Application/JobPosting locks or hidden retries.
+
+Internal scoped reader and read-only admin expose evidence and current eligibility;
+no public API. A subsequently conflicted source remains inspectable/exactly replayable
+with source_eligible=False, never downstream authorization. Contention may require
+explicit caller retry. This does not implement execution, task identity/dispatch or
+exactly-once scheduling. Additive schema starts empty; no historical extraction inference.
+
 ### Content and relationships
 
 Messages remain transient until needed for retained evidence, Discovery/review,

@@ -1,7 +1,8 @@
 # JobPosting Portable Identity Foundation
 
-Implemented and uncommitted for final read-only review, 2026-09-27. No staging,
-commit or push is authorized by this implementation checkpoint.
+Implemented and verified for final read-only review, 2026-09-27; subsequently committed
+as `6863f277b04e1f084d6f7b2169c4a8209c65592c` (`Implement JobPosting portable identity`).
+The base, file inventory and verification ledger below preserve the historical pre-commit review.
 
 ## Verified base
 
@@ -123,8 +124,9 @@ Nine new tests bring the previous full count of 776 to 785. Existing admin cover
 was strengthened without removing prior assertions. All final suite results above ran
 against the final code/test state. The first new identity-only command ran from repository
 root with equivalent `PYTHONPATH=/tmp:backend backend/venv/bin/python -B backend/manage.py`.
-`backend/db.sqlite3` remains absent/untracked; no provider migration exists. Exactly the
-11 listed files are changed, nothing is staged, and no commit or push occurred.
+`backend/db.sqlite3` remains absent/untracked; no provider migration exists. At that pre-commit review, exactly the
+11 listed files were changed, nothing was staged, and no commit or push had occurred.
+The subsequent commit is identified above; these statements preserve the review evidence.
 
 ## Exclusions and operational limitations
 

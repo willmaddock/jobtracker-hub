@@ -95,3 +95,79 @@ class PostingApplicationConversion(models.Model):
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=["posting", "application"], name="unique_surviving_posting_attempt")]
+
+
+class PostingExtractionProvenance(models.Model):
+    """Insert-only ordinary ORM evidence; bulk/raw SQL are maintenance surfaces."""
+    class Meta:
+        abstract = True
+
+    def save(self, *args, **kwargs):
+        using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
+        if not self._state.adding or (self.pk and type(self).objects.using(using).filter(pk=self.pk).exists()):
+            raise ValidationError("Posting extraction provenance is immutable.")
+        self.validate_insertion()
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("Posting extraction provenance deletion is not implemented.")
+
+
+class RetainedPostingExtraction(PostingExtractionProvenance):
+    """Completed producer-declared extraction, not a task or durable source item.
+
+    retained_extractions.record_posting_extraction owns atomic batch writes. Source
+    ownership derives through the protected message; future purge is explicit.
+    """
+    retained_message = models.ForeignKey("email_sync.RetainedMessage", on_delete=models.PROTECT,
+                                         related_name="posting_extractions")
+    operation_id = models.UUIDField(editable=False)
+    extractor_method = models.CharField(max_length=64)
+    extractor_version = models.CharField(max_length=32)
+    snapshot_version = models.PositiveSmallIntegerField(default=1, editable=False)
+    input_spec = models.JSONField()
+    payload_digest = models.CharField(max_length=64, editable=False)
+    extracted_at = models.DateTimeField()
+    recorded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["retained_message", "operation_id"],
+                                              name="posting_extraction_operation")]
+
+    def validate_insertion(self):
+        from . import extraction_contract as contract
+        from django.utils.timezone import is_aware
+        from datetime import datetime
+        import re
+        try:
+            contract.require(type(self.snapshot_version) is int and self.snapshot_version == contract.SNAPSHOT_VERSION)
+            contract.require(isinstance(self.extracted_at, datetime) and is_aware(self.extracted_at))
+            contract.validate_envelope(self.operation_id, self.extractor_method, self.extractor_version,
+                                       self.input_spec, self.extracted_at.isoformat(), [])
+            contract.require(type(self.payload_digest) is str and
+                             re.fullmatch(r"[0-9a-f]{64}", self.payload_digest) is not None)
+        except contract.InvalidExtraction:
+            raise ValidationError("Invalid posting extraction.") from None
+
+
+class RetainedPostingExtractionOutput(PostingExtractionProvenance):
+    """One output observation; UUID/position never establish cross-run continuity."""
+    extraction = models.ForeignKey(RetainedPostingExtraction, on_delete=models.PROTECT, related_name="outputs")
+    portable_id = models.UUIDField(default=uuid.uuid4, editable=False)
+    position = models.PositiveIntegerField()
+    fields = models.JSONField()
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["extraction", "portable_id"], name="posting_output_portable"),
+            models.UniqueConstraint(fields=["extraction", "position"], name="posting_output_position"),
+        ]
+
+    def validate_insertion(self):
+        from . import extraction_contract as contract
+        try:
+            contract.operation_uuid(self.portable_id)
+            contract.require(type(self.position) is int and 0 <= self.position < contract.MAX_OUTPUTS)
+            contract.validate_fields(self.fields)
+        except contract.InvalidExtraction:
+            raise ValidationError("Invalid posting extraction output.") from None

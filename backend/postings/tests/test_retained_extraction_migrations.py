@@ -1,4 +1,4 @@
-"""Populated forward-only migration, never a real tracker database."""
+"""Additive provenance schema on a disposable populated checkpoint database."""
 import tempfile
 from django.db import connections
 from django.db.migrations.executor import MigrationExecutor
@@ -6,10 +6,10 @@ from django.test import TransactionTestCase
 from django.utils import timezone
 
 
-class RetentionMigrationTests(TransactionTestCase):
-    def test_checkpoint_graph_preserved_and_no_historical_email_promoted(self):
+class PostingExtractionMigrationTests(TransactionTestCase):
+    def test_populated_checkpoint_preserved_without_fabrication(self):
         with tempfile.TemporaryDirectory() as temp:
-            alias = "retained_fixture"
+            alias = "posting_extraction_fixture"
             config = dict(connections["default"].settings_dict)
             config.update(NAME=temp + "/fixture.sqlite3", ENGINE="django.db.backends.sqlite3", OPTIONS={})
             original = self.databases
@@ -18,18 +18,10 @@ class RetentionMigrationTests(TransactionTestCase):
             db = connections[alias]
             try:
                 executor = MigrationExecutor(db)
-                leaves = executor.loader.graph.leaf_nodes()
-                # Freeze the historical Application checkpoint: its later message
-                # relationship depends on the retained schema being tested here.
-                # postings 0004 references retained messages; keep this pre-retention
-                # baseline at the last independent posting checkpoint.
-                baseline = [node for node in leaves if node[0] not in {"email_sync", "applications", "postings"}] + [
-                    ("applications", "0006_deterministic_derivation"), ("email_sync", "0005_imapcredential"),
-                    ("postings", "0003_jobposting_portable_identity")]
+                others = [node for node in executor.loader.graph.leaf_nodes() if node[0] != "postings"]
+                baseline = others + [("postings", "0003_jobposting_portable_identity")]
+                target = others + [("postings", "0004_retained_posting_extraction_provenance")]
                 executor.migrate(baseline)
-                baseline_tables = db.introspection.table_names()
-                self.assertNotIn("email_sync_retainedmessage", baseline_tables)
-                self.assertNotIn("applications_applicationmessage", baseline_tables)
                 old = executor.loader.project_state(baseline).apps
                 def create(app, model, **values):
                     return old.get_model(app, model).objects.using(alias).create(**values)
@@ -66,30 +58,49 @@ class RetentionMigrationTests(TransactionTestCase):
                     posting = create("postings", "JobPosting", workspace_id=ws.pk, account_id=account.pk, dedupe_key=str(n))
                     create("postings", "PostingApplicationConversion", workspace_id=ws.pk, posting_id=posting.pk,
                         application_id=app.pk, application_portable_id=app.portable_id, request_intent_id=intent.pk)
-                # Compare every column in every pre-existing table, including M2M,
-                # stored credentials, file references, derivation and lifecycle state.
-                tables = [table for table in db.introspection.table_names() if table != "django_migrations"]
+                mailbox = create("email_sync", "MailboxLineage", workspace_id=ws.pk, provider="gmail",
+                                 evidence={"method": "fixture", "reference": "preserve"})
+                message = create("email_sync", "RetainedMessage", workspace_id=ws.pk, mailbox_id=mailbox.pk,
+                                 provider="gmail", locator_kind="gmail_message_id", locator_value="native",
+                                 stability="v1", content={"historical": "preserved"}, content_digest="preserve")
+                key = create("email_sync", "RetentionKey", workspace_id=ws.pk, key="original", initial_digest="preserve")
+                observation = create("email_sync", "RetainedObservation", workspace_id=ws.pk, key_id=key.pk,
+                    message_id=message.pk, mailbox_id=mailbox.pk, digest="preserve", payload={"fixture": True},
+                    state="retained", observed_at=stamp)
+                review = create("applications", "RetainedApplicationReview", workspace_id=ws.pk,
+                    retained_message_id=message.pk, originating_observation_id=observation.pk,
+                    initial_classification="match")
+                create("applications", "RetainedApplicationReviewCandidate", review_id=review.pk,
+                       application_id=app.pk, application_portable_id=app.portable_id)
+                create("applications", "RetainedApplicationReviewDisposition", review_id=review.pk,
+                       dismissed_at=stamp, revision=2)
+                create("applications", "ApplicationMessage", workspace_id=ws.pk, application_id=app.pk,
+                       retained_message_id=message.pk)
                 def snapshot(table):
                     with db.cursor() as cursor:
-                        cursor.execute(f'SELECT * FROM {db.ops.quote_name(table)} ORDER BY 1')
-                        return cursor.description, cursor.fetchall()
+                        cursor.execute(f"SELECT * FROM {db.ops.quote_name(table)} ORDER BY 1")
+                        return [col[0] for col in cursor.description], cursor.fetchall()
+                tables = set(db.introspection.table_names()) - {"django_migrations"}
                 before = {table: snapshot(table) for table in tables}
                 executor = MigrationExecutor(db)
-                executor.migrate(leaves)
-                new = executor.loader.project_state(leaves).apps
-                for table in tables:
-                    self.assertEqual(before[table], snapshot(table), table)
-                for model in ["MailboxLineage", "RetainedMessage", "RetentionKey", "RetainedObservation"]:
-                    self.assertEqual(new.get_model("email_sync", model).objects.using(alias).count(), 0)
-                # An already applied forward plan is a no-op even with new retained
-                # references; no backwards schema migration is used for cleanup.
-                mailbox = new.get_model("email_sync", "MailboxLineage").objects.using(alias).create(
-                    workspace_id=ws.pk, provider="gmail", evidence={"method": "fixture", "reference": "explicit"})
-                retained = new.get_model("email_sync", "RetainedMessage").objects.using(alias).create(
-                    workspace_id=ws.pk, mailbox_id=mailbox.pk, provider="gmail", locator_kind="gmail_message_id",
-                    locator_value="known", stability="v1", content={"fixture": True}, content_digest="fixture")
-                MigrationExecutor(db).migrate(leaves)
-                self.assertEqual(new.get_model("email_sync", "RetainedMessage").objects.using(alias).get(pk=retained.pk).mailbox_id, mailbox.pk)
+                migration = executor.loader.get_migration("postings", "0004_retained_posting_extraction_provenance")
+                self.assertEqual(migration.dependencies, [("postings", "0003_jobposting_portable_identity"),
+                                                          ("email_sync", "0006_retained_email_foundation")])
+                self.assertEqual([type(op).__name__ for op in migration.operations],
+                                 ["CreateModel", "CreateModel", "AddConstraint", "AddConstraint", "AddConstraint"])
+                self.assertEqual([m.name for m, reverse in executor.migration_plan(target)],
+                                 ["0004_retained_posting_extraction_provenance"])
+                executor.migrate(target)
+                new_tables = {"postings_retainedpostingextraction", "postings_retainedpostingextractionoutput"}
+                def check():
+                    self.assertEqual(set(db.introspection.table_names()) - {"django_migrations"}, tables | new_tables)
+                    for table in tables:
+                        self.assertEqual(before[table], snapshot(table), table)
+                    for table in new_tables:
+                        self.assertEqual(snapshot(table)[1], [])
+                check()
+                MigrationExecutor(db).migrate(target)
+                check()
             finally:
                 db.close()
                 del connections[alias]

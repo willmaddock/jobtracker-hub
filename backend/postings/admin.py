@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import JobPosting
+from .models import JobPosting, RetainedPostingExtraction, RetainedPostingExtractionOutput
 
 
 @admin.register(JobPosting)
@@ -17,3 +17,21 @@ class JobPostingAdmin(admin.ModelAdmin):
     def get_readonly_fields(self, request, obj=None):
         fields = super().get_readonly_fields(request, obj)
         return fields + ("workspace", "account") if obj is not None else fields
+
+
+@admin.register(RetainedPostingExtraction, RetainedPostingExtractionOutput)
+class PostingExtractionAdmin(admin.ModelAdmin):
+    """Privileged read-only inspection. Default field rendering escapes JSON."""
+    actions = None
+
+    def get_readonly_fields(self, request, obj=None):
+        return tuple(field.name for field in self.model._meta.fields)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False

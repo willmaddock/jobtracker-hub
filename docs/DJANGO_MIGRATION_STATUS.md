@@ -1,6 +1,6 @@
 # Django migration: current status
 
-Maintained checkpoint: 2026-09-27. Retained Email Source Identity and Content
+Maintained checkpoint: 2026-09-28. Retained Email Source Identity and Content
 Foundation is committed at `2f0cd1f`; Gmail Mailbox Identity and Durable Lineage
 Foundation is committed at `9f6627770c43fd3b3af492d2201e647af77cc53f` on
 `django-migration`. Gmail Provider Adoption into Retained-Source Authority is committed
@@ -13,8 +13,10 @@ Application** is committed at `4d545820f62d92c76cf4da189706f17b3832949f`.
 `5e25093a62a6c908d2da8123d1d6a7323eca2cd5`. **Retained Review Create Application
 Orchestration** is committed at `ab1cb0e5e37faff606b1be7c84cf83fb99f77e30`
 (`Implement retained review create application orchestration`).
-**JobPosting Portable Identity Foundation** is implemented and uncommitted; verification
-is recorded below.
+**JobPosting Portable Identity Foundation** is committed at
+`6863f277b04e1f084d6f7b2169c4a8209c65592c` (`Implement JobPosting portable identity`).
+**Retained Posting Extraction Provenance Foundation** is implemented and uncommitted;
+current verification is recorded below.
 Frontend integration, historical reconciliation, email derivation and operational
 cutover remain pending.
 
@@ -35,11 +37,42 @@ cutover remain pending.
 
 ## 2. Current verification evidence
 
-### JobPosting portable identity — current verification, 2026-09-27
+### Retained Posting Extraction Provenance — uncommitted correction, 2026-09-28
+
+Base `6863f277b04e1f084d6f7b2169c4a8209c65592c` on `django-migration`; repository,
+HEAD/tracking/live remote, subject/parent, clean tree/index and absent local DB/provider
+migration were verified before edits. See the [extraction provenance review](DJANGO_RETAINED_POSTING_EXTRACTION_REVIEW.md).
+
+- Immutable completed operations and ordered output observations, strict versioned
+  input/output contracts, source integrity/scope validation, atomic replay/conflict
+  recording, scoped reader and read-only admin. No parser execution or JobPosting writes.
+- Initial implementation verification (before correction): provenance **29**, migration
+  **1**, combined **30**, postings **98**, retained-source/review **69**, affected **797**,
+  full Django **815** passed. The review then found receipt-provenance semantic validation
+  missing despite matching digests. This history is preserved in the slice review.
+- The bounded correction enforces canonical provider/receipt-source compatibility and
+  adjacent receipt precision/value rules, without retention or digest-schema changes.
+  New receipt regressions **4 passed**; all provenance **33 passed**, migration **1 passed**
+  (combined **34**, 1.440s), retained-source/review **69 passed**, postings **102 passed**,
+  affected apps **801 passed** (103.609s), full Django **819 passed** (108.779s).
+- System check, posting drift, AST, whitespace, local Markdown references and diff
+  checks pass. Global dry-run drift remains only known `EmailAccount.provider`.
+- Additive postings 0004 creates two empty tables and three unique constraints; no
+  historical backfill. Disposable migration fixture preserves every pre-existing row.
+  The separately approved thirteenth-file correction pins the old retained-email
+  migration test's pre-retention postings baseline to 0003; assertions remain intact.
+- Isolated in-memory/disposable SQLite only; no real database opened or migrated.
+  `backend/db.sqlite3` and provider migration remain absent; nothing staged/committed.
+- PostgreSQL concurrency, production payload performance, providers, task/retry
+  orchestration, export/restore and cutover remain unvalidated. Recorder trusts the
+  producer envelope. Source items, PostingSource, evidence and ingestion remain deferred.
+
+### JobPosting portable identity — historical verification, 2026-09-27
 
 Base `ab1cb0e5e37faff606b1be7c84cf83fb99f77e30` on `django-migration`; local HEAD,
 tracking and live remote matched with a clean tree before edits. The approved 11-file
-slice is implemented and uncommitted. See the [posting identity review](DJANGO_POSTING_IDENTITY_REVIEW.md).
+slice was uncommitted during verification and subsequently committed at `6863f277`.
+See the [posting identity review](DJANGO_POSTING_IDENTITY_REVIEW.md).
 
 - Identity **5 passed**, populated migration **1 passed**, posting service/view **31 passed**,
   Application identity/creation regressions **25 passed**. Posting-focused **68 passed**
@@ -491,7 +524,7 @@ No newly accepted capability is marked verified merely because it is designed.
 | Provider connections | Gmail/Outlook/IMAP connect/sync/disconnect; encrypted credentials | Baseline provider/view coverage, mocked external seams | Historical Gmail OAuth/live-sync checkpoint; complete target flows unvalidated; Outlook/IMAP live validation unestablished |
 | Sync/jobs | Gmail per-message retention plus transitional match/discovery/thread projection; inline single sync, queued bulk/Beat | Gmail adoption/replay and existing sync/task coverage; not real-broker proof | Real Redis/worker/Beat operation unestablished |
 | Retained messages/review | Protected source/observation models, verified Gmail lineage and native-ID producer adoption; scoped review inspection, explicit attachment, independent disposition and atomic create-Application orchestration with durable results | Retention, Gmail adoption, attachment/disposition/creation APIs, migration preservation and SQLite logical concurrency coverage in §2 | Other-provider adoption, broader review actions, frontend and operational validation pending |
-| Postings | Integer PK plus immutable Workspace-scoped portable UUID; existing extractor/ingestion and list/save/dismiss/restore/apply APIs | Identity/backfill/replay and compatibility coverage in §2 | Sync does not call ingestion; source-item/PostingSource foundation, evidence and full workflow pending |
+| Postings | Integer PK plus immutable Workspace-scoped portable UUID; existing extractor/ingestion and list/save/dismiss/restore/apply APIs | Identity/backfill/replay and compatibility coverage in §2 | Completed-extraction provenance recorder exists; sync does not call ingestion; source-item/PostingSource, evidence and full workflow pending |
 | Import/export | No Django legacy importer or portable export/restore | Unimplemented/unverified | Reconciliation/cutover pending |
 | Production | Partial settings/storage/task scaffolding; SQLite inherited, development fallbacks remain | Suite success is not deployment verification | PostgreSQL/storage/jobs/backup/restore/rollback pending |
 
@@ -953,7 +986,7 @@ automatic disposition, email activity/status/date inference, evidence generation
 PostingSource, provider, frontend or historical reconciliation work. Protected references
 leave future purge/terminal compaction to a separately approved lifecycle slice.
 
-### JobPosting Portable Identity — uncommitted
+### JobPosting Portable Identity — committed at 6863f277
 
 JobPosting retains integer PK/routes and gains immutable Workspace-scoped portable UUID.
 Serializer/admin expose it read-only; conversion UUID fields still identify Applications.
@@ -966,7 +999,7 @@ preservation, reverse limitations and verification evidence.
 
 ## 8. Next recommended implementation actions
 
-1. Review the uncommitted JobPosting Portable Identity Foundation; prior local database provenance remains unresolved.
+1. Review the uncommitted Retained Posting Extraction Provenance Foundation; no source-item or PostingSource implementation is included. Prior local database provenance remains unresolved.
 2. Resolve the legacy verification blockers under separately approved scope before declaring a fully green checkpoint.
 3. Separately scope further review actions and future filtering/queue UX, along with broader email/job and frontend work.
 4. Plan provenance-aware historical reconciliation with importer/cutover work; do not silently backfill current records.
