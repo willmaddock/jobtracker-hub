@@ -663,6 +663,100 @@ account/Workspace cascades may be blocked. Purge, deletion-error translation, ac
 redesign, portability, PostgreSQL operation, production-scale optimization and canonical
 consumers remain separately authorized work. No API/frontend or legacy changes.
 
+### Retained posting interpretation selection — approved contract, 2026-09-29
+
+RetainedPostingInterpretationDecision anchors directly to RetainedPostingItem. It
+selects one whole retained output through its initial RetainedPostingItemAssociation,
+without a redundant output FK or composed descriptor object. Empty history is revision
+0/unresolved; the first actual decision is revision 1. There is no initial interpretation
+assertion, mutable state row, Meta.ordering or timestamp ordering authority.
+
+Fields are protected item, caller UUIDv4 operation_id, positive signed-64-bit revision,
+select/withdraw mode, nullable protected selected_association, nullable nonnegative
+signed-64-bit membership_revision, protected actor, explicit_owner method, version 1,
+and server created_at. Six constraints enforce item-scoped operation/revision uniqueness,
+positive revision, exact select/witness versus withdraw/null shape, method and version.
+Only automatic FK and unique indexes are used. Additive postings 0009 creates an empty
+interpretation table; no backfill or changes to existing tables.
+
+A membership witness names initial association revision 0 or its correction prefix N.
+Every historical selection validates that prefix, including initial policy/mode, and
+requires its effective item to equal the interpretation item. This proves logical
+membership; canonical serialization establishes that the witness was current at append.
+Current membership revision differing from the recorded witness makes a selection stale,
+even after an away-and-back correction. Reaffirming the same output at its newer current
+witness appends a meaningful decision. Membership changes never append interpretation
+history. Invalid historical witnesses are corruption, never normal staleness.
+
+The new interpretation module validates complete persisted extraction evidence without
+changing extraction contracts. It bounds output reads to MAX_OUTPUTS+1, checks exact
+contiguous stored positions, portable UUIDv4 identities, snapshot version, fields,
+metadata, timestamp and input specification; resolves selectors against retained content;
+and reconstructs the existing envelope and source identity for payload-digest comparison.
+Source identity is workspace_id, retained_message_id, retained_message_portable_id,
+representation_version and content_digest. Corrupt unselected sibling outputs invalidate
+the batch. Validation covers all referenced selections in the captured interpretation
+prefix, including selections preceding withdrawal. Only per-call caching is allowed;
+there is no parsing, evidence repair or mutation.
+
+Sole command decide_posting_interpretation accepts actor, workspace, item_id, operation_id,
+expected_revision, mode, output_id and expected_membership_revision. Ordering is owner/
+bounded-input validation → atomic Workspace gate/ownership recheck → scoped item/source
+lock and integrity → requested endpoint → operation lookup/payload collision → validated
+history/evidence → exact replay → interpretation revision → source eligibility → current
+membership/witness/target → no-op → capacity → append → current result. No hidden retries
+or posting/mapping locks. Current membership revision mismatch precedes target mismatch.
+Cross-workspace/source endpoints return not_found; same-source wrong/withdrawn membership
+returns posting_output_not_member; absent initial association is posting_membership_required.
+
+Operation identity is (item, UUID), binding mode, output/null, expected interpretation
+revision (stored revision minus one), expected membership revision/null, method and version.
+Actor is attribution only. Exact replay preserves the original actor/time and returns that
+immutable decision plus freshly resolved current state, even if stale or superseded.
+It never reapplies the selection. Future current owners may replay old operations; former
+owners cannot access them. New requests reject stale_revision/stale_membership_revision.
+Unresolved withdrawal, repeated withdrawal and the same output/witness reject with
+posting_interpretation_unchanged without reserving UUID or revision. New work at capacity
+rejects posting_interpretation_revision_exhausted; exact replay remains available.
+
+Invalid command/navigation uses invalid_posting_interpretation (400). Interpretation
+history corruption uses posting_interpretation_history_invalid (409); invalid persisted
+extraction evidence uses posting_interpretation_evidence_invalid (409). Existing source
+integrity, eligibility and membership-history errors remain in use. Changed operation
+payload uses idempotency_key_reused before replay or stale checks. Sticky source conflict
+allows validated reads/replay but blocks new select and withdraw; source corruption fails
+all validated surfaces. No automatic repair path is introduced.
+
+read_posting_interpretation returns a frozen result: item, revision, latest_decision,
+state, selected_output, recorded_membership_revision, current_membership_revision,
+applicable_output, source_eligible and advisory can_append_decision. States are exactly
+unresolved, withdrawn, selected, stale. Stale retains selected evidence but has no applicable
+output; unresolved/withdrawn have neither. Corruption is an exception. Eligibility is
+separate from membership applicability; advisory append permission reflects eligibility
+and revision capacity, not waiver of command validation.
+
+Effective and history readers use a short atomic Workspace/source boundary for coherent
+interpretation and membership observation. SQLite's Workspace gate executes a no-op update;
+these reads preserve domain state but are not SQL-select-only. History returns frozen
+page metadata and recorded witness rows, ordered by revision, default 100/max 200 with
+limit+1. Cursor (item_id, through_revision, last_revision) fixes the validated interpretation
+prefix, excluding later appends; it does not freeze current source eligibility. History
+rows have no live applicability annotation. Effective reads supply live applicability.
+
+Ordinary model insertion validates persisted evidence, contiguous revision, current witness,
+actor and actual state change on the supplied write alias. Ordinary updates, replacement-PK
+saves and instance deletion reject; protected historical references survive withdrawal.
+Bulk/QuerySet/raw operations remain privileged bypasses, not tamper-proof auditing. Admin
+is inspection-only, with no add/change/delete/actions.
+
+Interpretation works before mapping and independently of mapping creation, remap,
+withdrawal/restoration or mapping corruption. Multiple items mapped to one posting retain
+independent interpretation authority; no posting-level winner exists. Retained fields are
+source/title/company/location/salary/employment_type, with existing null/blank and length
+semantics preserved. There is no retained URL. Descriptor length mismatch belongs to later
+projection. No JobPosting allocation, descriptor projection, ingestion, membership/mapping
+write, conversion/lifecycle mutation, API/frontend or legacy change is authorized here.
+
 ### Content and relationships
 
 Messages remain transient until needed for retained evidence, Discovery/review,

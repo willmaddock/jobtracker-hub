@@ -1,8 +1,10 @@
 # PostingSource Correction / Effective-Mapping Authority
 
-Implementation and required validation are complete; changes remain unstaged,
-uncommitted and unpushed. This is implementation evidence, not the separately
-authorized final read-only pre-commit review or authorization to stage, commit or push.
+Historical implementation/pre-commit evidence follows. This slice was subsequently
+reviewed, committed and pushed at `ac6d13db7f52889bff12b128a153e397769fee67`
+(`Implement PostingSource correction authority`), parent
+`482bcc5f9528fb9a6e9b3e7dce1c43a7443c40b3`. The original test evidence below is
+preserved; it is not fresh validation of later slices.
 
 ## Verified base
 
@@ -105,7 +107,7 @@ AlterField. No provider migration was generated or fixed. Graph ends at postings
 SQL contains only the correction table, approved constraints, normal type checks and
 three automatic FK indexes. No application of migrations to real data occurred.
 
-## Final scope and Git state
+## Historical pre-commit scope and Git state
 
 Modified:
 - backend/postings/models.py
@@ -122,11 +124,13 @@ Added, untracked:
 - backend/postings/tests/test_posting_source_correction_migrations.py
 - docs/DJANGO_POSTING_SOURCE_CORRECTION_REVIEW.md
 
-Exactly eleven authorized files; index empty, HEAD unchanged at `482bcc5f`.
+At that implementation checkpoint: exactly eleven authorized files; index empty,
+HEAD unchanged at `482bcc5f`.
 All added files were explicitly inspected; Python syntax, whitespace, local Markdown
 references and git diff --check pass. backend/db.sqlite3 remains absent/untracked;
-unrelated provider migration absent. No staging, commit or push. Implementation is
-ready for separately authorized read-only pre-commit review.
+unrelated provider migration absent. No staging, commit or push had occurred at
+that point; the implementation then awaited separate read-only review. Those historical stages subsequently completed
+at the authoritative commit recorded above.
 
 ## Limitations
 

@@ -412,3 +412,45 @@ class PostingSourceCorrection(PostingItemProvenance):
             raise ValidationError("Correction target workspace mismatch.")
         if self.target_posting_id == (chain.posting.pk if chain.posting else None):
             raise ValidationError("Correction must change the effective target.")
+
+
+class RetainedPostingInterpretationDecision(PostingItemProvenance):
+    """Whole-output selection with a logical membership witness, never projection."""
+    class Mode(models.TextChoices):
+        SELECT = "select", "Select"
+        WITHDRAW = "withdraw", "Withdraw"
+
+    item = models.ForeignKey(RetainedPostingItem, on_delete=models.PROTECT,
+                             related_name="interpretation_decisions")
+    operation_id = models.UUIDField(editable=False)
+    revision = models.PositiveBigIntegerField()
+    mode = models.CharField(max_length=16, choices=Mode.choices)
+    selected_association = models.ForeignKey(RetainedPostingItemAssociation, null=True,
+        on_delete=models.PROTECT, related_name="interpretation_decisions")
+    membership_revision = models.PositiveBigIntegerField(null=True)
+    actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+                             related_name="posting_interpretation_decisions")
+    method = models.CharField(max_length=32, default="explicit_owner", editable=False)
+    decision_version = models.PositiveSmallIntegerField(default=1, editable=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["item", "operation_id"], name="posting_interp_operation"),
+            models.UniqueConstraint(fields=["item", "revision"], name="posting_interp_revision"),
+            models.CheckConstraint(condition=models.Q(revision__gte=1), name="posting_interp_positive"),
+            models.CheckConstraint(condition=(models.Q(mode="select", selected_association__isnull=False,
+                membership_revision__isnull=False, membership_revision__gte=0)
+                | models.Q(mode="withdraw", selected_association__isnull=True, membership_revision__isnull=True)),
+                name="posting_interp_selection"),
+            models.CheckConstraint(condition=models.Q(method="explicit_owner"), name="posting_interp_method"),
+            models.CheckConstraint(condition=models.Q(decision_version=1), name="posting_interp_version"),
+        ]
+
+    def validate_insertion(self, using):
+        from rest_framework.exceptions import APIException
+        from .retained_interpretations import validate_insertion
+        try:
+            validate_insertion(self, using)
+        except APIException:
+            raise ValidationError("Invalid interpretation decision or evidence.") from None

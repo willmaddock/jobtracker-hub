@@ -2,7 +2,7 @@ from django.contrib import admin
 
 from .models import (JobPosting, RetainedPostingExtraction, RetainedPostingExtractionOutput,
                      RetainedPostingItem, RetainedPostingItemAssociation, RetainedPostingItemCorrection,
-                     PostingSource, PostingSourceCorrection)
+                     PostingSource, PostingSourceCorrection, RetainedPostingInterpretationDecision)
 
 
 @admin.register(JobPosting)
@@ -23,7 +23,7 @@ class JobPostingAdmin(admin.ModelAdmin):
 
 @admin.register(RetainedPostingExtraction, RetainedPostingExtractionOutput,
                 RetainedPostingItem, RetainedPostingItemAssociation, RetainedPostingItemCorrection,
-                PostingSource, PostingSourceCorrection)
+                PostingSource, PostingSourceCorrection, RetainedPostingInterpretationDecision)
 class PostingExtractionAdmin(admin.ModelAdmin):
     """Privileged read-only inspection. Default field rendering escapes JSON."""
     actions = None
