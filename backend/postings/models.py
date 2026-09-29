@@ -312,3 +312,40 @@ class RetainedPostingItemCorrection(PostingItemProvenance):
             raise ValidationError("Correction target source mismatch.")
         if self.target_item_id == (chain.item.pk if chain.item else None):
             raise ValidationError("Correction must change the effective target.")
+
+
+class PostingSource(PostingItemProvenance):
+    """Immutable initial item-to-posting assertion, not effective mapping authority."""
+    item = models.OneToOneField(RetainedPostingItem, on_delete=models.PROTECT,
+                               related_name="initial_posting_source")
+    posting = models.ForeignKey(JobPosting, on_delete=models.PROTECT,
+                                related_name="initial_posting_sources")
+    actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+                              related_name="posting_source_assertions")
+    method = models.CharField(max_length=32, default="explicit_owner", editable=False)
+    decision_version = models.PositiveSmallIntegerField(default=1, editable=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(condition=models.Q(method="explicit_owner"), name="posting_source_method"),
+            models.CheckConstraint(condition=models.Q(decision_version=1), name="posting_source_version"),
+        ]
+
+    def validate_insertion(self, using):
+        from django.contrib.auth import get_user_model
+        if (self.method != "explicit_owner" or type(self.decision_version) is not int
+                or self.decision_version != 1
+                or not get_user_model().objects.using(using).filter(pk=self.actor_id).exists()):
+            raise ValidationError("Invalid posting source attribution or policy.")
+        source = RetainedPostingItem.objects.using(using).filter(pk=self.item_id).values(
+            "retained_message__workspace_id", "retained_message__mailbox__workspace_id",
+            "retained_message__provider", "retained_message__mailbox__provider").first()
+        posting = JobPosting.objects.using(using).filter(pk=self.posting_id).values(
+            "workspace_id", "account__workspace_id").first()
+        if (source is None or posting is None
+                or source["retained_message__workspace_id"] != source["retained_message__mailbox__workspace_id"]
+                or source["retained_message__provider"] != source["retained_message__mailbox__provider"]
+                or source["retained_message__workspace_id"] != posting["workspace_id"]
+                or posting["workspace_id"] != posting["account__workspace_id"]):
+            raise ValidationError("Posting source endpoint scope mismatch.")

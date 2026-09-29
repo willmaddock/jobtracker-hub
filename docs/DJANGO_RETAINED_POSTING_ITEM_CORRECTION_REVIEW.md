@@ -1,7 +1,8 @@
 # Append-Only Posting-Item Association Corrections + Revision-Based Effective State
 
-Implemented and verified, **uncommitted** for final read-only review. Nothing staged;
-no commit or push. No next slice started.
+Committed at `8812bf8f61de1db5b622af6f61b71a5a1b68fdb3`
+(`Implement retained posting item corrections`). The following preserves the historical
+implementation/pre-commit verification and scope; it is not the current working diff.
 
 ## Verified checkpoint
 
@@ -179,10 +180,22 @@ The prior item slice is now recorded as committed at 2090a61b, preserving histor
 invocation correction and final pre-commit review history. Foundations records the
 approved correction/no-op contract; Status distinguishes this uncommitted checkpoint.
 
-Exactly the eleven approved files; no staging, commit or push. No backend/db.sqlite3
+At that pre-commit checkpoint: exactly the eleven approved files, with no staging,
+commit or push yet. No backend/db.sqlite3
 or unrelated provider migration. Migration 0005, retained_items.py, extraction services/
 contracts, parser, providers/Gmail, public APIs/serializers/frontend remain unchanged.
 No PostingSource, descriptive selection, JobPosting/evidence ingestion, split/merge,
 historical reconciliation, lifecycle redesign, dependencies or real-data changes.
 Production-scale performance, PostgreSQL, providers, scheduling, export/restore and
 operational cutover remain unvalidated. No fresh legacy-suite claim.
+
+
+## Subsequent final review and commit
+
+The final read-only review reported READY TO COMMIT, no blockers or should-fix findings,
+and eleven hashes unchanged from verification through review. Its non-blocking observation:
+policy fields are DB-rejection tested, rather than persisted through privileged constraint
+bypass to test resolver corruption handling. The resolver checks historical policy fields.
+The authorized commit above preserved all reviewed content and synchronized local/tracking/
+live remote references with a clean tree. Future initial PostingSource work is separate;
+this slice adds output membership authority, not item-to-JobPosting mapping.

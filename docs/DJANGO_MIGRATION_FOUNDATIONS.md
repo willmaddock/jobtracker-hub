@@ -522,6 +522,68 @@ that captured prefix. Readers do not write or select descriptive interpretation.
 Admin remains privileged read-only inspection. No public API, parser, PostingSource,
 JobPosting write, automatic split/merge or historical inference is introduced.
 
+### Initial PostingSource mapping — approved contract, 2026-09-28
+
+PostingSource is an explicit owner assertion that one durable RetainedPostingItem
+corresponds to and supplies provenance for one existing JobPosting. It is scoped
+identity-mapping evidence, not global vacancy equivalence, descriptive interpretation,
+automatic dedupe, allocation or canonical ingestion authority. One item has zero/one
+immutable initial mapping; one posting may have many source items. Retained-message
+many-to-many posting provenance is expressed through these items.
+
+The row has integer PK, item OneToOne PROTECT, posting and actor PROTECT FKs,
+explicit_owner method, decision_version 1 and server creation time. Item uniqueness
+and two policy checks are the complete semantic constraints. No mapping UUID, operation
+UUID, revision, mode, redundant Workspace/source FK, output/decision binding, mutable
+state or descriptor snapshot. Portable references translate existing item/JobPosting
+endpoint identities; database PKs are not portable. Migration 0007 starts empty.
+
+Sole internal writer attach_posting_source accepts actor, Workspace, item ID and posting
+ID. Item identity is the one-shot decision key. Same target/policy replays original
+mapping/actor/time; changed target/policy gives 409 posting_source_conflict. Actor is
+attribution, not replay identity, so a later owner may replay. No allocation mode.
+
+Order: persisted current-owner authorization → bounded IDs → atomic Workspace gate
+and owner revalidation → scoped item → derived source lock/integrity → posting/account
+scope → existing mapping and persisted endpoint validation → replay/conflict → new-work
+source eligibility → insert. Source and posting/account must belong to the authorized
+Workspace; source mailbox scope/provider must agree. Retained source account need not
+match posting account. No descriptor/output/mailbox/Application locks or hidden retry.
+FK integrity protects endpoint deletion races; database failures are not success.
+
+Malformed IDs and missing/foreign/inconsistent endpoints use non-leaking 404. Reader
+navigation errors use internal 400 invalid_posting_source. Invalid source representation,
+digest or receipt provenance blocks read/replay/write through existing integrity helpers.
+Sticky conflict permits read/exact replay with source_eligible=False but blocks new mapping
+with retained_source_ineligible. Source integrity precedes replay; replay/conflict precedes
+new-work eligibility. Source eligibility is not evidence sufficiency or downstream authority.
+
+Ordinary insertion validates persisted routed-write endpoint scope, mailbox/provider
+consistency, persisted actor and exact policy, without requiring full_clean. Current-owner
+authorization/content admission belong to the service. Ordinary edits, replacement-instance
+saves, reparenting and deletion reject; bulk/QuerySet/raw SQL remain privileged bypasses.
+
+Zero effective outputs neither erase identity nor prevent an explicit mapping. Later
+output remap/withdrawal never changes, deactivates, deletes or transfers PostingSource.
+There is no item-wide membership revision; no evidence-set snapshot/support flag is
+synthesized. Initial mapping is historical assertion only. Future mapping correction/
+effective-state authority must precede canonical ingestion, dedupe, descriptor projection,
+allocation or automated evidence consumers. Inspection/tests/read-only admin are allowed.
+
+Owner-scoped read_initial_posting_source returns item, optional initial_source/posting,
+source_eligible and replay indicator. list_initial_posting_sources returns initial entries,
+default 100/max 200, ordered by PK, cursor (posting ID, last mapping ID), query id > last.
+Cursor must belong to the posting. This is keyset navigation, not snapshot isolation;
+later appended rows may appear. Returned endpoints/source integrity are validated.
+No current/effective mapping or interpretation is exposed. Admin disallows all mutation.
+
+New/dismissed/saved/converted postings are eligible targets; those transitions preserve
+mapping. PROTECT intentionally blocks mapped posting/item/actor deletion and account
+cascades reaching a mapped posting; Workspace deletion may also be blocked. Disconnect
+retains accounts and mappings. Existing Workspace DELETE may surface an unhandled
+ProtectedError; translation, account decoupling, posting Trash and generalized purge are
+separate work. No reference is weakened to CASCADE. No historical inference/backfill.
+
 ### Content and relationships
 
 Messages remain transient until needed for retained evidence, Discovery/review,
