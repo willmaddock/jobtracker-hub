@@ -584,6 +584,85 @@ retains accounts and mappings. Existing Workspace DELETE may surface an unhandle
 ProtectedError; translation, account decoupling, posting Trash and generalized purge are
 separate work. No reference is weakened to CASCADE. No historical inference/backfill.
 
+### PostingSource corrections and effective mapping — approved contract, 2026-09-28
+
+PostingSourceCorrection appends explicit owner decisions to an immutable initial
+PostingSource. The initial row remains historical evidence and anchors revision 0;
+no revision-zero event is inserted. Corrections use contiguous revisions 1..N,
+associate/withdraw modes, caller-supplied RFC UUIDv4 operation_id, nullable protected
+JobPosting target, protected actor, explicit_owner method, decision_version 1 and
+server creation time. Initial-source FK is PROTECT. Six database constraints enforce
+chain-scoped operation/revision uniqueness, positive revision, mode/target shape,
+method and version. Additive postings 0008 starts empty; no backfill or initial-schema
+change. No mutable current-state row, redundant item/source/Workspace FK, expected
+revision column, timestamp ordering or interpretation field.
+
+Sole internal writer correct_posting_source accepts actor, Workspace, item_id,
+operation_id, expected_revision, mode and optional target_posting_id. Ordering is
+persisted current-owner/input validation → atomic Workspace gate/ownership recheck →
+scoped item and retained-source lock/integrity → initial assertion validation → target
+scope → operation lookup/payload collision → validated chain → exact replay → expected
+revision → source eligibility → no-op → capacity → append. No extra endpoint locks or
+hidden retries. SQLite lock refusal remains caller-retry behavior with the same UUID
+and payload. Constraints protect collisions; direct model insertion is not a separate
+concurrent-write protocol.
+
+Operation identity is (initial_source, operation_id), binding mode, target/null,
+expected revision (stored revision minus one), method and version. Actor is attribution,
+not replay identity. Exact replay returns the original correction/actor/time plus
+separately resolved current effective state, even after later events. A later current
+owner may replay; no ownership-transfer workflow is introduced. Changed valid payload
+uses idempotency_key_reused. A new request must match current revision. Associate to
+the effective target or repeated withdrawal rejects with posting_source_unchanged,
+without reserving UUID/revision. Returning to a former target appends a new event.
+Expected revision is an actual integer in 0..9223372036854775807; new work at capacity
+rejects with posting_source_revision_exhausted, but exact replay still succeeds.
+
+Existing JobPosting targets only: posting and posting.account must belong to the
+source's authorized Workspace, but need not match the retained source account.
+Initial and every historical correction endpoint are validated from persisted rows.
+New/dismissed/saved/converted targets remain eligible. Remapping never mutates the old
+or new posting, descriptors, conversions or unrelated provenance, allocates a posting,
+executes parsing/ingestion, or selects an interpretation. Zero-effective-output items
+remain valid; output→item correction never appends or modifies mapping decisions.
+
+Source representation/digest/provenance corruption fails closed for reads/replay/new
+work. Sticky conflict permits reads and exact replay with source_eligible=False, but
+blocks all new events, including withdrawal. Initial scope/policy retains not_found /
+posting_source_conflict behavior. Missing initial assertion uses
+initial_posting_source_required; stale revision uses stale_revision. Invalid command
+shape/navigation uses invalid_posting_source_correction (400). Correction prefix gaps,
+invalid policy/shape or historical target scope use posting_source_history_invalid
+(409), never a fabricated withdrawn state. Source errors retain existing codes.
+
+One alias-aware resolver reloads persisted initial endpoints, captures count/min/max
+revision boundary, validates contiguity and every event's policy/shape/target account
+scope, and derives effective state by revision. Subsequent queries stay within the
+captured prefix. Model insertion validates UUID, persisted actor/endpoints, bounds,
+contiguous revision and actual state change on the supplied write alias. Ordinary
+edits/replacement saves/reparenting/instance deletion reject through provenance guards;
+privileged bulk/QuerySet/raw SQL remain maintenance bypasses, not tamper-proof auditing.
+
+read_effective_posting_source returns item, initial_source, effective_posting,
+effective_revision, decision_type/effective_decision, source_eligible and advisory
+can_append_correction. Without initial mapping, revision/decision/target are None;
+initial-only is revision 0; withdrawal has a correction revision/event and null target.
+can_append_correction requires an initial mapping, eligible source and remaining
+revision capacity; it does not authorize a particular request. Initial readers remain
+historical. No reverse effective-posting listing is added.
+
+list_posting_source_corrections returns ascending revisions, default 100/max 200,
+through_revision, next_cursor and current source eligibility. Cursor is (item ID,
+initial_source ID, through_revision, last_revision); pages use last < revision <= through.
+Identity/shape/bounds and positive boundary existence are checked. Revision 0 is a valid
+empty prefix. Later appends are excluded. This freezes decisions, not current source
+eligibility, ownership or posting descriptors. Admin is privileged read-only inspection.
+
+Historical posting/anchor/actor references remain PROTECT even after remap/withdrawal;
+account/Workspace cascades may be blocked. Purge, deletion-error translation, account
+redesign, portability, PostgreSQL operation, production-scale optimization and canonical
+consumers remain separately authorized work. No API/frontend or legacy changes.
+
 ### Content and relationships
 
 Messages remain transient until needed for retained evidence, Discovery/review,

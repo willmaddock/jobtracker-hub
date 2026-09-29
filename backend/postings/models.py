@@ -349,3 +349,66 @@ class PostingSource(PostingItemProvenance):
                 or source["retained_message__workspace_id"] != posting["workspace_id"]
                 or posting["workspace_id"] != posting["account__workspace_id"]):
             raise ValidationError("Posting source endpoint scope mismatch.")
+
+
+class PostingSourceCorrection(PostingItemProvenance):
+    """Immutable explicit transition; revision, never timestamp, orders effects."""
+    class Mode(models.TextChoices):
+        ASSOCIATE = "associate", "Associate"
+        WITHDRAW = "withdraw", "Withdraw"
+
+    initial_source = models.ForeignKey(PostingSource, on_delete=models.PROTECT,
+                                       related_name="corrections")
+    operation_id = models.UUIDField(editable=False)
+    revision = models.PositiveBigIntegerField()
+    mode = models.CharField(max_length=16, choices=Mode.choices)
+    target_posting = models.ForeignKey(JobPosting, null=True, on_delete=models.PROTECT,
+                                      related_name="source_corrections")
+    actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+                             related_name="posting_source_corrections")
+    method = models.CharField(max_length=32, default="explicit_owner", editable=False)
+    decision_version = models.PositiveSmallIntegerField(default=1, editable=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["initial_source", "operation_id"], name="posting_source_corr_operation"),
+            models.UniqueConstraint(fields=["initial_source", "revision"], name="posting_source_corr_revision"),
+            models.CheckConstraint(condition=models.Q(revision__gte=1), name="posting_source_corr_positive"),
+            models.CheckConstraint(condition=(models.Q(mode="associate", target_posting__isnull=False)
+                | models.Q(mode="withdraw", target_posting__isnull=True)), name="posting_source_corr_target"),
+            models.CheckConstraint(condition=models.Q(method="explicit_owner"), name="posting_source_corr_method"),
+            models.CheckConstraint(condition=models.Q(decision_version=1), name="posting_source_corr_version"),
+        ]
+
+    def validate_insertion(self, using):
+        from django.contrib.auth import get_user_model
+        from rest_framework.exceptions import APIException
+        from .extraction_contract import InvalidExtraction, operation_uuid
+        from .posting_source_corrections import MAX_REVISION, resolve_chain
+        try:
+            operation_uuid(self.operation_id)
+        except InvalidExtraction:
+            raise ValidationError("Invalid correction operation identity.") from None
+        if (type(self.revision) is not int or not 1 <= self.revision <= MAX_REVISION
+                or self.method != "explicit_owner" or type(self.decision_version) is not int
+                or self.decision_version != 1
+                or not get_user_model().objects.using(using).filter(pk=self.actor_id).exists()
+                or not ((self.mode == "associate" and self.target_posting_id is not None)
+                        or (self.mode == "withdraw" and self.target_posting_id is None))):
+            raise ValidationError("Invalid correction decision.")
+        initial = PostingSource.objects.using(using).filter(pk=self.initial_source_id).first()
+        if initial is None:
+            raise ValidationError("Initial posting source is required.")
+        try:
+            chain = resolve_chain(initial, using=using)
+        except APIException:
+            raise ValidationError("Invalid correction history.") from None
+        if self.revision != chain.revision + 1:
+            raise ValidationError("Correction revision must be contiguous.")
+        if self.mode == "associate" and not JobPosting.objects.using(using).filter(
+                pk=self.target_posting_id, workspace_id=chain.workspace_id,
+                account__workspace_id=chain.workspace_id).exists():
+            raise ValidationError("Correction target workspace mismatch.")
+        if self.target_posting_id == (chain.posting.pk if chain.posting else None):
+            raise ValidationError("Correction must change the effective target.")

@@ -23,7 +23,9 @@ committed at `2090a61b1a43252a8eb93d82c87c7d90e4c40074`
 Corrections + Revision-Based Effective State** is committed at
 `8812bf8f61de1db5b622af6f61b71a5a1b68fdb3` (`Implement retained posting item corrections`).
 **Attach Existing JobPosting Only + Immutable Initial PostingSource Mapping** is
-implemented and uncommitted; verification is recorded below.
+committed at `482bcc5f9528fb9a6e9b3e7dce1c43a7443c40b3`
+(`Implement initial PostingSource mapping`). **PostingSource Correction / Effective-Mapping
+Authority** is implemented and uncommitted; verification is recorded below.
 Frontend integration, historical reconciliation, email derivation and operational
 cutover remain pending.
 
@@ -44,7 +46,32 @@ cutover remain pending.
 
 ## 2. Current verification evidence
 
-### Initial PostingSource mapping — uncommitted, 2026-09-28
+### PostingSource correction/effective mapping — uncommitted, 2026-09-28
+
+Base `482bcc5f9528fb9a6e9b3e7dce1c43a7443c40b3` on `django-migration`; local,
+tracking/live remote, parent/subject, clean tree/index and DB/provider-migration absence
+verified before edits. See [correction review](DJANGO_POSTING_SOURCE_CORRECTION_REVIEW.md).
+
+- Append-only associate/withdraw events anchored to the initial assertion; revision 0
+  initial, contiguous later revisions, UUID replay returning original event plus current
+  state, no-op rejection, scoped historical-target validation and captured-prefix readers.
+- Additive 0008 creates one empty table with six constraints. PROTECT/read-only admin;
+  no allocation, descriptors, interpretation, membership coupling, ingestion or API changes.
+- Focused **105 passed** (5.338s); postings **234 passed** (15.194s); affected
+  **933 passed** (111.575s); full Django **951 passed** (120.240s). All final runs have
+  zero failures/errors/skips, isolated SQLite only. Focused/postings ran before the
+  separately authorized one-line core admin read-only allowlist update; affected/full
+  ran afterward. The prior affected run's single allowlist expectation failure is resolved.
+- Django check and postings drift check pass. Global dry run reports only known
+  EmailAccount.provider drift; no file generated. Migration graph/SQL confirm additive
+  0008; disposable populated-0007 preservation and non-default alias validation pass.
+- Exactly eleven authorized files; unstaged, uncommitted and unpushed. HEAD remains
+  `482bcc5f`; real DB and provider migration absent. Added files explicitly inspected;
+  syntax/whitespace/local Markdown links and git diff checks pass. Separate read-only
+  pre-commit review requires authorization. PostgreSQL, production scale, providers,
+  cutover and purge remain unvalidated/deferred.
+
+### Initial PostingSource mapping — historical pre-commit verification, 2026-09-28
 
 Base `8812bf8f61de1db5b622af6f61b71a5a1b68fdb3` on `django-migration`; repo/branch,
 local/tracking/live remote, subject/parent, clean tree/index and DB/provider-migration
@@ -65,7 +92,8 @@ absence verified before edits. See [PostingSource review](DJANGO_POSTING_SOURCE_
 - Additive 0007 creates one empty table with item OneToOne and two policy checks.
   Historical 0006 fixture preserves all prior rows/columns, including correction history,
   and repeated migration target is stable. No historical mapping inference/backfill.
-- Exactly eleven approved files, unstaged/uncommitted. backend/db.sqlite3 absent/untracked;
+- At that review: exactly eleven approved files, unstaged/uncommitted; subsequently
+  committed at `482bcc5f`. backend/db.sqlite3 absent/untracked;
   provider migration absent. Initial/correction/extraction services, ingestion, parser,
   provider, API/frontend and deletion surfaces unchanged.
 - Initial mappings are historical assertions for inspection only. Mapping corrections/
@@ -612,7 +640,7 @@ No newly accepted capability is marked verified merely because it is designed.
 | Provider connections | Gmail/Outlook/IMAP connect/sync/disconnect; encrypted credentials | Baseline provider/view coverage, mocked external seams | Historical Gmail OAuth/live-sync checkpoint; complete target flows unvalidated; Outlook/IMAP live validation unestablished |
 | Sync/jobs | Gmail per-message retention plus transitional match/discovery/thread projection; inline single sync, queued bulk/Beat | Gmail adoption/replay and existing sync/task coverage; not real-broker proof | Real Redis/worker/Beat operation unestablished |
 | Retained messages/review | Protected source/observation models, verified Gmail lineage and native-ID producer adoption; scoped review inspection, explicit attachment, independent disposition and atomic create-Application orchestration with durable results | Retention, Gmail adoption, attachment/disposition/creation APIs, migration preservation and SQLite logical concurrency coverage in §2 | Other-provider adoption, broader review actions, frontend and operational validation pending |
-| Postings | Integer PK plus immutable Workspace-scoped portable UUID; existing extractor/ingestion and list/save/dismiss/restore/apply APIs | Identity/backfill/replay and compatibility coverage in §2 | Completed-extraction provenance and explicit item/initial-association services exist; sync does not call ingestion; correction/effective membership and initial PostingSource assertions implemented; mapping corrections, descriptive selection, evidence and full workflow pending |
+| Postings | Integer PK plus immutable Workspace-scoped portable UUID; existing extractor/ingestion and list/save/dismiss/restore/apply APIs | Identity/backfill/replay and compatibility coverage in §2 | Completed-extraction provenance and explicit item/initial-association services exist; sync does not call ingestion; correction/effective membership, initial PostingSource assertions and mapping corrections/effective state implemented; descriptive selection, evidence and full workflow pending |
 | Import/export | No Django legacy importer or portable export/restore | Unimplemented/unverified | Reconciliation/cutover pending |
 | Production | Partial settings/storage/task scaffolding; SQLite inherited, development fallbacks remain | Suite success is not deployment verification | PostgreSQL/storage/jobs/backup/restore/rollback pending |
 
@@ -1087,7 +1115,7 @@ preservation, reverse limitations and verification evidence.
 
 ## 8. Next recommended implementation actions
 
-1. Review the uncommitted initial PostingSource slice. Mapping correction/effective authority must precede canonical consumers. Allocation, interpretation, split/merge and ingestion remain deferred. Prior local database provenance remains unresolved.
+1. Separately authorize read-only pre-commit review of the uncommitted PostingSource correction/effective-mapping slice. Canonical consumers require separate scope. Allocation, interpretation, split/merge and ingestion remain deferred. Prior local database provenance remains unresolved.
 2. Resolve the legacy verification blockers under separately approved scope before declaring a fully green checkpoint.
 3. Separately scope further review actions and future filtering/queue UX, along with broader email/job and frontend work.
 4. Plan provenance-aware historical reconciliation with importer/cutover work; do not silently backfill current records.

@@ -1,7 +1,9 @@
 # Attach Existing JobPosting Only + Immutable Initial PostingSource Mapping
 
-Implemented, unstaged and uncommitted for final read-only pre-commit review.
-No commit, push or next slice. Fresh verification is recorded below.
+Historical pre-commit review: the implementation was unstaged and uncommitted
+at the verification described below. It was subsequently committed at
+`482bcc5f9528fb9a6e9b3e7dce1c43a7443c40b3`
+(`Implement initial PostingSource mapping`). The results below remain historical.
 
 ## Verified base and exact scope
 
@@ -189,7 +191,8 @@ No PostgreSQL locking/deadlock or live provider verification is claimed.
 
 Status and prior correction review record committed 8812bf8 while preserving 33 focused,
 162 postings, 861 affected and 879 full historical results and final review evidence.
-Foundations records only the approved initial mapping contract. This slice is uncommitted.
+At that review, Foundations recorded only the approved initial mapping contract and
+the slice was uncommitted; it subsequently landed at `482bcc5f` as noted above.
 
 No item/correction/extraction service, parser, ingestion, provider, API/serializer/frontend,
 account-view or deletion-API change. No dependencies or real data changed. Production
