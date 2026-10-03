@@ -1,8 +1,9 @@
 # Retained Posting Interpretation Selection Authority
 
-Implementation-stage evidence. Changes are unstaged, uncommitted and unpushed.
-This document does not replace the separately authorized read-only pre-commit review
-or authorize staging, commit or push.
+Historical implementation-stage evidence. The slice subsequently completed read-only
+review and was committed/pushed at `d46ef1508259f0418d1d0c842678456c883f5732`
+(`Implement retained posting interpretation authority`). The original validation evidence
+and implementation-stage Git state below are preserved; they are not current arbitration results.
 
 ## Verified base and scope
 
@@ -135,7 +136,7 @@ Continuation checks completed:
 - `sqlmigrate postings 0009`: one new table, six approved constraints, normal integer
   type checks and three automatic FK indexes; no existing-table change.
 
-## Final implementation Git state
+## Historical final implementation Git state
 
 Exactly the eleven authorized files above: six modified, five added/untracked.
 All added files were explicitly inspected. Python syntax, whitespace, local Markdown
@@ -143,7 +144,8 @@ references and git diff --check pass. Index empty; no staging, commit or push.
 HEAD remains `ac6d13db7f52889bff12b128a153e397769fee67` on django-migration,
 matching origin/django-migration and live remote; ahead/behind 0/0.
 backend/db.sqlite3 remains absent/untracked; unrelated provider migration absent.
-Implementation is complete and awaits separately authorized read-only pre-commit review.
+At that point implementation awaited separately authorized read-only pre-commit review.
+Review and commit/push subsequently completed at `d46ef1508259f0418d1d0c842678456c883f5732`.
 
 ## Limitations
 

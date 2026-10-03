@@ -1,6 +1,6 @@
 # Django migration: current status
 
-Maintained checkpoint: 2026-09-29. Retained Email Source Identity and Content
+Maintained checkpoint: 2026-10-03. Retained Email Source Identity and Content
 Foundation is committed at `2f0cd1f`; Gmail Mailbox Identity and Durable Lineage
 Foundation is committed at `9f6627770c43fd3b3af492d2201e647af77cc53f` on
 `django-migration`. Gmail Provider Adoption into Retained-Source Authority is committed
@@ -27,7 +27,10 @@ committed at `482bcc5f9528fb9a6e9b3e7dce1c43a7443c40b3`
 (`Implement initial PostingSource mapping`). **PostingSource Correction / Effective-Mapping
 Authority** is committed at `ac6d13db7f52889bff12b128a153e397769fee67`
 (`Implement PostingSource correction authority`). **Retained Posting Interpretation
-Selection Authority** is implemented and uncommitted; verification is recorded below.
+Selection Authority** is committed/pushed at `d46ef1508259f0418d1d0c842678456c883f5732`
+(`Implement retained posting interpretation authority`). **Posting-Level Interpretation
+Arbitration Authority** is implemented and validated, unstaged/uncommitted/unpushed,
+awaiting separately authorized read-only pre-commit review.
 Frontend integration, historical reconciliation, email derivation and operational
 cutover remain pending.
 
@@ -48,7 +51,37 @@ cutover remain pending.
 
 ## 2. Current verification evidence
 
-### Retained posting interpretation selection — uncommitted, 2026-09-29
+### Posting-level interpretation arbitration — unstaged implementation, validated 2026-10-03
+
+Prior authoritative checkpoint `d46ef1508259f0418d1d0c842678456c883f5732`,
+subject `Implement retained posting interpretation authority`, parent
+`ac6d13db7f52889bff12b128a153e397769fee67`. Branch/local/tracking/live remote,
+0/0 ahead/behind, clean pre-edit tree/index, and DB/provider migration absence verified.
+See [arbitration review](DJANGO_JOB_POSTING_INTERPRETATION_REVIEW.md).
+
+- Explicit append-only posting selection binds an exact item interpretation and initial
+  mapping/revision. No implied winner, fallback, transfer, reactivation or projection.
+- Historical mapping/interpretation/membership and extraction witnesses validate;
+  independent current witness changes yield all applicable ordered stale reasons.
+- Atomic Workspace gate then all relevant sources in ascending order. Replacement checks
+  new-source eligibility; conflicted old valid sources allow replacement but current-source
+  conflict blocks withdrawal. Validated replay/reads remain allowed; corruption fails closed.
+- Additive 0010: one empty table, six constraints, protected references, alias-aware
+  insertion guard and read-only admin. Populated-0009 preservation and repeat target tested.
+- Focused **47 passed** (4.591s), neighboring **216 passed** (10.204s), postings
+  **331 passed** (24.316s), affected apps **1030 passed** (119.098s), full Django
+  **1048 passed** (138.057s); all zero failures/errors/skips. Completed affected log
+  reused on continuation; full suite ran on 2026-10-03. No production/test edits followed.
+- Django check and scoped postings drift pass. Global dry run reports only the known
+  EmailAccount.provider choice-label alteration; no file generated. Graph reaches 0010;
+  SQL confirms one additive table, six constraints and four automatic FK indexes.
+- Exactly eleven authorized files, six modified/five untracked, unstaged/uncommitted/unpushed.
+  All added files inspected; syntax, whitespace, local Markdown links and diff checks pass.
+  HEAD/local/tracking/live remote remain the prior checkpoint, ahead/behind 0/0;
+  DB/provider migration absent. Separate read-only pre-commit review is next.
+  PostgreSQL, production scale, providers and cutover remain unvalidated.
+
+### Retained posting interpretation selection — historical pre-commit verification, 2026-09-29
 
 Base `ac6d13db7f52889bff12b128a153e397769fee67` on `django-migration`; branch,
 local/tracking/live remote, subject/parent, clean pre-edit tree/index, and DB/provider
@@ -63,7 +96,7 @@ migration absence verified. See [interpretation review](DJANGO_RETAINED_POSTING_
 - Additive 0009 creates one empty table with six constraints and protected references.
   Read-only admin and alias-aware ordinary insertion guards. No mapping, descriptor,
   allocation, ingestion, API/frontend or lifecycle side effects.
-- Fresh final suites: interpretation/migration **50 passed** (3.265s), neighboring
+- Historical final suites from that implementation pass: interpretation/migration **50 passed** (3.265s), neighboring
   retained-posting **166 passed** (8.586s), postings **284 passed** (18.516s), affected
   apps **983 passed** (118.894s), full Django **1001 passed** (124.966s); zero
   failures/errors/skips. Affected/full completion logs were reused on continuation;
@@ -71,10 +104,12 @@ migration absence verified. See [interpretation review](DJANGO_RETAINED_POSTING_
 - Django check and scoped postings drift pass. Global drift is only the known provider
   choice-label alteration; no provider migration generated. Graph/SQL confirm additive
   0009; populated-0008 preservation, repeated target and non-default alias validation pass.
-- Exactly eleven files, six modified/five added, unstaged/uncommitted/unpushed. HEAD
-  remains the base checkpoint; DB/provider migration absent. Added files inspected;
-  syntax, whitespace, local Markdown links and diff checks pass. Separate pre-commit
-  review remains pending. PostgreSQL, production scale, providers and cutover unvalidated.
+- At that implementation checkpoint: eleven files, six modified/five added,
+  unstaged/uncommitted/unpushed; HEAD was the base. DB/provider migration absent;
+  added-file inspection, syntax, whitespace, local Markdown links and diff checks passed.
+  Separate review and commit/push subsequently completed at
+  `d46ef1508259f0418d1d0c842678456c883f5732`. PostgreSQL, production scale,
+  providers and cutover remained unvalidated.
 
 ### PostingSource correction/effective mapping — historical pre-commit verification, 2026-09-28
 
@@ -671,7 +706,7 @@ No newly accepted capability is marked verified merely because it is designed.
 | Provider connections | Gmail/Outlook/IMAP connect/sync/disconnect; encrypted credentials | Baseline provider/view coverage, mocked external seams | Historical Gmail OAuth/live-sync checkpoint; complete target flows unvalidated; Outlook/IMAP live validation unestablished |
 | Sync/jobs | Gmail per-message retention plus transitional match/discovery/thread projection; inline single sync, queued bulk/Beat | Gmail adoption/replay and existing sync/task coverage; not real-broker proof | Real Redis/worker/Beat operation unestablished |
 | Retained messages/review | Protected source/observation models, verified Gmail lineage and native-ID producer adoption; scoped review inspection, explicit attachment, independent disposition and atomic create-Application orchestration with durable results | Retention, Gmail adoption, attachment/disposition/creation APIs, migration preservation and SQLite logical concurrency coverage in §2 | Other-provider adoption, broader review actions, frontend and operational validation pending |
-| Postings | Integer PK plus immutable Workspace-scoped portable UUID; existing extractor/ingestion and list/save/dismiss/restore/apply APIs | Identity/backfill/replay and compatibility coverage in §2 | Completed-extraction provenance and explicit item/initial-association services exist; sync does not call ingestion; correction/effective membership, initial PostingSource assertions and mapping corrections/effective state implemented; item-level interpretation selection and evidence validation implemented; descriptor projection and full workflow pending |
+| Postings | Integer PK plus immutable Workspace-scoped portable UUID; existing extractor/ingestion and list/save/dismiss/restore/apply APIs | Identity/backfill/replay and compatibility coverage in §2 | Completed-extraction provenance and explicit item/initial-association services exist; sync does not call ingestion; correction/effective membership, initial PostingSource assertions and mapping corrections/effective state implemented; item-level interpretation selection and evidence validation implemented; posting-level arbitration implemented and automated-test verified; descriptor projection and full workflow pending |
 | Import/export | No Django legacy importer or portable export/restore | Unimplemented/unverified | Reconciliation/cutover pending |
 | Production | Partial settings/storage/task scaffolding; SQLite inherited, development fallbacks remain | Suite success is not deployment verification | PostgreSQL/storage/jobs/backup/restore/rollback pending |
 
@@ -1146,7 +1181,7 @@ preservation, reverse limitations and verification evidence.
 
 ## 8. Next recommended implementation actions
 
-1. Separately authorize read-only pre-commit review of the uncommitted retained posting interpretation slice. Prior authoritative checkpoint: `ac6d13db7f52889bff12b128a153e397769fee67`. Canonical consumers, descriptor projection, posting-level winner selection, allocation, split/merge and ingestion require separate scope. Prior local database provenance remains unresolved.
+1. Separately authorize read-only pre-commit review of the uncommitted posting-level interpretation arbitration slice. Prior authoritative checkpoint: `d46ef1508259f0418d1d0c842678456c883f5732`. Canonical consumers, descriptor projection, candidate enumeration, allocation, split/merge and ingestion require separate scope. Prior local database provenance remains unresolved.
 2. Resolve the legacy verification blockers under separately approved scope before declaring a fully green checkpoint.
 3. Separately scope further review actions and future filtering/queue UX, along with broader email/job and frontend work.
 4. Plan provenance-aware historical reconciliation with importer/cutover work; do not silently backfill current records.

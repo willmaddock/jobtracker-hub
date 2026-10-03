@@ -751,11 +751,136 @@ is inspection-only, with no add/change/delete/actions.
 
 Interpretation works before mapping and independently of mapping creation, remap,
 withdrawal/restoration or mapping corruption. Multiple items mapped to one posting retain
-independent interpretation authority; no posting-level winner exists. Retained fields are
+independent item-level interpretation authority; this layer does not select a posting-level
+winner (the separately approved arbitration layer is described below). Retained fields are
 source/title/company/location/salary/employment_type, with existing null/blank and length
 semantics preserved. There is no retained URL. Descriptor length mismatch belongs to later
 projection. No JobPosting allocation, descriptor projection, ingestion, membership/mapping
 write, conversion/lifecycle mutation, API/frontend or legacy change is authorized here.
+
+### Posting-level interpretation arbitration — approved contract, 2026-09-29
+
+This layer requires explicit owner selection of the exact retained item interpretation
+that supplies descriptive authority for one existing JobPosting. Zero, one or many
+candidates all leave revision 0 unresolved until an explicit decision. No ranking,
+recency heuristic, fallback, transfer, automatic reactivation or descriptor projection.
+This extends the preceding item-level slice's boundary; item interpretation remains
+independent of mapping and does not itself confer posting-level authority.
+
+JobPostingInterpretationDecision inherits insertion-only PostingItemProvenance. Fields:
+posting (PROTECT, interpretation_decisions), caller-supplied operation_id UUID (no default),
+revision PositiveBigInteger, mode select/withdraw (max 16), nullable selected_interpretation
+(PROTECT, posting_decisions), nullable initial_source (PROTECT, interpretation_decisions),
+nullable mapping_revision PositiveBigInteger, actor (PROTECT,
+job_posting_interpretation_decisions), method explicit_owner (max 32, not editable),
+decision_version 1 (PositiveSmallInteger, not editable), created_at auto-now-add and
+implicit BigAutoField ID. No Meta.ordering, mutable current pointer, copied item/output/
+interpretation revision or descriptor snapshot. Timestamps have no ordering authority.
+Revision range is 1..9223372036854775807, mapping witness range 0..that maximum.
+
+Six constraints: job_post_interp_operation unique(posting, operation_id),
+job_post_interp_revision unique(posting, revision), job_post_interp_positive (revision
+at least 1), job_post_interp_selection (select requires all three witness fields,
+nonnegative mapping revision; withdraw requires all null), job_post_interp_method and
+job_post_interp_version fix policy. Migration 0010 depends on postings 0009 and swappable
+user, creates one table with normal FK/unique indexes; no data operation or backfill.
+Existing postings naturally resolve revision 0/unresolved.
+
+Every historical selection reloads both witnesses: initial_source.item must equal the
+selected interpretation's item. Existing mapping resolver through recorded mapping_revision
+must target the posting anchor. Existing item-interpretation resolver through the exact
+selected revision must return that select event and validate its historical membership
+and complete extraction envelope/digest, including unselected sibling evidence. No duplicate
+digest logic or reparsing. Invalid historical witnesses are corruption, never normal stale.
+Per-call mapping/interpretation caches include identity and prefix revision; extraction
+validation is deduplicated only within the call.
+
+The command decide_job_posting_interpretation accepts actor, workspace, posting_id,
+operation_id, expected_revision, mode, item_id, expected_interpretation_revision and
+expected_mapping_revision. Select needs a positive item ID, interpretation revision at
+least 1, mapping revision at least 0; withdraw needs all candidate fields null. Bounded
+actual integers reject bool; operation UUID must satisfy existing canonical v4 validation.
+An absent/inaccessible exact (item, interpretation revision) endpoint is not_found;
+an existing older endpoint yields stale_interpretation_revision during new-work checks.
+
+Ordering: authorize current owner/bounded input → atomic Workspace gate/owner recheck →
+scoped posting → capture posting-history boundary/discover sources → ascending source
+locks/integrity → requested endpoints → posting-scoped UUID lookup/payload collision →
+validate captured history/dependencies → exact replay with fresh state → expected posting
+revision → relevant source eligibility → current mapping witness/target → current item
+interpretation/membership applicability → no-op → capacity → one event → fresh result.
+After valid mapping history, stale_mapping_revision precedes job_posting_item_not_mapped.
+Current item withdrawal or membership staleness gives job_posting_interpretation_not_applicable.
+Initial mapping absence gives job_posting_mapping_required. No hidden retry loop.
+
+The serialization boundary for commands and both readers is one atomic transaction:
+Workspace gate first, then deduplicated retained sources locked in ascending numeric ID
+order. Source discovery includes every captured historical selected interpretation's item,
+every captured initial mapping anchor's item, and the requested candidate item. Discovery
+is not validation; all cross-item/source links are validated afterward. No newly discovered
+source lock is acquired later; no item, mapping or descriptor locks. SQLite's gate is a
+no-op Workspace update: reads preserve domain state but are not SQL-SELECT-only.
+
+Operation identity is (posting, UUID), binding mode, item, exact interpretation revision,
+mapping revision, expected posting revision (event revision minus one), method and version.
+Actor is attribution, not payload identity. Exact replay preserves original row/actor/time,
+validates historical dependencies and returns fresh live applicability without advancing
+witnesses or reselecting. Later current owners can replay; former owners cannot. Changed
+valid payload is idempotency_key_reused before stale checks. Endpoint and source-integrity
+checks still precede operation lookup according to the ordering above.
+
+Replacement checks only the new candidate source's sticky-conflict eligibility. Older
+valid conflicted sources do not prevent eligible replacement. Withdrawal checks the latest
+selected source and is blocked by its sticky conflict, even when authority is stale.
+Reads and exact replay are permitted during sticky conflict. Corruption in any dependency
+required by the captured history prefix blocks all validated operations; no repair/fallback.
+
+Effective states are unresolved, withdrawn, selected, stale. Latest withdrawal has no
+selected references/witnesses. Historical selected evidence remains visible when stale.
+Stale reasons accumulate as an immutable tuple in order: mapping_revision_changed,
+interpretation_revision_changed, membership_revision_changed. Effective reads always check
+the current membership of the historically selected output, even when current item
+interpretation selects another output or withdraws. Mapping away-and-back stays stale.
+Membership changes require item-level reaffirmation before posting reselection. Source
+conflict is separate: selected can coexist with source_eligible=False and no applicable
+output; conflict never invents a stale reason. Corruption raises an exception, not a state.
+
+The frozen effective result exposes posting, revision, latest_decision, selected_item,
+selected_interpretation, selected_output, initial_source, recorded/current mapping,
+interpretation and membership revisions, state, stale_reasons, source_eligible,
+applicable_output, can_append_revision and can_withdraw. Eligibility is None without a
+selected source. Append advisory reflects capacity only; withdrawal advisory requires
+latest select, eligible source and capacity, not absence of staleness. Applicable output
+requires all witnesses current and an eligible source.
+
+History returns only frozen decisions tuple, through_revision and next_cursor; no aggregate
+source eligibility across multiple sources. Cursor (posting_id, through_revision,
+last_revision), actual integers, default 100/max 200, limit+1, ascending revision. Validate
+posting, bounds, last<=through and existence of positive through; zero prefix is valid.
+Validate the entire captured prefix, exclude later posting appends and do not attach live
+lower-layer applicability to individual history rows.
+
+Unresolved/repeated withdrawal and identical interpretation/anchor/mapping witness are
+job_posting_interpretation_unchanged, reserving neither UUID nor revision. A newer valid
+interpretation or mapping witness is meaningful. Capacity failure is
+job_posting_interpretation_revision_exhausted. Narrow errors are 400
+invalid_job_posting_interpretation and 409 job_posting_interpretation_history_invalid;
+other new conflicts above use 409. Reuse not_found, idempotency_key_reused, stale_revision,
+retained_source_invalid/ineligible and existing mapping, interpretation, membership and
+extraction-evidence integrity errors.
+
+Ordinary insertion validates persisted scope/actor, contiguous revision, historical and
+current witnesses and actual state change using only the supplied write alias. Ordinary
+updates, replacement-PK saves and instance deletion reject. Admin disables add/change/
+delete/actions. Protected posting, interpretation, initial source and actor references
+survive withdrawal; transitive evidence protection remains. Privileged coherent bulk/raw
+rewrites are outside these guards, and purge/cascade handling remains separate.
+
+Only new arbitration events are domain writes. No JobPosting allocation, descriptor
+mutation/normalization/truncation/composition, URL fabrication, projection snapshots,
+source mapping/correction, item interpretation, membership, extraction, ingestion/parser,
+conversion/lifecycle, candidate enumeration, API/frontend or legacy changes. Existing
+JobPosting descriptor admin behavior is unchanged. Projection needs separate authorization.
 
 ### Content and relationships
 

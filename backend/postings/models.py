@@ -454,3 +454,47 @@ class RetainedPostingInterpretationDecision(PostingItemProvenance):
             validate_insertion(self, using)
         except APIException:
             raise ValidationError("Invalid interpretation decision or evidence.") from None
+
+
+class JobPostingInterpretationDecision(PostingItemProvenance):
+    """Explicit posting authority over an exact item interpretation and mapping."""
+    class Mode(models.TextChoices):
+        SELECT = "select", "Select"
+        WITHDRAW = "withdraw", "Withdraw"
+
+    posting = models.ForeignKey(JobPosting, on_delete=models.PROTECT, related_name="interpretation_decisions")
+    operation_id = models.UUIDField(editable=False)
+    revision = models.PositiveBigIntegerField()
+    mode = models.CharField(max_length=16, choices=Mode.choices)
+    selected_interpretation = models.ForeignKey(RetainedPostingInterpretationDecision, null=True,
+        on_delete=models.PROTECT, related_name="posting_decisions")
+    initial_source = models.ForeignKey(PostingSource, null=True, on_delete=models.PROTECT,
+                                      related_name="interpretation_decisions")
+    mapping_revision = models.PositiveBigIntegerField(null=True)
+    actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+                             related_name="job_posting_interpretation_decisions")
+    method = models.CharField(max_length=32, default="explicit_owner", editable=False)
+    decision_version = models.PositiveSmallIntegerField(default=1, editable=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["posting", "operation_id"], name="job_post_interp_operation"),
+            models.UniqueConstraint(fields=["posting", "revision"], name="job_post_interp_revision"),
+            models.CheckConstraint(condition=models.Q(revision__gte=1), name="job_post_interp_positive"),
+            models.CheckConstraint(condition=(models.Q(mode="select", selected_interpretation__isnull=False,
+                initial_source__isnull=False, mapping_revision__isnull=False, mapping_revision__gte=0)
+                | models.Q(mode="withdraw", selected_interpretation__isnull=True,
+                           initial_source__isnull=True, mapping_revision__isnull=True)),
+                name="job_post_interp_selection"),
+            models.CheckConstraint(condition=models.Q(method="explicit_owner"), name="job_post_interp_method"),
+            models.CheckConstraint(condition=models.Q(decision_version=1), name="job_post_interp_version"),
+        ]
+
+    def validate_insertion(self, using):
+        from rest_framework.exceptions import APIException
+        from .job_posting_interpretations import validate_insertion
+        try:
+            validate_insertion(self, using)
+        except APIException:
+            raise ValidationError("Invalid posting authority decision or evidence.") from None
