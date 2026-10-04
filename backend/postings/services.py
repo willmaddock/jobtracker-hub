@@ -41,13 +41,16 @@ def ingest_extracted_postings(
 
     Deliberately idempotent via JobPosting.dedupe_key: calling this
     again for the same message_id (same account, same URLs) updates
-    the same rows via update_or_create rather than creating duplicates
+    the same rows under Workspace serialization rather than creating duplicates
     -- required for Phase 9's "running sync four times in a row
     produces the same posting count each time" acceptance bar, even
     though that loop doesn't exist yet.
     """
     from .extraction import compute_dedupe_key, extract_postings
-    from .models import JobPosting
+    from django.core.exceptions import ValidationError
+    from django.db import router, transaction
+    from email_sync.models import EmailAccount
+    from .models import JobPosting, DESCRIPTOR_FIELDS, _lock_descriptor_workspace
 
     raw_jobs = extract_postings(sender, subject, body)
     postings = []
@@ -56,23 +59,30 @@ def ingest_extracted_postings(
         dedupe_key = compute_dedupe_key(
             str(account.id), message_id, posting_url, job.get("title"), job.get("company"),
         )
-        posting, _created = JobPosting.objects.update_or_create(
-            dedupe_key=dedupe_key,
-            defaults={
-                "workspace": account.workspace,
-                "account": account,
-                "message_id": message_id,
-                "source": job.get("source"),
-                "title": job.get("title"),
-                "company": job.get("company"),
-                "location": job.get("location"),
-                "salary": job.get("salary"),
-                "employment_type": job.get("employment_type"),
-                "posting_url": posting_url,
-                "received_at": received_at,
-                "email_subject": subject,
-                "sender": sender,
-            },
-        )
-        postings.append(posting)
+        using = router.db_for_write(JobPosting, instance=account)
+        with transaction.atomic(using=using):
+            persisted = EmailAccount.objects.using(using).filter(pk=account.pk).first()
+            if persisted is None:
+                raise ValidationError("Posting account no longer exists.")
+            _lock_descriptor_workspace(persisted.workspace_id, using)
+            if not EmailAccount.objects.using(using).filter(
+                    pk=account.pk, workspace_id=persisted.workspace_id).exists():
+                raise ValidationError("Posting account workspace changed.")
+            posting = JobPosting.objects.using(using).select_for_update(of=("self",)).filter(
+                dedupe_key=dedupe_key).first()
+            if posting is not None and (posting.workspace_id != persisted.workspace_id
+                                       or posting.account_id != persisted.pk):
+                raise ValidationError("Posting dedupe identity has inconsistent ownership.")
+            values = dict(message_id=message_id, posting_url=posting_url, received_at=received_at,
+                          email_subject=subject, sender=sender)
+            if posting is None or not posting.descriptor_projections.using(using).exists():
+                values.update({name: job.get(name) for name in DESCRIPTOR_FIELDS})
+            if posting is None:
+                posting = JobPosting.objects.using(using).create(workspace_id=persisted.workspace_id,
+                    account=persisted, dedupe_key=dedupe_key, **values)
+            else:
+                for name, value in values.items():
+                    setattr(posting, name, value)
+                posting.save(using=using, update_fields=set(values))
+            postings.append(posting)
     return postings

@@ -882,6 +882,156 @@ source mapping/correction, item interpretation, membership, extraction, ingestio
 conversion/lifecycle, candidate enumeration, API/frontend or legacy changes. Existing
 JobPosting descriptor admin behavior is unchanged. Projection needs separate authorization.
 
+
+### Descriptor projection authority — approved contract, 2026-10-03
+
+`JobPostingDescriptorProjection` is an immutable event plus atomic materialization
+of exactly `source`, `title`, `company`, `location`, `salary`, `employment_type` on
+an existing JobPosting. It binds one exact JobPostingInterpretationDecision and
+retains an exact six-key snapshot. No allocation, fallback, automatic reprojection,
+clearing, transfer, projection withdrawal, parsing, normalization or reconciliation.
+URL, dedupe, portable/runtime identity, account/workspace, email metadata, status,
+saved state, conversions and timestamps are outside materialization authority.
+
+The PostingItemProvenance subclass has BigAuto ID; protected posting (reverse
+`descriptor_projections`), arbitration_decision (same reverse name) and actor
+(reverse `job_posting_descriptor_projections`); caller UUIDv4 operation_id without
+implicit default; PositiveBigInteger revision; JSON snapshot; Char64
+expected_descriptor_digest; fixed Char32 method `explicit_owner`; fixed positive
+small projection_version 1; auto-created timestamp. No Meta.ordering, mutable
+pointer, mode, redundant evidence FK or second digest. Constraints are
+job_post_proj_operation unique(posting,operation_id), job_post_proj_revision
+unique(posting,revision), job_post_proj_positive revision>=1, job_post_proj_method
+and job_post_proj_version. Python enforces contiguous signed-64-bit revisions,
+canonical UUID and lowercase SHA256 syntax. Only normal FK/unique indexes.
+
+Migration 0011 depends on postings 0010 and the swappable user. One additive table,
+no JobPosting alteration, widening or data operation. Existing postings have empty
+projection history. PROTECT may block posting/account/workspace/user deletion;
+future purge remains separate. JSON snapshots require no further protected FK.
+
+Retained snapshots reuse extraction_contract.validate_fields: exact key set,
+supported source string, five nullable strings, valid Unicode and retained byte
+limits. Destination character limits are additionally 64/255/255/255/255/64 in
+field order above. Capacity failures report field names and limits, never values,
+and reserve no event, revision or UUID. Preserve null, blank, whitespace, case and
+Unicode exactly; no coercion or truncation, even on permissive SQLite.
+
+Current-value precondition is SHA256 of canonical JSON
+`{"descriptor_digest_version":1,"fields":{...six current columns...}}`.
+Canonical JSON sorts keys recursively, uses separators comma/colon, ensure_ascii
+false, allow_nan false and UTF-8; digest is 64 lowercase hex characters. Current
+columns are not subjected to retained vocabulary/byte limits. The matched caller
+precondition is persisted on the event. The immutable snapshot reconstructs the
+post-write digest; the precondition does not prove/reconstruct prior values.
+A→B→A is undetectable when final values match: no descriptor-history counter exists.
+
+Ownership is existence of any projection event, independent of history validity,
+latest applicability, withdrawal, drift or sticky conflict. Ordinary event save,
+including create and replacement-PK save, always rejects; inherited deletion rejects.
+A private canonical append helper deliberately uses base-model insertion only
+inside the same validated transaction as six-column QuerySet.update. Exactly one
+posting must update; fresh reread must equal snapshot or the transaction rolls back.
+No public bypass flag or ambient context exists. Privileged bulk/raw writes remain
+maintenance bypasses, not supported authority commands.
+
+Existing descriptor-writing JobPosting saves resolve the write alias and effective
+write set before loading deferred fields, serialize Workspace then posting, compare
+persisted identity and protected values and hold serialization through save. Changed
+owned descriptors raise ValidationError code descriptor_projection_owned. Explicit
+status/saved-only writes and deferred saves not writing descriptors remain allowed.
+Full stale-instance saves cannot overwrite protected values. Equal protected values
+are allowed. Identity guards remain intact; dedupe is never recomputed by save.
+
+Ingestion preserves parser/positional URL/incoming dedupe calculation. Per-output
+atomic Workspace gate precedes posting lookup/lock; account scope is revalidated.
+Missing rows retain creation semantics. Existing unprojected rows retain descriptor
+updates; projected rows preserve all six while existing URL/email metadata behavior
+continues. Global unique dedupe is the final safeguard. Cooperating ingestion calls
+serialize; unrelated bypass-writer races can surface IntegrityError. No hidden retries
+or message-wide atomicity. Serialization does not invent actor authorization for this
+existing internal account-based ingestion function.
+
+Admin keeps six descriptors editable before projection and read-only afterward; URL
+stays editable. POST serialization precedes form construction and validation. The
+inline form rejects submitted protected descriptor keys once ownership exists,
+including keys excluded by dynamic readonly fields, with a non-field reload error.
+Privileged admin need not be Workspace owner. Model save is final enforcement.
+Projection provenance uses the existing no-add/change/delete/actions admin pattern.
+
+Command project_job_posting_descriptors accepts actor, workspace, posting_id,
+operation_id, expected_projection_revision (0..MAX), expected_arbitration_revision
+(1..MAX), expected_descriptor_digest. Actual integers reject bool; canonical UUIDv4
+contract is reused. Caller supplies no descriptor content. Exact arbitration endpoint
+is (posting,revision). New work needs the current exact selection, current mapping,
+item interpretation and historically selected output membership, valid complete
+retained evidence and eligible current selected source.
+
+Ordering: authorize/bounded inputs → atomic Workspace gate/owner recheck → scoped
+posting lock → capture boundaries → discover/deduplicate/sort all source IDs → source
+locks → exact requested endpoint → operation lookup/payload collision → history and
+dependency validation → replay → expected projection revision → expected arbitration
+revision/applicability → current source eligibility → derive/validate snapshot and
+capacity → compute/compare current descriptor digest → no-op → revision exhaustion
+→ append → six-column materialization → fresh verification/result → commit.
+Capacity precedes stale descriptor precondition. No late source lock or hidden retry.
+
+Discovery covers all referenced arbitration prefixes through their recorded revisions,
+including selected interpretation item and initial mapping item source references,
+plus current arbitration for commands/effective reads. Corrupt cross-anchor references
+are discovery data, never authority. Reuse arbitration Dependencies, _source_ids,
+resolve_chain and _state under one context; do not invoke public readers or repeatedly
+acquire arbitration contexts. History-only reads exclude later arbitration dependencies.
+SQLite Workspace gates are no-op writes; coherent readers preserve domain state but
+are not SQL-SELECT-only. Conversion and existing arbitration retain compatible gate
+ordering. Caller-held row-first locks are outside the writer contract.
+
+Historical projection validation checks posting, UUID, contiguous revision, policy,
+actor existence, exact same-posting arbitration FK/prefix and exact validated output
+snapshot, capacity and digest syntax. Later authority changes do not corrupt history.
+Corrupt required old evidence fails closed; valid old sticky conflict does not prevent
+projection under a different eligible current selection.
+
+States are unprojected, projected and stale. Ordered reasons:
+arbitration_revision_changed; arbitration_not_applicable; descriptor_drift.
+A valid replacement alone supplies the first reason. The second reflects recorded
+selection lower-layer staleness or unresolved/withdrawn/stale current arbitration.
+Expose recorded lower-layer and current arbitration reasons separately. Drift is
+current six columns differing from immutable latest snapshot, without guessing actor
+or cause. Sticky conflict alone adds no stale reason: state can remain projected,
+source_eligible false and applicable_snapshot null. No automatic descriptor rewrite.
+
+Operation identity (posting,UUID) binds exact arbitration, predecessor projection
+revision, expected descriptor digest, method/version; actor is attribution only.
+Exact replay validates history and returns original event plus fresh state, never
+materializing, even after later projection/arbitration, drift or conflict. Changed valid
+payload is idempotency_key_reused before stale checks. First equal-value projection
+is meaningful; identical latest authority/snapshot/current columns is unchanged.
+URL-only changes remain unchanged. New authority with equal values or explicit drift
+repair is meaningful. Rejected work reserves no UUID/revision.
+
+New errors: 400 invalid_job_posting_projection; 409
+job_posting_projection_history_invalid, projection_capacity_exceeded,
+stale_projection_revision, stale_arbitration_revision,
+job_posting_projection_not_applicable, stale_descriptor_digest,
+job_posting_projection_unchanged, job_posting_projection_revision_exhausted.
+Reuse NotFound, idempotency_key_reused and lower evidence/history/eligibility errors.
+
+Frozen effective result includes posting/revision/latest event, recorded arbitration,
+detached immutable projected/current snapshots, current digest/drift, current arbitration
+revision/state/reasons, recorded authority reasons/source eligibility, projection state/
+reasons, applicable snapshot, can_append_revision and can_project. Advisories do not
+promise a future caller's preconditions match. History returns events tuple, through
+revision and next cursor (posting,through,last); ascending, default100/max200, strict
+integer limits, limit+1, entire prefix validated, positive boundary existence checked,
+zero empty prefix allowed, later appends excluded. No live per-row applicability or
+aggregate source eligibility.
+
+Allocation, API/frontend, candidate enumeration, manual override events, purge,
+provider integration, field widening, PostgreSQL operational validation, legacy cutover
+and historical reconciliation remain excluded. Existing consumers display stored
+materialized values even when authority later becomes stale.
+
 ### Content and relationships
 
 Messages remain transient until needed for retained evidence, Discovery/review,

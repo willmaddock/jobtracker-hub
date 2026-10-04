@@ -29,8 +29,10 @@ Authority** is committed at `ac6d13db7f52889bff12b128a153e397769fee67`
 (`Implement PostingSource correction authority`). **Retained Posting Interpretation
 Selection Authority** is committed/pushed at `d46ef1508259f0418d1d0c842678456c883f5732`
 (`Implement retained posting interpretation authority`). **Posting-Level Interpretation
-Arbitration Authority** is implemented and validated, unstaged/uncommitted/unpushed,
-awaiting separately authorized read-only pre-commit review.
+Arbitration Authority** is committed/pushed at
+`5f832dcc261d13365d851806623fca1a373e1644`
+(`Implement posting-level interpretation arbitration authority`). Descriptor Projection
+Authority is the current authorized implementation slice, unstaged/uncommitted/unpushed.
 Frontend integration, historical reconciliation, email derivation and operational
 cutover remain pending.
 
@@ -51,7 +53,50 @@ cutover remain pending.
 
 ## 2. Current verification evidence
 
-### Posting-level interpretation arbitration — unstaged implementation, validated 2026-10-03
+
+### Descriptor projection authority — unstaged implementation, validated 2026-10-03
+
+Prior authoritative checkpoint: `5f832dcc261d13365d851806623fca1a373e1644`.
+The current thirteen-file slice is implemented and validated, unstaged/uncommitted/
+unpushed, awaiting separately authorized read-only pre-commit review.
+
+- Immutable JobPostingDescriptorProjection records an exact arbitration FK, six-field
+  snapshot and matched descriptor-digest precondition. One transaction appends and
+  materializes exactly source/title/company/location/salary/employment_type, then
+  rereads/verifies. URL, dedupe, identity, metadata and lifecycle remain outside it.
+- Destination capacities reject atomically; no widening or normalization. Ownership
+  persists after first projection. Ingestion preserves owned descriptors, ordinary
+  saves enforce alias-aware guards, and admin rejects stale protected submissions.
+- Replay never rematerializes. Explicit drift repair is supported; arbitration/lower
+  staleness, descriptor drift and sticky-conflict eligibility remain distinct. Frozen
+  coherent readers and captured-prefix history reuse existing arbitration validation.
+- Additive migration 0011 creates one table with five named constraints and three
+  protected FKs. Populated 0010 and non-default-alias tests pass; no backfill/allocation.
+- Fresh corrective-pass suites, 2026-10-04: focused **57 passed** (8.024s),
+  postings **393 passed** (32.790s), affected apps **1092 passed** (130.831s),
+  full Django **1110 passed** (136.678s), with zero failures/errors/skips.
+  Three added regressions cover primary-key-only deferred saves (including forced
+  saves), explicit empty saves, and continued projection ownership. Automatic empty
+  inference now leaves update_fields unset. Earlier services **17 passed** and
+  neighboring authority **256 passed** are prior implementation evidence, not reruns.
+- Fresh Django check passed. Prior schema validation: postings drift none; global dry
+  run only the known provider
+  choice-label alteration, deliberately ungenerated. Graph through 0011; SQL inspected.
+  AST/newline/whitespace/local Markdown links and git diff --check passed.
+- Exactly eight modified/five untracked authorized files, nothing staged. Checkpoint
+  remains unchanged and synchronized. Real DB/provider migration absent. SQLite test
+  contention uses explicit caller retry, not production retries or PostgreSQL proof.
+- Digest detects current equality, not ABA history. Bulk/raw bypasses, growing history
+  cost, PROTECT/purge handling and stale values in existing consumers remain limitations.
+  No API/frontend, field widening, allocation, provider or cutover expansion.
+
+See [projection review](DJANGO_JOB_POSTING_PROJECTION_REVIEW.md) for implementation,
+commands/log locations, validation details, scope and limitations.
+
+### Posting-level interpretation arbitration — historical pre-commit verification, 2026-10-03
+
+Subsequently committed/pushed at `5f832dcc261d13365d851806623fca1a373e1644`.
+The Git-stage statements and counts below are historical arbitration evidence.
 
 Prior authoritative checkpoint `d46ef1508259f0418d1d0c842678456c883f5732`,
 subject `Implement retained posting interpretation authority`, parent
@@ -1181,7 +1226,7 @@ preservation, reverse limitations and verification evidence.
 
 ## 8. Next recommended implementation actions
 
-1. Separately authorize read-only pre-commit review of the uncommitted posting-level interpretation arbitration slice. Prior authoritative checkpoint: `d46ef1508259f0418d1d0c842678456c883f5732`. Canonical consumers, descriptor projection, candidate enumeration, allocation, split/merge and ingestion require separate scope. Prior local database provenance remains unresolved.
+1. Separately authorize read-only pre-commit review of the validated Descriptor Projection slice. Prior authoritative checkpoint: `5f832dcc261d13365d851806623fca1a373e1644`. Broader canonical consumers, candidate enumeration, allocation, split/merge and ingestion adoption require separate scope. Prior local database provenance remains unresolved.
 2. Resolve the legacy verification blockers under separately approved scope before declaring a fully green checkpoint.
 3. Separately scope further review actions and future filtering/queue UX, along with broader email/job and frontend work.
 4. Plan provenance-aware historical reconciliation with importer/cutover work; do not silently backfill current records.

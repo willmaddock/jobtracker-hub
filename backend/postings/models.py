@@ -10,10 +10,23 @@ import uuid
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.db import models, router
+from django.db import connections, models, router, transaction
 
 from applications.models import Application
 from email_sync.models import EmailAccount
+
+
+DESCRIPTOR_FIELDS = ("source", "title", "company", "location", "salary", "employment_type")
+
+
+def _lock_descriptor_workspace(workspace_id, using):
+    """Internal writer serialization, not actor authorization; caller owns atomic()."""
+    from accounts.models import Workspace
+    rows = Workspace.objects.using(using).filter(pk=workspace_id)
+    exists = (rows.update(name=models.F("name")) if connections[using].vendor == "sqlite"
+              else rows.select_for_update().exists())
+    if not exists:
+        raise ValidationError("Posting workspace no longer exists.")
 
 
 class JobPosting(models.Model):
@@ -67,19 +80,38 @@ class JobPosting(models.Model):
             fields=["workspace", "portable_id"], name="unique_posting_portable_per_ws")]
         indexes = [models.Index(fields=["status"], name="postings_status_idx")]
 
-    def save(self, *args, **kwargs):
-        if self.pk:
-            using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
-            original = type(self).objects.using(using).filter(pk=self.pk).values(
-                "workspace_id", "account_id", "portable_id"
-            ).first()
-            if original and (
-                original["workspace_id"] != self.workspace_id
-                or original["account_id"] != self.account_id
-                or original["portable_id"] != self.portable_id
-            ):
-                raise ValidationError("Existing posting workspace, account and portable identity are immutable.")
-        return super().save(*args, **kwargs)
+    def save(self, *, force_insert=False, force_update=False, using=None, update_fields=None):
+        using = using or router.db_for_write(type(self), instance=self)
+        # Freeze the effective write set before identity checks can load deferred fields.
+        if update_fields is not None:
+            update_fields = frozenset(update_fields)
+        elif not force_insert and self.pk and using == self._state.db and self.get_deferred_fields():
+            loaded_fields = frozenset(f.attname for f in self._meta.concrete_fields
+                if not f.primary_key and f.attname not in self.get_deferred_fields())
+            if loaded_fields:
+                update_fields = loaded_fields
+        write_descriptors = set(DESCRIPTOR_FIELDS) if update_fields is None else set(update_fields) & set(DESCRIPTOR_FIELDS)
+        options = dict(force_insert=force_insert, force_update=force_update,
+                       using=using, update_fields=update_fields)
+        if not self.pk:
+            return super().save(**options)
+        with transaction.atomic(using=using):
+            rows = type(self).objects.using(using)
+            original = rows.filter(pk=self.pk).values("workspace_id", "account_id", "portable_id").first()
+            if original and write_descriptors:
+                _lock_descriptor_workspace(original["workspace_id"], using)
+                original = rows.select_for_update(of=("self",)).filter(pk=self.pk).values(
+                    "workspace_id", "account_id", "portable_id", *DESCRIPTOR_FIELDS).first()
+            if original:
+                if any(original[name] != getattr(self, name) for name in
+                       ("workspace_id", "account_id", "portable_id")):
+                    raise ValidationError("Existing posting workspace, account and portable identity are immutable.")
+                if (write_descriptors and JobPostingDescriptorProjection.objects.using(using).filter(
+                        posting_id=self.pk).exists() and any(
+                        getattr(self, name) != original[name] for name in write_descriptors)):
+                    raise ValidationError("Descriptors are owned by retained projection.",
+                                          code="descriptor_projection_owned")
+            return super().save(**options)
 
     def __str__(self) -> str:
         return f"{self.title or '?'} @ {self.company or '?'}"
@@ -498,3 +530,40 @@ class JobPostingInterpretationDecision(PostingItemProvenance):
             validate_insertion(self, using)
         except APIException:
             raise ValidationError("Invalid posting authority decision or evidence.") from None
+
+
+class JobPostingDescriptorProjection(PostingItemProvenance):
+    """Immutable provenance, inserted only with canonical atomic materialization."""
+    id = models.BigAutoField(primary_key=True)
+    posting = models.ForeignKey(JobPosting, on_delete=models.PROTECT, related_name="descriptor_projections")
+    operation_id = models.UUIDField(editable=False)
+    revision = models.PositiveBigIntegerField()
+    arbitration_decision = models.ForeignKey(JobPostingInterpretationDecision, on_delete=models.PROTECT,
+                                             related_name="descriptor_projections")
+    snapshot = models.JSONField()
+    expected_descriptor_digest = models.CharField(max_length=64)
+    actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+                             related_name="job_posting_descriptor_projections")
+    method = models.CharField(max_length=32, default="explicit_owner", editable=False)
+    projection_version = models.PositiveSmallIntegerField(default=1, editable=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["posting", "operation_id"], name="job_post_proj_operation"),
+            models.UniqueConstraint(fields=["posting", "revision"], name="job_post_proj_revision"),
+            models.CheckConstraint(condition=models.Q(revision__gte=1), name="job_post_proj_positive"),
+            models.CheckConstraint(condition=models.Q(method="explicit_owner"), name="job_post_proj_method"),
+            models.CheckConstraint(condition=models.Q(projection_version=1), name="job_post_proj_version"),
+        ]
+
+    def save(self, *args, **kwargs):
+        raise ValidationError("Use canonical descriptor projection; ordinary provenance writes are prohibited.")
+
+    def validate_insertion(self, using):
+        from rest_framework.exceptions import APIException
+        from .job_posting_projections import validate_event
+        try:
+            validate_event(self, using)
+        except APIException:
+            raise ValidationError("Invalid descriptor projection provenance.") from None

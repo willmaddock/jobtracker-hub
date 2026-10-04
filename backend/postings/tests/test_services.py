@@ -160,3 +160,67 @@ class IngestExtractedPostingsTests(TestCase):
         self.assertEqual([p.message_id for p in second], ["new", "new"])
         self.assertEqual([p.posting_url for p in second], new_urls)
         self.assertEqual(JobPosting.objects.count(), 2)
+
+
+from postings.tests.test_job_posting_projections import Fixtures as ProjectionFixtures
+
+
+class ProjectionIngestionTests(ProjectionFixtures, TestCase):
+    def ingest(self, **changes):
+        from unittest.mock import patch
+        from postings.extraction import compute_dedupe_key
+        from postings.tests.test_retained_extractions import fields
+        url = "https://example.test/job?tracking=new"
+        JobPosting.objects.filter(pk=self.p.pk).update(dedupe_key=compute_dedupe_key(
+            str(self.account.pk), "new", url, "incoming", "Incoming company"))
+        with patch("postings.extraction.extract_postings", return_value=[fields("incoming") | {"company": "Incoming company"}]):
+            return ingest_extracted_postings(self.account, **dict(message_id="new", sender="new sender",
+                subject="new subject", body="body", posting_urls=[url]) | changes)[0]
+
+    def test_projected_preserves_six_while_updating_metadata(self):
+        self.project()
+        result = self.ingest()
+        from postings.job_posting_projections import descriptor_snapshot
+        self.assertEqual(descriptor_snapshot(result), self.outputs[0].fields)
+        self.assertEqual((result.pk, result.portable_id), (self.p.pk, self.p.portable_id))
+        self.assertEqual((result.message_id, result.sender, result.email_subject), ("new", "new sender", "new subject"))
+        self.assertEqual(result.posting_url, "https://example.test/job?tracking=new")
+        self.assertEqual(JobPosting.objects.count(), 2)
+
+    def test_unprojected_keeps_existing_updates(self):
+        result = self.ingest()
+        self.assertEqual((result.title, result.company), ("incoming", "Incoming company"))
+
+    def test_withdrawal_and_corrupt_history_do_not_release_ingestion_ownership(self):
+        from postings.models import JobPostingDescriptorProjection
+        self.project()
+        self.remove()
+        JobPostingDescriptorProjection.objects.update(snapshot={})
+        result = self.ingest()
+        self.assertEqual(result.title, self.outputs[0].fields["title"])
+
+    def test_workspace_gate_precedes_row_lookup_and_no_update_or_create(self):
+        from unittest.mock import patch
+        from django.db.models.query import QuerySet
+        from postings import models
+        trace = []
+        real_gate = models._lock_descriptor_workspace
+        real_select = QuerySet.select_for_update
+        def gate(*args):
+            trace.append("workspace")
+            return real_gate(*args)
+        def select(query, *args, **kwargs):
+            if query.model is JobPosting:
+                trace.append("posting")
+            return real_select(query, *args, **kwargs)
+        with patch.object(models, "_lock_descriptor_workspace", gate), patch.object(QuerySet, "select_for_update", select), patch.object(QuerySet, "update_or_create", side_effect=AssertionError("row-first writer")):
+            self.ingest()
+        self.assertEqual(trace[:2], ["workspace", "posting"])
+
+    def test_no_hidden_retry_on_database_error(self):
+        from unittest.mock import patch
+        from django.db import OperationalError
+        with patch("postings.models._lock_descriptor_workspace", side_effect=OperationalError("busy")) as gate:
+            with self.assertRaises(OperationalError):
+                self.ingest()
+        self.assertEqual(gate.call_count, 1)

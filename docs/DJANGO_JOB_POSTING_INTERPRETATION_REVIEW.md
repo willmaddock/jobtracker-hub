@@ -1,8 +1,11 @@
 # Posting-Level Interpretation Arbitration Authority
 
-Implementation-stage evidence for the explicitly authorized eleven-file slice. Changes
-remain unstaged, uncommitted and unpushed. This does not replace the separately authorized
-read-only pre-commit review or authorize staging, commit or push.
+Historical implementation-stage evidence for the explicitly authorized eleven-file slice.
+The slice subsequently completed read-only review and was committed/pushed at
+`5f832dcc261d13365d851806623fca1a373e1644`
+(`Implement posting-level interpretation arbitration authority`). Original test evidence
+and implementation-stage Git statements below describe that earlier stage; they do not
+describe the current Descriptor Projection work or grant it commit/push authorization.
 
 ## Checkpoint and scope
 
