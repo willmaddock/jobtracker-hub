@@ -1,9 +1,9 @@
 # Django migration: current status
 
 Maintained checkpoint: 2026-10-05. Authoritative branch: `django-migration`;
-checkpoint `3aab4762224efbf1d8e5b11f57040b88eb9a4094`
-(`Implement retained posting candidate discovery`), parent
-`ecb2ecf98c7d12552b5b0b9327f1f74fd28388ff`. Before this documentation update,
+checkpoint `56c45dcb6768e6af9ab73f7c739ee27c665020f1`
+(`Implement retained text extraction producer`), parent
+`a9e2be91dd4a6bac0a67e8d21788066e8fcebd3c`. Before this documentation update,
 local HEAD, tracking ref and live remote were verified synchronized at that checkpoint,
 ahead/behind 0/0, with a clean working tree and empty index.
 
@@ -48,7 +48,13 @@ Orchestration was reviewed and committed/pushed at
 (`Implement retained posting review orchestration`). Retained Posting Candidate
 Discovery was reviewed and committed/pushed at
 `3aab4762224efbf1d8e5b11f57040b88eb9a4094`
-(`Implement retained posting candidate discovery`).
+(`Implement retained posting candidate discovery`). Retained-Text Job-Alert
+Extraction Producer was reviewed and committed/pushed at
+`56c45dcb6768e6af9ab73f7c739ee27c665020f1`
+(`Implement retained text extraction producer`). It provides explicit retained-message
+extraction production from retained-selector-derived arguments using the existing
+`job_alert_rules` / `"1"` parser, immutable ordered extraction evidence, historical
+replay before parsing and shared persisted-batch validation; it is not canonical ingestion.
 Frontend integration, historical reconciliation, email derivation and operational
 cutover remain pending.
 
@@ -69,6 +75,39 @@ cutover remain pending.
 
 ## 2. Current verification evidence
 
+
+### Retained-Text Job-Alert Extraction Producer — committed checkpoint, 2026-10-05
+
+Reviewed, committed and pushed at `56c45dcb6768e6af9ab73f7c739ee27c665020f1`,
+parent `a9e2be91dd4a6bac0a67e8d21788066e8fcebd3c`. The explicit synchronous producer
+resolves declared retained selectors and executes the existing `job_alert_rules` / `"1"`
+parser only for new operations. It records through the existing extraction recorder,
+using shared extraction-owned persisted-batch validation. Historical replay occurs
+before parsing and preserves ordered outputs, IDs and timestamps; changed operation
+intent is rejected. Zero-output completion is valid, parser failure records no completed
+evidence, and valid historical replay remains available after sticky source conflict
+with `source_eligible=False`. Workspace/source locks cover parsing, nested recording
+and detached frozen receipt construction; recording and receipt failure roll back new evidence.
+
+This completes extraction production only. Existing explicit downstream authorities
+remain implemented separately; automatic retained-item association, interpretation,
+PostingSource mapping, canonical allocation and arbitration/projection adoption remain
+incomplete, as do provider/sync adoption and retained-workflow API/frontend integration.
+No model, migration, parser-semantic, provider, API or frontend change is included.
+The earlier recorder-only provenance scope and exclusions remain historical evidence.
+
+Retained implementation/final-review evidence: focused producer/recorder/interpretation/
+parser suites **145 passed**; full Django **1,263 passed**, with no failures/errors/skips.
+Django system check passed; postings migration drift: none. Global dry run reported only
+the known `EmailAccount.provider` alteration, not generated. Diff, AST, final-newline
+and whitespace checks passed. Application tests were not rerun during commit/push
+or this documentation maintenance; these retained results are not fresh documentation-stage tests.
+
+Accepted limitations: parsing holds Workspace/source locks; historical replay performs
+repeated bounded validation; PostgreSQL contention remains operationally unvalidated.
+Privileged bulk/raw maintenance can bypass cooperative protections, rolled-back parsing
+may execute again on explicit retry, and caller-owned outer transactions determine
+eventual commit. Provider/storage/jobs/backup-restore/cutover gates remain open.
 
 ### Retained Posting Candidate Discovery — committed checkpoint, 2026-10-05
 
@@ -864,15 +903,16 @@ No newly accepted capability is marked verified merely because it is designed.
 | Provider connections | Gmail/Outlook/IMAP connect/sync/disconnect; encrypted credentials | Baseline provider/view coverage, mocked external seams | Historical Gmail OAuth/live-sync checkpoint; complete target flows unvalidated; Outlook/IMAP live validation unestablished |
 | Sync/jobs | Gmail per-message retention plus transitional match/discovery/thread projection; inline single sync, queued bulk/Beat | Gmail adoption/replay and existing sync/task coverage; not real-broker proof | Real Redis/worker/Beat operation unestablished |
 | Retained messages/review | Protected source/observation models, verified Gmail lineage and native-ID producer adoption; scoped review inspection, explicit attachment, independent disposition and atomic create-Application orchestration with durable results | Retention, Gmail adoption, attachment/disposition/creation APIs, migration preservation and SQLite logical concurrency coverage in §2 | Other-provider adoption, broader review actions, frontend and operational validation pending |
-| Postings | Integer PK plus immutable Workspace-scoped portable UUID; existing extractor/ingestion and list/save/dismiss/restore/apply APIs; retained extraction/items and corrections, PostingSource mapping/corrections, item interpretation, posting-level arbitration, descriptor projection, canonical allocation, stateless review orchestration and bounded advisory candidate discovery | Identity/migration/replay and authority-boundary coverage in §2; latest focused interpretation/candidate 83 and full Django 1,239 passed | Sync does not call posting ingestion; broader canonical consumers, provider/ingestion adoption, API/frontend integration of retained-posting workflows and operational/end-to-end validation remain pending |
+| Postings | Integer PK plus immutable Workspace-scoped portable UUID; existing extractor/ingestion and list/save/dismiss/restore/apply APIs; explicit retained-text extraction production with validated historical replay; retained extraction/items and corrections, PostingSource mapping/corrections, item interpretation, posting-level arbitration, descriptor projection, canonical allocation, stateless review orchestration and bounded advisory candidate discovery | Identity/migration/replay and authority-boundary coverage in §2; latest retained focused producer/recorder/interpretation/parser 145 and full Django 1,263 passed | Sync does not produce canonical postings; automatic retained-to-canonical workflows, broader canonical consumers, provider/sync adoption, API/frontend integration of retained-posting workflows and operational/end-to-end validation remain pending |
 | Import/export | No Django legacy importer or portable export/restore | Unimplemented/unverified | Reconciliation/cutover pending |
 | Production | Partial settings/storage/task scaffolding; SQLite inherited, development fallbacks remain | Suite success is not deployment verification | PostgreSQL/storage/jobs/backup/restore/rollback pending |
 
 ## 6. Known parity gaps and blockers
 
-- Connect `email_sync/sync_service.py` to `postings/services.py` ingestion;
-  currently sync writes discoveries/matches, not JobPosting rows. Carry over
-  safe job/URL association and evidence behavior.
+- Retained-text extraction production is complete. Provider/sync adoption and
+  automatic retained-to-canonical workflows remain unimplemented and require separate
+  planning and authorization. Sync does not currently produce canonical JobPosting rows;
+  legacy `ingest_extracted_postings` is not designated as the adoption path.
 - Review Gmail producer adoption; separately authorize other-provider adoption,
   account listing, discovery preview/attach/accept/dismiss/restore/sender
   classification, and evidence/backfill.
@@ -1339,7 +1379,7 @@ preservation, reverse limitations and verification evidence.
 
 ## 8. Next recommended implementation actions
 
-1. Retained Posting Review Orchestration and bounded Candidate Discovery are complete through `3aab4762224efbf1d8e5b11f57040b88eb9a4094`. The next substantive migration slice has not yet been selected or authorized. Broader canonical consumers, split/merge, ingestion adoption and API/frontend integration require separately authorized scope. Prior local database provenance remains unresolved.
+1. Retained-text extraction production is complete through `56c45dcb6768e6af9ab73f7c739ee27c665020f1`, alongside the existing explicit retained-posting authorities. The next substantive migration slice has not yet been selected or authorized. Provider/sync adoption, automatic canonical workflows, broader canonical consumers, API/frontend integration and remaining operational work require separate planning and authorization. Prior local database provenance remains unresolved.
 2. Resolve the legacy verification blockers under separately approved scope before declaring a fully green checkpoint.
 3. Separately scope further review actions and future filtering/queue UX, along with broader email/job and frontend work.
 4. Plan provenance-aware historical reconciliation with importer/cutover work; do not silently backfill current records.
