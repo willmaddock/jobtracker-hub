@@ -95,6 +95,13 @@ client secret, or email history is stored as lineage identity.
   references, with first `bound_at`. Account deletion cascades only the binding;
   the mailbox reference is protected. One current account binding per lineage.
 
+Allocation lifecycle extension (2026-10-04): JobPostingAllocation now protects its
+AccountMailboxBinding routing witness. An account with this dependent provenance
+cannot be deleted through the binding cascade; credential disconnect remains allowed
+and retains the binding. This records routing at allocation time, not which account
+historically fetched retained messages. Accounts without such protected dependents
+retain the earlier deletion behavior described here.
+
 The migration depends on `accounts.0001_initial` and
 `email_sync.0006_retained_email_foundation`; it does not depend on unrelated
 derivation fields. No old table/column is changed and no backfill runs. Absence of

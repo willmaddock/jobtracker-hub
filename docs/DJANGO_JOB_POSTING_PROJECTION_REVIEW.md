@@ -1,8 +1,10 @@
 # Descriptor Projection Authority
 
-Implementation-stage evidence for the authorized thirteen-file slice. This work is
-unstaged, uncommitted and unpushed; separate read-only pre-commit review and explicit
-commit/push authorization remain required.
+Historical implementation-stage evidence for the thirteen-file projection slice,
+subsequently committed/pushed at `8ba7bc869787f80b217c0c066f9c713a337a5669`
+(`Implement descriptor projection authority`). Git-stage statements below describe
+the original pre-commit verification, not current repository state. Validation evidence
+is preserved unchanged.
 
 ## Checkpoint and scope
 

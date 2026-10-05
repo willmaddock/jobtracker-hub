@@ -22,8 +22,9 @@ class GmailIdentityMigrationTests(TransactionTestCase):
                 leaves = executor.loader.graph.leaf_nodes()
                 # Preserve the pre-lineage graph's original Application schema,
                 # rather than bringing future relationship storage into baseline.
-                baseline = [n for n in leaves if n[0] not in {'email_sync', 'applications'}] + [
-                    ('applications', '0006_deterministic_derivation'), ('email_sync', '0006_retained_email_foundation')]
+                baseline = [n for n in leaves if n[0] not in {'email_sync', 'applications', 'postings'}] + [
+                    ('applications', '0006_deterministic_derivation'), ('email_sync', '0006_retained_email_foundation'),
+                    ('postings', '0011_job_posting_descriptor_projections')]
                 executor.migrate(baseline)
                 baseline_tables = db.introspection.table_names()
                 self.assertIn('email_sync_retainedmessage', baseline_tables)

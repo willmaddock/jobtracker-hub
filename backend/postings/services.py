@@ -50,7 +50,7 @@ def ingest_extracted_postings(
     from django.core.exceptions import ValidationError
     from django.db import router, transaction
     from email_sync.models import EmailAccount
-    from .models import JobPosting, DESCRIPTOR_FIELDS, _lock_descriptor_workspace
+    from .models import JobPosting, JobPostingAllocation, DESCRIPTOR_FIELDS, _lock_descriptor_workspace
 
     raw_jobs = extract_postings(sender, subject, body)
     postings = []
@@ -75,7 +75,8 @@ def ingest_extracted_postings(
                 raise ValidationError("Posting dedupe identity has inconsistent ownership.")
             values = dict(message_id=message_id, posting_url=posting_url, received_at=received_at,
                           email_subject=subject, sender=sender)
-            if posting is None or not posting.descriptor_projections.using(using).exists():
+            if posting is None or (not posting.descriptor_projections.using(using).exists()
+                    and not JobPostingAllocation.objects.using(using).filter(posting=posting).exists()):
                 values.update({name: job.get(name) for name in DESCRIPTOR_FIELDS})
             if posting is None:
                 posting = JobPosting.objects.using(using).create(workspace_id=persisted.workspace_id,

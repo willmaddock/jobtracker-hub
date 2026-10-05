@@ -1,6 +1,6 @@
 # Django migration: current status
 
-Maintained checkpoint: 2026-10-03. Retained Email Source Identity and Content
+Maintained checkpoint: 2026-10-04. Retained Email Source Identity and Content
 Foundation is committed at `2f0cd1f`; Gmail Mailbox Identity and Durable Lineage
 Foundation is committed at `9f6627770c43fd3b3af492d2201e647af77cc53f` on
 `django-migration`. Gmail Provider Adoption into Retained-Source Authority is committed
@@ -32,7 +32,9 @@ Selection Authority** is committed/pushed at `d46ef1508259f0418d1d0c842678456c88
 Arbitration Authority** is committed/pushed at
 `5f832dcc261d13365d851806623fca1a373e1644`
 (`Implement posting-level interpretation arbitration authority`). Descriptor Projection
-Authority is the current authorized implementation slice, unstaged/uncommitted/unpushed.
+Authority is committed/pushed at `8ba7bc869787f80b217c0c066f9c713a337a5669`
+(`Implement descriptor projection authority`). Canonical JobPosting Allocation is the
+current authorized implementation slice, unstaged/uncommitted/unpushed.
 Frontend integration, historical reconciliation, email derivation and operational
 cutover remain pending.
 
@@ -54,7 +56,49 @@ cutover remain pending.
 ## 2. Current verification evidence
 
 
-### Descriptor projection authority — unstaged implementation, validated 2026-10-03
+### Canonical JobPosting Allocation — implementation verification, 2026-10-04
+
+Implemented and automated-test verified; sixteen files remain unstaged, uncommitted
+and unpushed on django-migration. Prior authoritative checkpoint:
+`8ba7bc869787f80b217c0c066f9c713a337a5669`. Separate read-only pre-commit review is next.
+
+- Explicit owner allocation atomically creates a default-only JobPosting, initial
+  PostingSource and immutable JobPostingAllocation. Selected interpretation/evidence,
+  locator and mailbox binding are validated; reserved identity and ingestion guards,
+  historical replay/readers and read-only admin are implemented.
+- Fresh implementation-pass results: allocation + migration 40; Gmail migration 1;
+  PostingSource 70; retained interpretation 49; arbitration 46; projection 57;
+  services/ingestion 19; postings 435; affected apps 1,134; full Django 1,152.
+  All final runs: zero failures/errors/skips. Existing passing suites were retained;
+  Gmail migration, affected apps and full Django ran after the test-only correction.
+- Django check passed; postings drift none; global drift only the known provider
+  AlterField (dry-run only). Graph through 0012; inspected SQL creates only the new
+  allocation table and constraints/indexes. Populated migration fixture preserves
+  existing tables without backfill and checks alias-aware validation.
+- Two bounded interruptions required explicit authorization: accidental provider
+  migration generation was stopped and repaired only by deleting that file and
+  correcting 0012 to email_sync 0007; the Gmail historical fixture's impossible
+  email_sync 0006/latest-postings combination was corrected in the authorized
+  sixteenth file by pinning postings 0011, preserving current forward leaves and
+  all assertions. The latter changes no production behavior.
+- Scope: eleven modified, five untracked, nothing staged. Local/origin/live remote
+  remain synchronized at the checkpoint (0/0); real DB and both provider migration
+  paths absent. Python parsing, newlines, whitespace, Markdown links/anchors and
+  diff checks passed; all five added files inspected.
+- SQLite concurrency tests use caller retries for contention, not production retries
+  or PostgreSQL verification. PROTECT can block account deletion; disconnect remains
+  allowed. Raw maintenance bypass, semantic duplicates, orphan lifecycle, unbound
+  allocation, API/frontend, historical reconciliation and operational cutover remain
+  outside this implementation evidence.
+
+See [allocation review](DJANGO_JOB_POSTING_ALLOCATION_REVIEW.md) for the full contract,
+scope, validation and limitations.
+
+
+### Descriptor projection authority — historical pre-commit verification, 2026-10-03
+
+Subsequently committed/pushed at `8ba7bc869787f80b217c0c066f9c713a337a5669`.
+The Git-stage statements and counts below are historical projection evidence.
 
 Prior authoritative checkpoint: `5f832dcc261d13365d851806623fca1a373e1644`.
 The current thirteen-file slice is implemented and validated, unstaged/uncommitted/
@@ -1226,7 +1270,7 @@ preservation, reverse limitations and verification evidence.
 
 ## 8. Next recommended implementation actions
 
-1. Separately authorize read-only pre-commit review of the validated Descriptor Projection slice. Prior authoritative checkpoint: `5f832dcc261d13365d851806623fca1a373e1644`. Broader canonical consumers, candidate enumeration, allocation, split/merge and ingestion adoption require separate scope. Prior local database provenance remains unresolved.
+1. Perform separate read-only pre-commit review of the completed Canonical JobPosting Allocation slice. Prior authoritative checkpoint: `8ba7bc869787f80b217c0c066f9c713a337a5669`. Broader canonical consumers, candidate enumeration, split/merge and broader ingestion adoption require separate scope. Prior local database provenance remains unresolved.
 2. Resolve the legacy verification blockers under separately approved scope before declaring a fully green checkpoint.
 3. Separately scope further review actions and future filtering/queue UX, along with broader email/job and frontend work.
 4. Plan provenance-aware historical reconciliation with importer/cutover work; do not silently backfill current records.

@@ -1032,6 +1032,91 @@ provider integration, field widening, PostgreSQL operational validation, legacy 
 and historical reconciliation remain excluded. Existing consumers display stored
 materialized values even when authority later becomes stale.
 
+### Canonical JobPosting allocation — approved bounded contract, 2026-10-04
+
+`allocate_job_posting(actor, workspace, item_id, operation_id,
+expected_interpretation_revision)` is an explicit owner-only, item-local one-shot
+creation command. It atomically inserts a new JobPosting, its initial PostingSource,
+and JobPostingAllocation. It never parses, fetches providers, creates Applications,
+automatically arbitrates/projects, discovers semantic duplicates or attaches existing.
+
+JobPostingAllocation has BigAuto PK; protected OneToOne posting (`allocation`), item
+and initial_source (`job_posting_allocation`); protected interpretation_decision,
+account_binding and actor FKs (`job_posting_allocations`); caller UUIDv4 operation_id
+without default; fixed Char32 explicit_owner method; fixed positive small version 1;
+auto created_at. OneToOne uniqueness is sufficient; UUID is nonunique and item-scoped.
+Checks are job_post_alloc_method and job_post_alloc_version. No revision, snapshot,
+withdrawal, duplicate portable identity or mutable pointer. Runtime ordinary saves,
+replacement inserts and instance deletion reject. Private validated base insertion
+is confined to the canonical atomic operation; bulk/raw maintenance remains a bypass.
+
+New work requires current selected/applicable item interpretation, current membership
+witness, complete valid extraction evidence, eligible source, no earlier allocation,
+and no initial PostingSource ever (including withdrawn/remapped history). It derives
+account from the source mailbox's current AccountMailboxBinding; workspace/provider
+must agree throughout. Missing binding fails; disconnected/blocked status is allowed.
+No credentials are inspected. Binding PROTECT preserves allocation-time routing only,
+not historical fetch identity. Account deletion can consequently be blocked; credential
+disconnect remains allowed. Purge and unbound-source allocation remain separate.
+
+The posting receives a generated portable UUID and reserved key
+`retained-allocation:v1:<item database PK>` (maximum 42 characters). Six descriptors,
+URL and optional email metadata start null; status/new and saved/False use defaults.
+message_id is the exact retained locator_value. Persisted locator tuple is revalidated:
+gmail_message_id / graph_immutable_id / imap_uid, valid nonempty Unicode without NUL,
+512 UTF-8 bytes, provider folder/stability and IMAP UID/UIDVALIDITY bounds. Every valid
+locator fits the destination's 512-character capacity; never truncate/hash/coerce.
+The value is convenience metadata, not a complete provider-fetch/thread identity.
+
+Ordinary creation/mutation into the reserved prefix raises
+job_posting_allocation_namespace_reserved, except an allocated row retaining its key.
+Existence of any allocation protects dedupe changes with
+job_posting_allocation_identity_owned, even if history is malformed. Preserve effective
+update_fields/deferred/explicit-empty semantics, identity checks and projection guards.
+Key-writing existing saves serialize Workspace then posting. Descriptor ownership
+still begins only at first projection; manual/admin edits before then remain allowed.
+Ingestion preserves six descriptors if either allocation or projection exists, using
+existence only; URL/email metadata behavior is unchanged. Its SHA keys remain separate:
+similar real-world jobs may become distinct postings. No cross-pipeline semantic merge.
+
+Order: authorization/bounded input -> atomic Workspace gate -> scoped item -> optional
+existing posting lock -> source lock -> allocation lookup/history validation/replay ->
+reject initial mapping -> interpretation revision/applicability -> source eligibility
+-> locator -> account binding -> global reserved-key collision -> posting insert ->
+shared private initial mapping insert -> allocation insert -> persisted verification.
+Never lock an existing posting after source. No item locks or hidden retries. Unique
+constraints backstop the workspace/source serialization. Unsupported bypass-writer
+IntegrityError rolls back the entire transaction; no querying a broken transaction.
+
+Replay validates historical integrity first, then different UUID is already-allocated;
+same UUID/different valid interpretation revision is idempotency_key_reused; exact
+match returns identical immutable facts without writes. Same UUID on different items
+is permitted. Current owner may replay while original actor/time remain. Later source
+conflict, interpretation change, mapping correction or disconnect do not invalidate
+historical admission. Historical validation resolves exact interpretation prefix,
+membership/extraction evidence, locator, initial mapping and binding/account scope;
+checks policy/UUID/actor/key; it does not require current descriptors or applicability.
+Coherent privileged history rewrites are not cryptographically detectable.
+
+Readers by posting and item return frozen detached scalar records, allocation=None
+for existing authorized endpoints without provenance, NotFound for foreign/missing
+endpoints. No pagination or current mapping state. Remap leaves original posting and
+allocation intact, can leave an orphan and never allows reallocation for that item.
+Arbitration starts unresolved at revision 0 and projection history remains empty;
+existing explicit arbitration then projection works unchanged.
+
+Errors: 400 invalid_job_posting_allocation; scoped 404; 409
+job_posting_allocation_history_invalid, job_posting_already_allocated,
+retained_item_initial_mapping_exists, stale_interpretation_revision,
+posting_interpretation_not_applicable, job_posting_allocation_account_unavailable,
+job_posting_allocation_key_conflict; reuse idempotency_key_reused and retained evidence/
+eligibility errors. Key collision reveals no conflicting posting/workspace identity.
+Migration 0012 creates only the empty allocation table; depends on postings 0011,
+email_sync 0007 and swappable user. No backfill or existing schema alteration.
+Commands use default-DB authority helpers; historical validators honor explicit alias.
+Public API/frontend, cutover, URL enrichment, widening, cleanup/purge and PostgreSQL
+operational validation are excluded.
+
 ### Content and relationships
 
 Messages remain transient until needed for retained evidence, Discovery/review,

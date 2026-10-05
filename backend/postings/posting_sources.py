@@ -75,6 +75,12 @@ def result(item, row, posting, message, *, replay=False):
     return InitialPostingSourceResult(item, row, posting, not message.has_conflict, replay)
 
 
+def _append_initial_posting_source(*, item, posting, actor, using):
+    """Caller owns authority, serialization, replay and eligibility checks."""
+    return PostingSource.objects.using(using).create(item=item, posting=posting, actor=actor,
+        method=METHOD, decision_version=DECISION_VERSION)
+
+
 def attach_posting_source(*, actor, workspace, item_id, posting_id):
     authorize_owner(actor, workspace)
     identity(item_id)
@@ -90,8 +96,7 @@ def attach_posting_source(*, actor, workspace, item_id, posting_id):
                 raise PostingSourceConflict()
             return result(item, prior, original_posting, message, replay=True)
         require_eligible_source(message)
-        row = PostingSource.objects.create(item=item, posting=posting, actor=actor,
-                                           method=METHOD, decision_version=DECISION_VERSION)
+        row = _append_initial_posting_source(item=item, posting=posting, actor=actor, using=posting._state.db)
         return result(item, row, posting, message)
 
 

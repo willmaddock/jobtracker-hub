@@ -8,7 +8,7 @@ from django.contrib.admin.exceptions import DisallowedModelAdminToField
 from .models import (JobPosting, RetainedPostingExtraction, RetainedPostingExtractionOutput,
                      RetainedPostingItem, RetainedPostingItemAssociation, RetainedPostingItemCorrection,
                      PostingSource, PostingSourceCorrection, RetainedPostingInterpretationDecision,
-                JobPostingInterpretationDecision, JobPostingDescriptorProjection)
+                JobPostingInterpretationDecision, JobPostingDescriptorProjection, JobPostingAllocation)
 
 from .models import DESCRIPTOR_FIELDS, _lock_descriptor_workspace
 
@@ -67,7 +67,7 @@ class JobPostingAdmin(admin.ModelAdmin):
 @admin.register(RetainedPostingExtraction, RetainedPostingExtractionOutput,
                 RetainedPostingItem, RetainedPostingItemAssociation, RetainedPostingItemCorrection,
                 PostingSource, PostingSourceCorrection, RetainedPostingInterpretationDecision,
-                JobPostingInterpretationDecision, JobPostingDescriptorProjection)
+                JobPostingInterpretationDecision, JobPostingDescriptorProjection, JobPostingAllocation)
 class PostingExtractionAdmin(admin.ModelAdmin):
     """Privileged read-only inspection. Default field rendering escapes JSON."""
     actions = None

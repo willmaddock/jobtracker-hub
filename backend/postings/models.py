@@ -16,6 +16,9 @@ from applications.models import Application
 from email_sync.models import EmailAccount
 
 
+ALLOCATION_KEY_PREFIX = "retained-allocation:v1:"
+
+
 DESCRIPTOR_FIELDS = ("source", "title", "company", "location", "salary", "employment_type")
 
 
@@ -91,17 +94,27 @@ class JobPosting(models.Model):
             if loaded_fields:
                 update_fields = loaded_fields
         write_descriptors = set(DESCRIPTOR_FIELDS) if update_fields is None else set(update_fields) & set(DESCRIPTOR_FIELDS)
+        write_key = update_fields is None or "dedupe_key" in update_fields
         options = dict(force_insert=force_insert, force_update=force_update,
                        using=using, update_fields=update_fields)
         if not self.pk:
+            if write_key and self.dedupe_key.startswith(ALLOCATION_KEY_PREFIX):
+                raise ValidationError("Reserved allocation namespace.", code="job_posting_allocation_namespace_reserved")
             return super().save(**options)
         with transaction.atomic(using=using):
             rows = type(self).objects.using(using)
-            original = rows.filter(pk=self.pk).values("workspace_id", "account_id", "portable_id").first()
-            if original and write_descriptors:
+            original = rows.filter(pk=self.pk).values("workspace_id", "account_id", "portable_id", "dedupe_key").first()
+            if original and (write_descriptors or write_key):
                 _lock_descriptor_workspace(original["workspace_id"], using)
                 original = rows.select_for_update(of=("self",)).filter(pk=self.pk).values(
-                    "workspace_id", "account_id", "portable_id", *DESCRIPTOR_FIELDS).first()
+                    "workspace_id", "account_id", "portable_id", "dedupe_key", *DESCRIPTOR_FIELDS).first()
+            allocated = bool(original and write_key and JobPostingAllocation.objects.using(using).filter(posting_id=self.pk).exists())
+            if write_key:
+                if allocated and self.dedupe_key != original["dedupe_key"]:
+                    raise ValidationError("Allocation identity is immutable.", code="job_posting_allocation_identity_owned")
+                if self.dedupe_key.startswith(ALLOCATION_KEY_PREFIX) and not (
+                        allocated and self.dedupe_key == original["dedupe_key"]):
+                    raise ValidationError("Reserved allocation namespace.", code="job_posting_allocation_namespace_reserved")
             if original:
                 if any(original[name] != getattr(self, name) for name in
                        ("workspace_id", "account_id", "portable_id")):
@@ -567,3 +580,37 @@ class JobPostingDescriptorProjection(PostingItemProvenance):
             validate_event(self, using)
         except APIException:
             raise ValidationError("Invalid descriptor projection provenance.") from None
+
+
+class JobPostingAllocation(PostingItemProvenance):
+    """One-shot creation fact; only the atomic allocation service may insert."""
+    id = models.BigAutoField(primary_key=True)
+    posting = models.OneToOneField(JobPosting, on_delete=models.PROTECT, related_name="allocation")
+    item = models.OneToOneField(RetainedPostingItem, on_delete=models.PROTECT, related_name="job_posting_allocation")
+    interpretation_decision = models.ForeignKey(RetainedPostingInterpretationDecision, on_delete=models.PROTECT,
+                                                related_name="job_posting_allocations")
+    initial_source = models.OneToOneField(PostingSource, on_delete=models.PROTECT, related_name="job_posting_allocation")
+    account_binding = models.ForeignKey("email_sync.AccountMailboxBinding", on_delete=models.PROTECT,
+                                       related_name="job_posting_allocations")
+    operation_id = models.UUIDField(editable=False)
+    actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="job_posting_allocations")
+    method = models.CharField(max_length=32, default="explicit_owner", editable=False)
+    allocation_version = models.PositiveSmallIntegerField(default=1, editable=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(condition=models.Q(method="explicit_owner"), name="job_post_alloc_method"),
+            models.CheckConstraint(condition=models.Q(allocation_version=1), name="job_post_alloc_version"),
+        ]
+
+    def save(self, *args, **kwargs):
+        raise ValidationError("Use canonical posting allocation; ordinary allocation writes are prohibited.")
+
+    def validate_insertion(self, using):
+        from rest_framework.exceptions import APIException
+        from .job_posting_allocations import validate_allocation
+        try:
+            validate_allocation(self, using)
+        except APIException:
+            raise ValidationError("Invalid posting allocation provenance.") from None

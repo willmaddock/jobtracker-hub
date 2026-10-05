@@ -224,3 +224,50 @@ class ProjectionIngestionTests(ProjectionFixtures, TestCase):
             with self.assertRaises(OperationalError):
                 self.ingest()
         self.assertEqual(gate.call_count, 1)
+
+
+from postings.tests.test_job_posting_allocations import Fixtures as AllocationFixtures
+
+
+class AllocationIngestionTests(AllocationFixtures, TestCase):
+    def test_allocation_existence_preserves_descriptors_and_allows_metadata(self):
+        from unittest.mock import patch
+        import uuid
+        from postings.models import JobPostingAllocation
+        from postings.tests.test_retained_extractions import fields
+        row = JobPosting.objects.get(pk=self.allocate().allocation.posting_id)
+        for projected in (False, True):
+            if projected:
+                self.projected(row.pk)
+            row.refresh_from_db()
+            before = {name: getattr(row, name) for name in fields()}
+            # The reserved key normally cannot be emitted by ingestion. Inject a
+            # matching key to test defense-in-depth independently of its algorithm.
+            with patch("postings.extraction.compute_dedupe_key", return_value=row.dedupe_key), patch(
+                    "postings.extraction.extract_postings", return_value=[fields("incoming")]):
+                result = ingest_extracted_postings(self.account, "fresh", "sender", "subject", "body",
+                    posting_urls=["https://example.test/new"])[0]
+            self.assertEqual({name: getattr(result, name) for name in before}, before)
+            self.assertEqual((result.message_id, result.sender, result.email_subject, result.posting_url),
+                ("fresh", "sender", "subject", "https://example.test/new"))
+        JobPostingAllocation.objects.filter(posting=row).update(operation_id=uuid.UUID(int=0))
+        with patch("postings.extraction.compute_dedupe_key", return_value=row.dedupe_key), patch(
+                "postings.extraction.extract_postings", return_value=[fields("incoming")]):
+            result = ingest_extracted_postings(self.account, "fresh", "sender", "subject", "body")[0]
+        self.assertEqual(result.title, before["title"])
+
+    def test_malformed_unprojected_allocation_still_excludes_ingestion(self):
+        import uuid
+        from unittest.mock import patch
+        from postings.models import JobPostingAllocation, JobPostingDescriptorProjection
+        from postings.tests.test_retained_extractions import fields
+        row = JobPosting.objects.get(pk=self.allocate().allocation.posting_id)
+        row.title = "manual before projection"
+        row.save(update_fields=["title"])
+        JobPostingAllocation.objects.filter(posting=row).update(operation_id=uuid.UUID(int=0))
+        self.assertFalse(JobPostingDescriptorProjection.objects.filter(posting=row).exists())
+        with patch("postings.extraction.compute_dedupe_key", return_value=row.dedupe_key), patch(
+                "postings.extraction.extract_postings", return_value=[fields("incoming")]):
+            result = ingest_extracted_postings(self.account, "new-metadata", "sender", "subject", "body")[0]
+        self.assertEqual(result.title, "manual before projection")
+        self.assertEqual(result.message_id, "new-metadata")
