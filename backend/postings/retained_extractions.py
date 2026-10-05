@@ -36,6 +36,12 @@ class RetainedSourceInvalid(APIException):
     default_detail = "Retained source representation is invalid."
 
 
+class PostingExtractionEvidenceInvalid(APIException):
+    status_code = 409
+    default_code = "posting_extraction_evidence_invalid"
+    default_detail = "Posting extraction evidence is invalid."
+
+
 @dataclass(frozen=True)
 class ExtractionResult:
     operation: RetainedPostingExtraction
@@ -76,6 +82,41 @@ def outcome(operation, message, replay):
                             not message.has_conflict)
 
 
+def validate_extraction_batch(extraction_id, message, *, using):
+    """Single complete persisted-batch validator; caller validates scoped source.
+
+    Includes every sibling, not merely a selected output. Returns the validated
+    historical envelope and rows for replay without executing any parser.
+    """
+    extraction = RetainedPostingExtraction.objects.using(using).filter(pk=extraction_id).first()
+    if extraction is None or extraction.retained_message_id != message.pk:
+        raise PostingExtractionEvidenceInvalid()
+    outputs = tuple(RetainedPostingExtractionOutput.objects.using(using)
+                    .filter(extraction_id=extraction_id).order_by("position")[:contract.MAX_OUTPUTS + 1])
+    try:
+        contract.require(extraction.snapshot_version == contract.SNAPSHOT_VERSION)
+        contract.require(len(outputs) <= contract.MAX_OUTPUTS)
+        contract.require([row.position for row in outputs] == list(range(len(outputs))))
+        for row in outputs:
+            contract.operation_uuid(row.portable_id)
+        stamp = extraction.extracted_at
+        contract.require(stamp is not None and stamp.utcoffset() is not None)
+        envelope = contract.validate_envelope(extraction.operation_id, extraction.extractor_method,
+            extraction.extractor_version, extraction.input_spec, stamp.isoformat(),
+            [row.fields for row in outputs])
+        contract.resolve_selectors(envelope["input_spec"], message.content)
+        fingerprint = contract.replay_digest(envelope, {
+            "workspace_id": message.workspace_id, "retained_message_id": message.pk,
+            "retained_message_portable_id": str(message.portable_id),
+            "representation_version": message.representation_version,
+            "content_digest": message.content_digest,
+        })
+        contract.require(fingerprint == extraction.payload_digest)
+    except contract.InvalidExtraction:
+        raise PostingExtractionEvidenceInvalid() from None
+    return extraction, outputs, envelope
+
+
 def record_posting_extraction(*, actor, workspace, retained_message_id, operation_id,
                               extractor_method, extractor_version, input_spec, extracted_at, outputs):
     authorize(actor, workspace)
@@ -103,6 +144,7 @@ def record_posting_extraction(*, actor, workspace, retained_message_id, operatio
         if prior:
             if prior.payload_digest != fingerprint:
                 raise ExtractionKeyReused()
+            validate_extraction_batch(prior.pk, message, using=prior._state.db)
             return outcome(prior, message, True)
         require_eligible_source(message)
         row = RetainedPostingExtraction.objects.create(

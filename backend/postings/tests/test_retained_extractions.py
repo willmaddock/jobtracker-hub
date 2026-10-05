@@ -81,6 +81,20 @@ class Fixtures:
 
 
 class RecordingTests(Fixtures, TestCase):
+    def test_exact_recorder_replay_validates_all_persisted_siblings(self):
+        self.kw["outputs"] = [fields("A"), fields("B")]
+        result = self.record()
+        sibling = result.outputs[1]
+        for change in ({"fields": fields("Tampered")}, {"position": 9},
+                       {"portable_id": uuid.uuid1()}):
+            with self.subTest(change=change):
+                Output.objects.filter(pk=sibling.pk).update(**change)
+                self.error("posting_extraction_evidence_invalid", self.record, 409)
+                Output.objects.filter(pk=sibling.pk).update(
+                    **{name: getattr(sibling, name) for name in change})
+        Extraction.objects.filter(pk=result.operation.pk).update(snapshot_version=2)
+        self.error("posting_extraction_evidence_invalid", self.record, 409)
+
     def test_unknown_receipt_provenance_with_matching_digest_rejects(self):
         for label in ("not_a_retention_source", ""):
             content = deepcopy(self.message.content)

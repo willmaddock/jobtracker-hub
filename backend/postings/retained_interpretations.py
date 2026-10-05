@@ -14,10 +14,11 @@ from applications.creation import lock_workspace
 from applications.message_relationships import require_eligible_source
 from email_sync.models import RetainedMessage
 from . import extraction_contract as contract
-from .models import RetainedPostingItem as Item, RetainedPostingExtraction as Extraction
+from .models import RetainedPostingItem as Item
 from .models import RetainedPostingExtractionOutput as Output, RetainedPostingItemAssociation as Association
 from .models import RetainedPostingInterpretationDecision as Decision
-from .retained_extractions import identity, scoped_source, RetainedSourceInvalid
+from .retained_extractions import (identity, scoped_source, RetainedSourceInvalid,
+    validate_extraction_batch, PostingExtractionEvidenceInvalid)
 from .retained_items import authorize_owner
 from .retained_item_corrections import resolve_chain as membership_chain, CorrectionConflict
 
@@ -99,35 +100,13 @@ def _validate_source(message):
 
 
 def _validate_extraction(extraction_id, message, using, cache):
-    """Validate the entire persisted batch, including unselected sibling outputs."""
+    """Keep interpretation caching/errors around the shared batch authority."""
     if extraction_id in cache:
         return
     _validate_source(message)
-    extraction = Extraction.objects.using(using).filter(pk=extraction_id).first()
-    if extraction is None or extraction.retained_message_id != message.pk:
-        raise PostingInterpretationEvidenceInvalid()
-    outputs = list(Output.objects.using(using).filter(extraction_id=extraction_id)
-                   .order_by("position")[:contract.MAX_OUTPUTS + 1])
     try:
-        contract.require(extraction.snapshot_version == contract.SNAPSHOT_VERSION)
-        contract.require(len(outputs) <= contract.MAX_OUTPUTS)
-        contract.require([row.position for row in outputs] == list(range(len(outputs))))
-        for row in outputs:
-            contract.operation_uuid(row.portable_id)
-        stamp = extraction.extracted_at
-        contract.require(stamp is not None and stamp.utcoffset() is not None)
-        envelope = contract.validate_envelope(extraction.operation_id, extraction.extractor_method,
-            extraction.extractor_version, extraction.input_spec, stamp.isoformat(),
-            [row.fields for row in outputs])
-        contract.resolve_selectors(envelope["input_spec"], message.content)
-        fingerprint = contract.replay_digest(envelope, {
-            "workspace_id": message.workspace_id, "retained_message_id": message.pk,
-            "retained_message_portable_id": str(message.portable_id),
-            "representation_version": message.representation_version,
-            "content_digest": message.content_digest,
-        })
-        contract.require(fingerprint == extraction.payload_digest)
-    except contract.InvalidExtraction:
+        validate_extraction_batch(extraction_id, message, using=using)
+    except PostingExtractionEvidenceInvalid:
         raise PostingInterpretationEvidenceInvalid() from None
     cache.add(extraction_id)
 

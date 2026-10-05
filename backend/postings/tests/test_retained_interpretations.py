@@ -70,6 +70,20 @@ class Fixtures(MappingFixtures):
 
 
 class InterpretationTests(Fixtures, TestCase):
+    def test_shared_batch_validator_preserves_cache_and_error_translation(self):
+        extraction = self.outputs[0].extraction
+        message = RetainedMessage.objects.select_related("mailbox").get(pk=extraction.retained_message_id)
+        cache = set()
+        with patch.object(service, "validate_extraction_batch", wraps=service.validate_extraction_batch) as validator:
+            service._validate_extraction(extraction.pk, message, extraction._state.db, cache)
+            service._validate_extraction(extraction.pk, message, extraction._state.db, cache)
+            validator.assert_called_once()
+        self.assertEqual(cache, {extraction.pk})
+        Output.objects.filter(pk=self.outputs[1].pk).update(fields={"invalid": "sibling"})
+        with self.assertRaises(service.PostingInterpretationEvidenceInvalid) as caught:
+            service._validate_extraction(extraction.pk, message, extraction._state.db, set())
+        self.assertEqual(caught.exception.get_codes(), "posting_interpretation_evidence_invalid")
+
     def test_unresolved_and_first_whole_output(self):
         state = self.current()
         self.assertEqual((state.revision, state.state), (0, "unresolved"))
