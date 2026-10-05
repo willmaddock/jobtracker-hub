@@ -1,6 +1,13 @@
 # Django migration: current status
 
-Maintained checkpoint: 2026-10-04. Retained Email Source Identity and Content
+Maintained checkpoint: 2026-10-05. Authoritative branch: `django-migration`;
+checkpoint `3aab4762224efbf1d8e5b11f57040b88eb9a4094`
+(`Implement retained posting candidate discovery`), parent
+`ecb2ecf98c7d12552b5b0b9327f1f74fd28388ff`. Before this documentation update,
+local HEAD, tracking ref and live remote were verified synchronized at that checkpoint,
+ahead/behind 0/0, with a clean working tree and empty index.
+
+Retained Email Source Identity and Content
 Foundation is committed at `2f0cd1f`; Gmail Mailbox Identity and Durable Lineage
 Foundation is committed at `9f6627770c43fd3b3af492d2201e647af77cc53f` on
 `django-migration`. Gmail Provider Adoption into Retained-Source Authority is committed
@@ -36,7 +43,12 @@ Authority is committed/pushed at `8ba7bc869787f80b217c0c066f9c713a337a5669`
 (`Implement descriptor projection authority`). Canonical JobPosting Allocation is
 committed/pushed at `cce6cf08717d6dca18fd1ce8945f68df9589f39e`
 (`Implement canonical JobPosting allocation authority`). Retained Posting Review
-Orchestration is the current six-file implementation, unstaged/uncommitted/unpushed.
+Orchestration was reviewed and committed/pushed at
+`ecb2ecf98c7d12552b5b0b9327f1f74fd28388ff`
+(`Implement retained posting review orchestration`). Retained Posting Candidate
+Discovery was reviewed and committed/pushed at
+`3aab4762224efbf1d8e5b11f57040b88eb9a4094`
+(`Implement retained posting candidate discovery`).
 Frontend integration, historical reconciliation, email derivation and operational
 cutover remain pending.
 
@@ -58,7 +70,33 @@ cutover remain pending.
 ## 2. Current verification evidence
 
 
-### Retained Posting Review Orchestration — implementation, 2026-10-04
+### Retained Posting Candidate Discovery — committed checkpoint, 2026-10-05
+
+Reviewed, committed and pushed at `3aab4762224efbf1d8e5b11f57040b88eb9a4094`.
+The four-file backend slice adds advisory SQL-read-only interpretation observation,
+exact company/title candidate discovery, location as factual evidence only, Workspace
+and posting-account Workspace safety, ascending-PK keyset pagination and detached
+advisory results. It confers no identity or mapping authority and performs no allocation,
+interpretation selection, arbitration, projection or Application/disposition writes.
+No model, migration, API or frontend change is included.
+
+Retained final-review evidence: focused interpretation/candidate tests **83 passed**;
+full Django **1,239 passed**, with no failures/errors/skips. Django system check,
+SQL-read-only, detachment and diff checks passed. Postings migration drift: none;
+global dry run reported only the known EmailAccount.provider alteration, not generated.
+This documentation-only update adds no new application-test or operational evidence;
+application tests were not rerun during documentation maintenance.
+
+Accepted limitations: advisory observations are non-serialized; interpretation validation
+cost grows with history; candidate pagination bounds canonical rows materialized, not
+total database scan cost. PostgreSQL operational behavior remains unvalidated.
+Browser/provider/storage/jobs/backup/restore/cutover gates remain open.
+
+### Retained Posting Review Orchestration — historical implementation-stage evidence, 2026-10-04
+
+Subsequently reviewed, committed and pushed at
+`ecb2ecf98c7d12552b5b0b9327f1f74fd28388ff`. Counts and Git-stage statements
+below describe the original implementation-stage verification, not current repository state.
 
 Prior authoritative checkpoint: `cce6cf08717d6dca18fd1ce8945f68df9589f39e`.
 Stateless coordinator and advisory reader implemented within six authorized files;
@@ -76,8 +114,8 @@ whitespace, Markdown links/anchors and diff checks passed. All three added files
 inspected; exact three modified/three untracked scope, empty index, checkpoint and
 remote synchronized 0/0, database/provider migration paths absent.
 
-Implementation is complete and ready for separate read-only pre-commit review;
-not yet committed or operationally validated. Independent commits can leave partial
+At that implementation stage, the slice was complete and ready for separate read-only
+pre-commit review, not yet committed or operationally validated. Independent commits can leave partial
 success, ambiguous outcomes require replay, and composed reads remain advisory.
 SQLite concurrency is not PostgreSQL operational validation. See
 [orchestration review](DJANGO_RETAINED_POSTING_REVIEW_ORCHESTRATION.md).
@@ -826,7 +864,7 @@ No newly accepted capability is marked verified merely because it is designed.
 | Provider connections | Gmail/Outlook/IMAP connect/sync/disconnect; encrypted credentials | Baseline provider/view coverage, mocked external seams | Historical Gmail OAuth/live-sync checkpoint; complete target flows unvalidated; Outlook/IMAP live validation unestablished |
 | Sync/jobs | Gmail per-message retention plus transitional match/discovery/thread projection; inline single sync, queued bulk/Beat | Gmail adoption/replay and existing sync/task coverage; not real-broker proof | Real Redis/worker/Beat operation unestablished |
 | Retained messages/review | Protected source/observation models, verified Gmail lineage and native-ID producer adoption; scoped review inspection, explicit attachment, independent disposition and atomic create-Application orchestration with durable results | Retention, Gmail adoption, attachment/disposition/creation APIs, migration preservation and SQLite logical concurrency coverage in §2 | Other-provider adoption, broader review actions, frontend and operational validation pending |
-| Postings | Integer PK plus immutable Workspace-scoped portable UUID; existing extractor/ingestion and list/save/dismiss/restore/apply APIs | Identity/backfill/replay and compatibility coverage in §2 | Completed-extraction provenance and explicit item/initial-association services exist; sync does not call ingestion; correction/effective membership, initial PostingSource assertions and mapping corrections/effective state implemented; item-level interpretation selection and evidence validation implemented; posting-level arbitration implemented and automated-test verified; descriptor projection and full workflow pending |
+| Postings | Integer PK plus immutable Workspace-scoped portable UUID; existing extractor/ingestion and list/save/dismiss/restore/apply APIs; retained extraction/items and corrections, PostingSource mapping/corrections, item interpretation, posting-level arbitration, descriptor projection, canonical allocation, stateless review orchestration and bounded advisory candidate discovery | Identity/migration/replay and authority-boundary coverage in §2; latest focused interpretation/candidate 83 and full Django 1,239 passed | Sync does not call posting ingestion; broader canonical consumers, provider/ingestion adoption, API/frontend integration of retained-posting workflows and operational/end-to-end validation remain pending |
 | Import/export | No Django legacy importer or portable export/restore | Unimplemented/unverified | Reconciliation/cutover pending |
 | Production | Partial settings/storage/task scaffolding; SQLite inherited, development fallbacks remain | Suite success is not deployment verification | PostgreSQL/storage/jobs/backup/restore/rollback pending |
 
@@ -1301,7 +1339,7 @@ preservation, reverse limitations and verification evidence.
 
 ## 8. Next recommended implementation actions
 
-1. Obtain separate read-only pre-commit review of the completed Retained Posting Review Orchestration slice. Prior authoritative checkpoint: `cce6cf08717d6dca18fd1ce8945f68df9589f39e`. Broader canonical consumers, candidate enumeration, split/merge and broader ingestion adoption require separate scope. Prior local database provenance remains unresolved.
+1. Retained Posting Review Orchestration and bounded Candidate Discovery are complete through `3aab4762224efbf1d8e5b11f57040b88eb9a4094`. The next substantive migration slice has not yet been selected or authorized. Broader canonical consumers, split/merge, ingestion adoption and API/frontend integration require separately authorized scope. Prior local database provenance remains unresolved.
 2. Resolve the legacy verification blockers under separately approved scope before declaring a fully green checkpoint.
 3. Separately scope further review actions and future filtering/queue UX, along with broader email/job and frontend work.
 4. Plan provenance-aware historical reconciliation with importer/cutover work; do not silently backfill current records.
@@ -1335,7 +1373,7 @@ All remain open unless supported by new, recorded evidence:
 - Successful reconciliation, end-to-end acceptance, and rollback readiness before
   desktop retirement; no deletion/alteration of local source data without approval.
 
-## 11. Recent checkpoint
+## 11. Historical checkpoint context
 
 At `ecd1727`, main is integrated and inspected legacy fixes are preserved. Three
 repeated legacy commits are patch-equivalent; no inspected evidence of merge

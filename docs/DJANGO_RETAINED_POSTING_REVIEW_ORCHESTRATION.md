@@ -1,8 +1,10 @@
 # Retained Posting Review Orchestration
 
-Implementation-stage evidence, 2026-10-04. This six-file slice remains unstaged,
-uncommitted and unpushed; separate read-only pre-commit review and explicit commit/
-push authorization remain required. Prior authoritative checkpoint:
+Historical implementation-stage evidence, 2026-10-04. This six-file slice was
+subsequently reviewed, committed and pushed at
+`ecb2ecf98c7d12552b5b0b9327f1f74fd28388ff`.
+Git-stage statements below describe the original pre-commit state, not current
+repository status; validation evidence is preserved. Prior authoritative checkpoint:
 `cce6cf08717d6dca18fd1ce8945f68df9589f39e`, subject
 `Implement canonical JobPosting allocation authority`, parent
 `8ba7bc869787f80b217c0c066f9c713a337a5669`, branch `django-migration`.
