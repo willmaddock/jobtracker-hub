@@ -673,3 +673,105 @@ class InterpretationConcurrencyTests(Fixtures, TransactionTestCase):
         else:
             self.error("stale_membership_revision", self.select, 409)
             self.assertEqual(self.current().state, "unresolved")
+
+
+class AdvisoryObservationTests(Fixtures, TestCase):
+    def observe(self, **changes):
+        return service.observe_posting_interpretation(**dict(actor=self.user, workspace=self.ws,
+                                                            item_id=self.a.pk) | changes)
+
+    def assert_parity(self):
+        current, observed = self.current(), self.observe()
+        for name in ('state', 'revision', 'recorded_membership_revision',
+                     'current_membership_revision', 'source_eligible'):
+            self.assertEqual(getattr(current, name), getattr(observed, name))
+        self.assertEqual(observed.selected_output_id,
+                         current.selected_output.pk if current.selected_output else None)
+        self.assertEqual(observed.applicable_output_id,
+                         current.applicable_output.pk if current.applicable_output else None)
+        if current.applicable_output:
+            from dataclasses import asdict
+            self.assertEqual(asdict(observed.evidence), current.applicable_output.fields)
+        else:
+            self.assertIsNone(observed.evidence)
+
+    def test_state_parity_and_away_back(self):
+        self.assert_parity()
+        self.select(); self.assert_parity()
+        self.move(); self.assert_parity()
+        self.move(expected_revision=1, target_item_id=self.a.pk)
+        self.assertEqual(self.observe().state, 'stale')
+        self.assert_parity()
+        self.withdraw(); self.assert_parity()
+
+    def test_gate_lock_preserved_and_observer_unlocked(self):
+        with patch.object(service, 'lock_workspace', wraps=service.lock_workspace) as gate, \
+             patch.object(service, 'scoped_source', wraps=service.scoped_source) as source:
+            self.current()
+            gate.assert_called_once()
+            self.assertTrue(source.call_args.kwargs['lock'])
+        with patch.object(service, 'lock_workspace', side_effect=AssertionError('writer gate')), \
+             patch.object(service, 'scoped_source', wraps=service.scoped_source) as source:
+            self.observe()
+            self.assertFalse(source.call_args.kwargs['lock'])
+
+    def test_select_only_and_detached(self):
+        from django.test.utils import CaptureQueriesContext
+        self.select()
+        with CaptureQueriesContext(connection) as captured:
+            first, second = self.observe(), self.observe()
+        self.assertTrue(captured.captured_queries)
+        self.assertTrue(all(q['sql'].lstrip().upper().startswith('SELECT')
+                            for q in captured.captured_queries))
+        with self.assertNumQueries(0):
+            self.assertEqual(first, second)
+            repr(first)
+            self.assertEqual(first.evidence.company, 'Acme')
+        with self.assertRaises(FrozenInstanceError): first.revision = 99
+        with self.assertRaises(FrozenInstanceError): first.evidence.company = 'changed'
+
+    def test_source_conflict_is_advisory(self):
+        self.select()
+        RetainedMessage.objects.filter(pk=self.message.pk).update(has_conflict=True)
+        self.assert_parity()
+        self.assertFalse(self.observe().source_eligible)
+        self.assertIsNotNone(self.observe().evidence)
+
+    def test_corruption_error_parity(self):
+        self.select()
+        cases = [(Decision, {'revision': 2}, 'posting_interpretation_history_invalid'),
+                 (Extraction, {'payload_digest': '0' * 64}, 'posting_interpretation_evidence_invalid'),
+                 (Output, {'fields': {}}, 'posting_interpretation_evidence_invalid'),
+                 (RetainedMessage, {'content_digest': '0' * 64}, 'retained_source_invalid')]
+        for model, changes, code in cases:
+            row = model.objects.first()
+            original = {name: getattr(row, name) for name in changes}
+            model.objects.filter(pk=row.pk).update(**changes)
+            try:
+                for reader in (self.current, self.observe):
+                    self.error(code, reader, 409)
+            finally:
+                model.objects.filter(pk=row.pk).update(**original)
+
+    def test_bad_membership_witness_parity(self):
+        row = self.select().decision
+        self.move()
+        Decision.objects.filter(pk=row.pk).update(membership_revision=1)
+        for reader in (self.current, self.observe):
+            self.error('posting_interpretation_history_invalid', reader, 409)
+
+    def test_owner_and_identity_scope(self):
+        for actor in (None, AnonymousUser(), User(username='unsaved'), self.other):
+            self.error('not_found', lambda: self.observe(actor=actor), 404)
+        self.error('not_found', lambda: self.observe(workspace=self.ws2), 404)
+        for item_id in (True, 0, -1, '1', None, 2**63):
+            self.error('not_found', lambda: self.observe(item_id=item_id), 404)
+
+
+    def test_membership_history_gap_error_parity(self):
+        self.select()
+        self.move()
+        self.move(expected_revision=1, target_item_id=self.a.pk)
+        Correction.objects.filter(initial_association=self.initial, revision=1).delete()
+        for reader in (self.current, self.observe):
+            self.error('posting_association_history_invalid', reader, 409)

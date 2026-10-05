@@ -204,11 +204,11 @@ def _state(item, message, chain, using):
         applicable, not message.has_conflict, not message.has_conflict and chain.revision < MAX_REVISION)
 
 
-def _endpoints(workspace, item_id):
+def _endpoints(workspace, item_id, *, lock=True):
     item = Item.objects.filter(pk=item_id, retained_message__workspace=workspace).first()
     if item is None:
         raise NotFound()
-    return item, scoped_source(workspace, item.retained_message_id, lock=True)
+    return item, scoped_source(workspace, item.retained_message_id, lock=lock)
 
 
 def _unchanged(latest, association_id, witness):
@@ -334,3 +334,53 @@ def list_posting_interpretation_decisions(*, actor, workspace, item_id, limit=10
         page = rows[:limit]
         next_cursor = (item.pk, chain.revision, page[-1].revision) if len(rows) > limit else None
         return InterpretationHistory(page, chain.revision, next_cursor, not message.has_conflict)
+
+
+@dataclass(frozen=True, slots=True)
+class RetainedEvidence:
+    source: str
+    title: str | None
+    company: str | None
+    location: str | None
+    salary: str | None
+    employment_type: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class InterpretationObservation:
+    workspace_id: int
+    item_id: int
+    state: str
+    revision: int
+    latest_decision_id: int | None
+    selected_association_id: int | None
+    selected_output_id: int | None
+    recorded_membership_revision: int | None
+    current_membership_revision: int | None
+    applicable_output_id: int | None
+    evidence: RetainedEvidence | None
+    source_eligible: bool
+    consistency: str = "advisory"
+
+
+def observe_posting_interpretation(*, actor, workspace, item_id):
+    """Non-serialized SELECT-only observation; no future command admission.
+
+    Captured history prefixes are validated by the same resolvers as the locked
+    reader. Membership/source facts can come from different concurrent instants.
+    """
+    authorize_owner(actor, workspace)
+    identity(item_id)
+    using = router.db_for_write(Decision)
+    item, message = _endpoints(workspace, item_id, lock=False)
+    value = _state(item, message, resolve_chain(item, message, using=using), using)
+    latest, output = value.latest_decision, value.applicable_output
+    return InterpretationObservation(
+        workspace.pk, item.pk, value.state, value.revision,
+        latest.pk if latest else None,
+        latest.selected_association_id if latest else None,
+        value.selected_output.pk if value.selected_output else None,
+        value.recorded_membership_revision, value.current_membership_revision,
+        output.pk if output else None,
+        RetainedEvidence(**output.fields) if output else None,
+        value.source_eligible)
