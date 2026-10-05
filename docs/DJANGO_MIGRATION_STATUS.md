@@ -33,8 +33,10 @@ Arbitration Authority** is committed/pushed at
 `5f832dcc261d13365d851806623fca1a373e1644`
 (`Implement posting-level interpretation arbitration authority`). Descriptor Projection
 Authority is committed/pushed at `8ba7bc869787f80b217c0c066f9c713a337a5669`
-(`Implement descriptor projection authority`). Canonical JobPosting Allocation is the
-current authorized implementation slice, unstaged/uncommitted/unpushed.
+(`Implement descriptor projection authority`). Canonical JobPosting Allocation is
+committed/pushed at `cce6cf08717d6dca18fd1ce8945f68df9589f39e`
+(`Implement canonical JobPosting allocation authority`). Retained Posting Review
+Orchestration is the current six-file implementation, unstaged/uncommitted/unpushed.
 Frontend integration, historical reconciliation, email derivation and operational
 cutover remain pending.
 
@@ -56,7 +58,36 @@ cutover remain pending.
 ## 2. Current verification evidence
 
 
-### Canonical JobPosting Allocation — implementation verification, 2026-10-04
+### Retained Posting Review Orchestration — implementation, 2026-10-04
+
+Prior authoritative checkpoint: `cce6cf08717d6dca18fd1ce8945f68df9589f39e`.
+Stateless coordinator and advisory reader implemented within six authorized files;
+no model/migration or canonical primitive changes. Independent phase commits preserve
+explicit mapping/allocation, selection and projection authority. Strict transaction
+context guard, immutable DTOs, detached receipts and structured partial failures are
+implemented. Application/disposition/API/frontend behavior remains outside scope.
+
+Fresh tests: orchestration 53; PostingSource 70; allocation 40; combined retained
+interpretation/arbitration/projection 151; Application review 83; postings 488;
+affected apps 1,187; full Django 1,205. All final runs passed without failures/errors/
+skips. Django check passed; postings drift none; global dry-run only the known
+EmailAccount.provider alteration, not generated. Python AST, final newlines,
+whitespace, Markdown links/anchors and diff checks passed. All three added files
+inspected; exact three modified/three untracked scope, empty index, checkpoint and
+remote synchronized 0/0, database/provider migration paths absent.
+
+Implementation is complete and ready for separate read-only pre-commit review;
+not yet committed or operationally validated. Independent commits can leave partial
+success, ambiguous outcomes require replay, and composed reads remain advisory.
+SQLite concurrency is not PostgreSQL operational validation. See
+[orchestration review](DJANGO_RETAINED_POSTING_REVIEW_ORCHESTRATION.md).
+
+
+
+### Canonical JobPosting Allocation — historical implementation verification, 2026-10-04
+
+Subsequently committed/pushed at `cce6cf08717d6dca18fd1ce8945f68df9589f39e`.
+The counts and Git-stage statements below describe the original allocation verification.
 
 Implemented and automated-test verified; sixteen files remain unstaged, uncommitted
 and unpushed on django-migration. Prior authoritative checkpoint:
@@ -1270,7 +1301,7 @@ preservation, reverse limitations and verification evidence.
 
 ## 8. Next recommended implementation actions
 
-1. Perform separate read-only pre-commit review of the completed Canonical JobPosting Allocation slice. Prior authoritative checkpoint: `8ba7bc869787f80b217c0c066f9c713a337a5669`. Broader canonical consumers, candidate enumeration, split/merge and broader ingestion adoption require separate scope. Prior local database provenance remains unresolved.
+1. Obtain separate read-only pre-commit review of the completed Retained Posting Review Orchestration slice. Prior authoritative checkpoint: `cce6cf08717d6dca18fd1ce8945f68df9589f39e`. Broader canonical consumers, candidate enumeration, split/merge and broader ingestion adoption require separate scope. Prior local database provenance remains unresolved.
 2. Resolve the legacy verification blockers under separately approved scope before declaring a fully green checkpoint.
 3. Separately scope further review actions and future filtering/queue UX, along with broader email/job and frontend work.
 4. Plan provenance-aware historical reconciliation with importer/cutover work; do not silently backfill current records.

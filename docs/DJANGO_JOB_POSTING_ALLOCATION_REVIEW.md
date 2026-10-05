@@ -1,8 +1,11 @@
 # Canonical JobPosting Allocation / Creation Provenance
 
-Implementation-stage evidence, 2026-10-04. This sixteen-file slice remains unstaged,
-uncommitted and unpushed. Separate read-only review and commit/push authorization
-are required. Preceding authoritative checkpoint is
+Historical implementation-stage evidence, 2026-10-04. The sixteen-file allocation
+slice was subsequently committed/pushed at
+`cce6cf08717d6dca18fd1ce8945f68df9589f39e`
+(`Implement canonical JobPosting allocation authority`). Git-stage statements below
+describe its original pre-commit state; validation evidence is preserved. Its preceding
+authoritative checkpoint was
 `8ba7bc869787f80b217c0c066f9c713a337a5669`, subject
 `Implement descriptor projection authority`, parent
 `5f832dcc261d13365d851806623fca1a373e1644`, branch `django-migration`.

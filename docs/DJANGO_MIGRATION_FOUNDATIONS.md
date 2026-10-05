@@ -1117,6 +1117,56 @@ Commands use default-DB authority helpers; historical validators honor explicit 
 Public API/frontend, cutover, URL enrichment, widening, cleanup/purge and PostgreSQL
 operational validation are excluded.
 
+### Retained Posting Review Orchestration — approved contract, 2026-10-04
+
+A stateless postings-specific review_retained_posting command uses RetainedPostingItem
+as its unit, delegates attach_existing or allocate_new, then optional explicit posting
+selection and optional projection. Projection requires same-bundle selection and binds
+the exact returned decision revision. Caller operation IDs, expected revisions and
+descriptor digest are never silently refreshed. Initial attach has no UUID; allocation,
+selection and projection use distinct caller UUIDv4 values. No orchestration UUID.
+
+Frozen slotted MappingRequest, SelectionRequest, ProjectionRequest and
+RetainedPostingReviewCommand DTOs have strict parsing/revalidation. Unknown fields,
+invalid phase combinations, boolean/noncanonical revisions, invalid UUID/digest,
+duplicate normalized UUIDs and allocation/selection interpretation mismatch reject
+before phases with 400 invalid_retained_posting_review. Zero revisions remain valid
+where the underlying authority permits them.
+
+The default connection must be outside atomic and have autocommit enabled, checked
+before database-backed authorization; otherwise 400
+retained_posting_review_transaction_context_invalid. No TestCase escape. No outer
+transaction, new locks, retries or compensation: public canonical phases commit
+independently and each reauthorizes. Review orchestration is replay-safe/resumable,
+not globally atomic. Earlier decisions survive later failure.
+
+RetainedPostingReviewResult contains detached receipts and phase progress. Canonical
+APIException failures retain status, recursive code/detail in a frozen snapshot within
+an ordinary RetainedPostingReviewPhaseError chained to the original exception.
+Unexpected command errors have conservatively unknown outcome; receipt failure after
+successful return retains completed/replayed status. Later requested phases remain
+unattempted; absent phases are unrequested. No post-commit receipt lookup is performed.
+
+Retry exact original phase IDs/CAS inputs after uncertainty; completed phases replay.
+Known uncommitted changed intent can use a new operation ID. Initial attach replay
+never restores corrected mapping, and allocation replay remains its original posting
+P after remapping to Q. No implicit redirect: Q work and phase-only follow-up use
+existing explicit commands. No-op errors remain errors, not invented replays.
+
+The composed reader returns immutable advisory observations of item interpretation,
+initial/effective mapping, allocation origin, target arbitration and projection plus a
+final mapping observation. Target observations retain their posting ID and mapping
+revision anchor. changes_detected flags mapping or observed arbitration-revision
+mismatch; false does not prove a global snapshot. No broad can_* admission flags,
+extra locks, current-state persistence or parallel history validator.
+
+No new review identity/model/migration, high-level durable interaction audit,
+Application/disposition side effect, automatic correction, candidate discovery,
+semantic dedupe, API/frontend, provider fetching/cutover or cleanup. The caller retains
+the original bundle for continuation. SQLite tests do not prove PostgreSQL operations.
+See [orchestration review](DJANGO_RETAINED_POSTING_REVIEW_ORCHESTRATION.md) for exact
+DTOs, error/receipt fields and validation evidence.
+
 ### Content and relationships
 
 Messages remain transient until needed for retained evidence, Discovery/review,
