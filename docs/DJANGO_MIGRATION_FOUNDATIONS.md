@@ -1702,7 +1702,11 @@ PostgreSQL concurrency, Redis redelivery, Celery workers, Beat, outbox/recovery 
 object storage, production session/CSRF, actual provider locator/reconnect behavior,
 deployment drains/restarts, or coordinated backup/restore. Validate each enabled provider
 with appropriate test accounts and real components. Record operational evidence separately
-from suite counts. No tests were run for this documentation consolidation.
+from suite counts. The [Status](DJANGO_MIGRATION_STATUS.md) checkpoint
+`c71f6cdcf183a4e76333b2c62582b8ecfdb1fc68` separately records real PostgreSQL evidence
+for exercised retained-extraction/retention Workspace-gated scenarios only. This does
+not establish unexercised subsystem behavior or production readiness. No tests were
+run for this documentation reconciliation.
 
 ## 14. Explicit unresolved/deferred items
 
@@ -1716,7 +1720,11 @@ from suite counts. No tests were run for this documentation consolidation.
 - Provider-specific locator guarantees, reconnect and timestamp behavior.
 - Posting source-item reconciliation examples/rules within accepted identity boundaries.
 - Exact field names/model decomposition where multiple schemas satisfy the contracts.
-- PostgreSQL lock ordering and worker queue/concurrency sizing.
+- PostgreSQL lock ordering outside the exercised extraction/retention cooperating
+  boundary, including other subsystems, callers outside that boundary and untested
+  multi-Workspace ordering; production load/contention, worker queue/concurrency sizing
+  and deployment/runtime behavior. Bounded evidence is recorded in Status, not a
+  universal concurrency guarantee.
 - Retention configuration values within the accepted configurable policies.
 - Exact API spelling and archive serialization subdivision.
 - Hosting vendor/infrastructure specifics and validated launch-provider subset.

@@ -1,9 +1,10 @@
 # Django migration: current status
 
 Maintained checkpoint: 2026-10-05. Authoritative branch: `django-migration`;
-checkpoint `8a4af32e4fb9949430487449e5cbaaea5ab93a3c`
-(`Implement retained extraction evidence workspace UI`), parent
-`4da29a186322aa2eb4aa53d388aec2322785b6d1`. Before this documentation edit,
+implementation checkpoint `c71f6cdcf183a4e76333b2c62582b8ecfdb1fc68`
+(`Validate retained extraction concurrency on PostgreSQL`), parent documentation checkpoint
+`88b3c11f0b98e76b55c0cbd46fc2f4ffabd68696`
+(`Reconcile retained extraction evidence workspace UI status`). Before this documentation edit,
 local HEAD, tracking ref and live remote were verified synchronized at that checkpoint,
 ahead/behind 0/0, with a clean working tree and empty index.
 
@@ -81,7 +82,10 @@ at `8a4af32e4fb9949430487449e5cbaaea5ab93a3c`
 Workspace-scoped browser presentation/navigation over existing summary/evidence GETs.
 The completed sequence is recorder → producer → explicit batch execution → source-scoped
 domain inspection → read-only HTTP evidence API → read-only Workspace browser evidence UI.
-Broader Application/domain frontend migration, historical reconciliation, email derivation
+Isolated PostgreSQL validation at the current implementation checkpoint adds bounded
+extraction/retention concurrency evidence for existing production services, without
+changing production transaction semantics or adding mutation authority. Broader
+Application/domain frontend migration, historical reconciliation, email derivation
 and operational cutover remain pending.
 
 ## 1. Scope and source of truth
@@ -101,6 +105,53 @@ and operational cutover remain pending.
 
 ## 2. Current verification evidence
 
+
+### Isolated PostgreSQL Validation of Retained Extraction Transactions and Workspace Gating — committed checkpoint, 2026-10-05
+
+Reviewed, committed and pushed at `c71f6cdcf183a4e76333b2c62582b8ecfdb1fc68`
+(`Validate retained extraction concurrency on PostgreSQL`), parent documentation checkpoint
+`88b3c11f0b98e76b55c0cbd46fc2f4ffabd68696`
+(`Reconcile retained extraction evidence workspace UI status`). The implementation commit
+contains nine files, 784 insertions and nine deletions: isolated validation infrastructure,
+new tests and narrowed test-only SQLite contention handling. Production services,
+transaction semantics, models, migrations, default/production settings and
+`backend/requirements.txt` are unchanged.
+
+PostgreSQL evidence covers the exercised producer/recorder serialization, Workspace
+gating, retained-source row locking, equivalent first-attempt replay and conflicting
+valid operation payloads. Real retention/extraction conflict ordering passes in both
+directions, alongside same-Workspace serialization, independent-Workspace progress,
+caller-owned rollback/uncommitted visibility, atomic rollback after later-output
+persistence failure, and authorization/cross-Workspace rejection without parsing or
+evidence creation. Observed blocking and outcomes are scenario-specific evidence,
+not universal lock-ordering, deadlock, isolation or performance guarantees.
+
+Retained implementation evidence: harness safety **14 passed**; focused PostgreSQL
+**13 passed, zero skipped**; six existing PostgreSQL suites **157 passed, zero skipped**;
+full isolated SQLite **1,332 passed, 13 PostgreSQL-only skipped**. PostgreSQL and SQLite
+system checks passed. Postings migration drift: none; global drift: only the known
+`EmailAccount.provider` alteration, not generated. Whitespace checks passed. Tests ran
+against the reviewed implementation before commit; the staged snapshot was verified to
+match it. Tests were not rerun after commit/push or for this documentation edit.
+Populated historical migration-fixture evidence remains SQLite-specific.
+
+Environment: Homebrew PostgreSQL **17.11**, Psycopg **3.3.6**, Apple Silicon/macOS;
+a disposable private cluster and Unix socket with TCP disabled. The harness verifies
+cluster identity, refuses existing test databases and creation collisions without
+clobbering, and verifies owned-cluster shutdown/removal. No `brew services`, forced
+global linking or production/default database configuration change was used.
+
+This resolves absence of bounded extraction/retention PostgreSQL evidence only.
+Concurrency outside that cooperating boundary, provider automation/integration,
+production throughput/load and deployment/database/cutover behavior remain unvalidated.
+No provider extraction automation, source-admission or recurring automatic operation
+identity policy, selector policy, durable execution intent/state, retry/outbox behavior,
+provider cursor integration, automatic retained-to-canonical workflow, Application
+mutation/workflow or broader frontend completion is established. Production storage,
+Redis/Celery/Beat, static/media delivery, backup/restore, rollback and browser/cutover
+acceptance remain open. A future documentation checkpoint, after separate review and
+commit/push authorization, must have this implementation checkpoint as its parent;
+its SHA is not yet known.
 
 ### Retained Extraction Evidence Read-Only Workspace UI — committed checkpoint, 2026-10-05
 
@@ -162,8 +213,9 @@ regressions introduced by this UI slice. Safari was not freshly validated becaus
 automation permissions were unavailable; older Safari results below remain historical.
 Accepted limitations include browser safe integers, memory consumed by manually accumulated
 history and advisory pagination. Broader Application/domain frontend migration, provider
-extraction automation, PostgreSQL concurrency/operation and production/cutover validation
-remain incomplete or unverified and separately scoped.
+extraction automation and production/cutover validation remain separately scoped. This UI
+run did not validate PostgreSQL; the later checkpoint above supplies only bounded
+extraction/retention concurrency evidence, leaving broader PostgreSQL operation unverified.
 
 ### Workspace-Scoped Read-Only Retained Extraction Evidence HTTP API — committed checkpoint, 2026-10-05
 
@@ -210,8 +262,9 @@ application tests.
 
 Accepted limitations: advisory pagination, unsigned valid boundary edits, APIView-local
 DatabaseError sanitization and exceptional session maintenance remain as described above.
-PostgreSQL operation and production deployment/operation remain unverified; provider
-extraction automation remains unresolved/unvalidated. At this HTTP checkpoint, the
+This HTTP run did not validate PostgreSQL; the later checkpoint above supplies bounded
+extraction/retention evidence. Broader PostgreSQL operation and production deployment
+remain unverified; provider extraction automation remains unresolved/unvalidated. At this HTTP checkpoint, the
 browser/frontend workflow was unimplemented; the later UI checkpoint above now supplies
 retained extraction evidence inspection. Broader Application/domain frontend work remains
 separately scoped.
@@ -248,8 +301,9 @@ only the known `EmailAccount.provider` alteration, not generated. Static/scope c
 Application tests were not rerun during commit/push and are not being rerun for this
 documentation maintenance; these are retained results, not fresh application tests.
 
-Accepted limitations: reads are advisory, not snapshots; PostgreSQL operational behavior
-remains unverified. Reusing the complete validator costs queries per returned operation
+Accepted limitations: reads are advisory, not snapshots. This inspection run did not
+validate PostgreSQL; later bounded extraction/retention evidence is recorded above,
+without establishing broader operational behavior. Reusing the complete validator costs queries per returned operation
 and transient memory. Privileged evidence rewrites remain unsupported; arbitrarily
 oversized corrupt database JSON may allocate before validation rejects it. Cursor transport
 serialization was future API work at that checkpoint and is now supplied by the adapter
@@ -289,8 +343,9 @@ alteration, not generated. Diff, AST, final-newline, whitespace and empty-initia
 checks passed. Application tests were not rerun during commit/push and are not being
 rerun for this documentation maintenance; these are retained results, not fresh tests.
 
-Accepted limitations: validation uses isolated SQLite databases; PostgreSQL operational
-behavior remains unverified. Invocation is operator-controlled, with no durable batch
+Accepted limitations: this batch-command validation used isolated SQLite databases.
+Later bounded extraction/retention PostgreSQL evidence is recorded above; broader
+operational behavior remains unverified. Invocation is operator-controlled, with no durable batch
 lifecycle; retry requires preserved operation UUIDs/specifications. Stdout delivery can
 fail after successful persistence, and unexpected connection/commit failures can leave
 the failing request's state uncertain. Standard operator debugging such as `--traceback`
@@ -327,7 +382,8 @@ and whitespace checks passed. Application tests were not rerun during commit/pus
 or this documentation maintenance; these retained results are not fresh documentation-stage tests.
 
 Accepted limitations: parsing holds Workspace/source locks; historical replay performs
-repeated bounded validation; PostgreSQL contention remains operationally unvalidated.
+repeated bounded validation. This producer run used SQLite; later PostgreSQL evidence
+above covers exercised contention scenarios only, not broader operational behavior.
 Privileged bulk/raw maintenance can bypass cooperative protections, rolled-back parsing
 may execute again on explicit retry, and caller-owned outer transactions determine
 eventual commit. Provider/storage/jobs/backup-restore/cutover gates remain open.
@@ -1104,7 +1160,9 @@ All ten decisions are approved; full boundaries and consequences live in the
   Production settings still inherit SQLite.
 - Environments: `.venv/` for legacy tests; `backend/venv/` for Django. Manifests:
   `_app/requirements.txt`, `requirements-dev.txt`, `desktop/requirements.txt`,
-  and `backend/requirements.txt`.
+  and `backend/requirements.txt`. Isolated validation additionally uses
+  `backend/requirements-postgres-test.txt` and harness-only test settings; production
+  settings still inherit SQLite.
 
 ## 5. Functional migration matrix
 
@@ -1125,10 +1183,10 @@ No newly accepted capability is marked verified merely because it is designed.
 | Search/dashboards/settings | Included reads, counts, search, section adapters, merges, and settings scoped to URL workspace; search parity and Ghosted still pending | Scoped isolation coverage; broader target parity pending | Frontend integration pending |
 | Provider connections | Gmail/Outlook/IMAP connect/sync/disconnect; encrypted credentials | Baseline provider/view coverage, mocked external seams | Historical Gmail OAuth/live-sync checkpoint; complete target flows unvalidated; Outlook/IMAP live validation unestablished |
 | Sync/jobs | Gmail per-message retention plus transitional match/discovery/thread projection; inline single sync, queued bulk/Beat | Gmail adoption/replay and existing sync/task coverage; not real-broker proof | Real Redis/worker/Beat operation unestablished |
-| Retained messages/review | Protected source/observation models, verified Gmail lineage and native-ID producer adoption; scoped review inspection, explicit attachment, independent disposition and atomic create-Application orchestration with durable results; retained-source summary browsing supports extraction evidence selection in DjangoFoundation | Retention, Gmail adoption, attachment/disposition/creation APIs, migration preservation and SQLite logical concurrency coverage in §2; evidence UI Node/Chromium coverage above | Other-provider adoption, broader review actions/UI and operational validation pending |
-| Postings | Integer PK plus immutable Workspace-scoped portable UUID; existing extractor/ingestion and list/save/dismiss/restore/apply APIs; explicit retained-text extraction production with validated historical replay, operator batch extraction execution and source-scoped read-only extraction evidence inspection, plus a workspace-scoped read-only retained extraction evidence HTTP API and read-only Workspace browser evidence UI; retained extraction/items and corrections, PostingSource mapping/corrections, item interpretation, posting-level arbitration, descriptor projection, canonical allocation, stateless review orchestration and bounded advisory candidate discovery | Identity/migration/replay and authority-boundary coverage in §2; HTTP checkpoint API 18, retained inspection 22, combined focused 262 and postings 615 passed; UI checkpoint Node 16, Chromium 28, relevant Django 95 and full Django 1,332 passed | Sync does not produce canonical postings; automatic retained-to-canonical workflows, broader canonical consumers, provider/sync adoption, broader posting/Application frontend and retained-review UI, broader retained-workflow APIs, PostgreSQL and production/operational validation remain pending |
+| Retained messages/review | Protected source/observation models, verified Gmail lineage and native-ID producer adoption; scoped review inspection, explicit attachment, independent disposition and atomic create-Application orchestration with durable results; retained-source summary browsing supports extraction evidence selection in DjangoFoundation | Retention, Gmail adoption, attachment/disposition/creation APIs, migration preservation and SQLite logical concurrency coverage in §2; evidence UI Node/Chromium coverage and bounded PostgreSQL retention/extraction conflict evidence above | Other-provider adoption, broader review actions/UI and operational validation pending |
+| Postings | Integer PK plus immutable Workspace-scoped portable UUID; existing extractor/ingestion and list/save/dismiss/restore/apply APIs; explicit retained-text extraction production with validated historical replay, operator batch extraction execution and source-scoped read-only extraction evidence inspection, plus a workspace-scoped read-only retained extraction evidence HTTP API and read-only Workspace browser evidence UI; retained extraction/items and corrections, PostingSource mapping/corrections, item interpretation, posting-level arbitration, descriptor projection, canonical allocation, stateless review orchestration and bounded advisory candidate discovery | Identity/migration/replay and authority-boundary coverage in §2; HTTP checkpoint API 18, retained inspection 22, combined focused 262 and postings 615 passed; UI checkpoint Node 16, Chromium 28, relevant Django 95 and full Django 1,332 passed; bounded PostgreSQL extraction/retention evidence above | Sync does not produce canonical postings; automatic retained-to-canonical workflows, broader canonical consumers, provider/sync adoption, broader posting/Application frontend and retained-review UI, broader retained-workflow APIs, concurrency outside the exercised extraction/retention boundary, production load and deployment/cutover validation remain pending |
 | Import/export | No Django legacy importer or portable export/restore | Unimplemented/unverified | Reconciliation/cutover pending |
-| Production | Partial settings/storage/task scaffolding; SQLite inherited, development fallbacks remain | Suite success is not deployment verification | PostgreSQL/storage/jobs/backup/restore/rollback pending |
+| Production | Partial settings/storage/task scaffolding; SQLite inherited, development fallbacks remain | Suite success is not deployment verification | Isolated extraction/retention PostgreSQL evidence above; production PostgreSQL/storage/jobs/backup/restore/rollback pending |
 
 ## 6. Known parity gaps and blockers
 
@@ -1139,10 +1197,12 @@ No newly accepted capability is marked verified merely because it is designed.
   reader, HTTP adapter and browser consumer are not
   the provider/sync adoption mechanism. That adoption requires
   separate decisions on recurring extraction-operation identity, source admission,
-  selector ownership where applicable and failure/retry handling, plus PostgreSQL validation
-  before broader provider/write automation. The reader, HTTP API and browser consumer do
-  not resolve these requirements or establish PostgreSQL validation. Production/operational/
-  cutover validation remains future.
+  deterministic selector/input ownership, durable retry/failure semantics, cursor coupling,
+  execution intent/state, provider transaction placement and scheduling/worker ownership.
+  Bounded extraction/retention PostgreSQL validation is now recorded above, removing that
+  absent-evidence prerequisite only; provider automation concurrency/integration and broader
+  production/operational/cutover validation remain future. The reader, HTTP API and browser
+  consumer do not resolve provider policy.
   Provider/sync adoption and automatic retained-to-canonical workflows remain unimplemented
   and require separate
   planning and authorization. Sync does not currently produce canonical JobPosting rows;
@@ -1614,7 +1674,7 @@ preservation, reverse limitations and verification evidence.
 
 ## 8. Next recommended implementation actions
 
-1. Retained-text extraction production, explicit operator batch execution, source-scoped read-only evidence inspection, its workspace-scoped read-only HTTP API and authenticated Workspace browser evidence UI are complete through `8a4af32e4fb9949430487449e5cbaaea5ab93a3c`, alongside the existing explicit retained-posting authorities. The next substantive migration slice remains unselected and unauthorized. Provider/sync adoption, automatic canonical workflows, broader canonical consumers, broader retained-workflow APIs, remaining Application/domain frontend work, PostgreSQL and production/operational/cutover validation require separate planning and authorization. Prior local database provenance remains unresolved.
+1. Retained-text extraction production, explicit operator batch execution, source-scoped read-only evidence inspection, its workspace-scoped read-only HTTP API and authenticated Workspace browser evidence UI are complete through `8a4af32e4fb9949430487449e5cbaaea5ab93a3c`; bounded extraction/retention PostgreSQL validation is complete at `c71f6cdcf183a4e76333b2c62582b8ecfdb1fc68`, alongside the existing explicit retained-posting authorities. The next substantive migration slice remains unselected and unauthorized. Provider/sync adoption, automatic canonical workflows, broader canonical consumers, broader retained-workflow APIs, remaining Application/domain frontend work, concurrency outside the exercised boundary, production load and production/operational/cutover validation require separate planning and authorization. Prior local database provenance remains unresolved.
 2. Resolve the legacy verification blockers under separately approved scope before declaring a fully green checkpoint.
 3. Separately scope further review actions and future filtering/queue UX, along with broader email/job and frontend work.
 4. Plan provenance-aware historical reconciliation with importer/cutover work; do not silently backfill current records.
@@ -1640,7 +1700,9 @@ No local/hosted synchronization or silent installation repointing is implied.
 
 All remain open unless supported by new, recorded evidence:
 - Same-origin product sessions/CSRF, administrative onboarding/recovery, isolation.
-- PostgreSQL, private storage, Redis, separate web/worker/Beat, safe required secrets.
+- Production PostgreSQL deployment/migration and broader concurrency/load validation
+  (isolated extraction/retention evidence above does not close this gate), private storage,
+  Redis, separate web/worker/Beat, safe required secrets and static/media delivery.
 - Full enabled-provider flows, including retained evidence, retries, and disconnect.
 - Browser acceptance for core workflows, imports/exports, previews, and Trash.
 - Coordinated database/content backup and tested restoration.
