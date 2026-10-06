@@ -420,12 +420,16 @@ class RetentionConcurrencyTests(Fixtures, TransactionTestCase):
                 barrier.wait(timeout=10)
                 try:
                     return retain_observation(actor=self.user, workspace=self.ws, key=f"{conflict}-{n}", observation=candidate)
-                except OperationalError:
+                except OperationalError as exc:
+                    if connection.vendor != 'sqlite' or 'locked' not in str(exc).lower():
+                        raise
                     return None
                 finally:
                     close_old_connections()
             with ThreadPoolExecutor(max_workers=2) as pool:
                 results = list(pool.map(compete, range(2)))
+            if connection.vendor == "postgresql":
+                self.assertTrue(all(r is not None for r in results))
             # SQLite may reject either or both. Explicit same-input reconciliation,
             # not hidden automatic retries, must converge without lost evidence.
             for n in range(2):
@@ -447,12 +451,16 @@ class RetentionConcurrencyTests(Fixtures, TransactionTestCase):
             barrier.wait(timeout=10)
             try:
                 return self.retain(data=candidate)
-            except OperationalError:
+            except OperationalError as exc:
+                if connection.vendor != 'sqlite' or 'locked' not in str(exc).lower():
+                    raise
                 return None
             finally:
                 close_old_connections()
         with ThreadPoolExecutor(max_workers=2) as pool:
-            list(pool.map(compete, range(2)))
+            results = list(pool.map(compete, range(2)))
+        if connection.vendor == "postgresql":
+            self.assertTrue(all(r is not None for r in results))
         for n in range(2):
             candidate = deepcopy(self.data)
             candidate["source"]["value"] = str(n)

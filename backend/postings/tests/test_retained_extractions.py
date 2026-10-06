@@ -468,7 +468,9 @@ class RecordingConcurrencyTests(Fixtures, TransactionTestCase):
             try:
                 barrier.wait(timeout=10)
                 return self.record(outputs=[fields(str(n) if different else "same")])
-            except OperationalError:
+            except OperationalError as exc:
+                if connection.vendor != 'sqlite' or 'locked' not in str(exc).lower():
+                    raise
                 return None
             except APIException as exc:
                 self.assertEqual(exc.get_codes(), "idempotency_key_reused")
@@ -476,7 +478,10 @@ class RecordingConcurrencyTests(Fixtures, TransactionTestCase):
             finally:
                 close_old_connections()
         with ThreadPoolExecutor(max_workers=2) as pool:
-            list(pool.map(attempt, range(2)))
+            first_attempts = list(pool.map(attempt, range(2)))
+        if connection.vendor == "postgresql":
+            self.assertEqual(sum(r is not None for r in first_attempts), 2 - int(different))
+            self.assertEqual(sum(r.replay for r in first_attempts if r is not None), int(not different))
         successes, conflicts = [], 0
         for n in range(2):
             try:

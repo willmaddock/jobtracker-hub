@@ -313,7 +313,9 @@ class ProducerConcurrencyTests(ProducerFixtures, TransactionTestCase):
                 barrier.wait(timeout=10)
                 return self.produce(operation_id=operations[index],
                     input_spec=declared if conflicting and index else spec())
-            except OperationalError:
+            except OperationalError as exc:
+                if connection.vendor != 'sqlite' or 'locked' not in str(exc).lower():
+                    raise
                 return None  # Caller-visible SQLite contention, no hidden retry.
             except APIException as exc:
                 self.assertEqual(exc.get_codes(), 'idempotency_key_reused')
@@ -321,7 +323,10 @@ class ProducerConcurrencyTests(ProducerFixtures, TransactionTestCase):
             finally:
                 close_old_connections()
         with patch.object(service, 'extract_postings', return_value=[fields()]), ThreadPoolExecutor(max_workers=2) as pool:
-            list(pool.map(attempt, range(2)))
+            first_attempts = list(pool.map(attempt, range(2)))
+        if connection.vendor == "postgresql":
+            self.assertEqual(sum(r is not None for r in first_attempts), 2 - int(conflicting))
+            self.assertEqual(sum(r.replay for r in first_attempts if r is not None), int(not conflicting and not different_operations))
         successes = []; conflicts = 0
         for index in range(2):
             try:
@@ -366,14 +371,18 @@ class ProducerConcurrencyTests(ProducerFixtures, TransactionTestCase):
                     lock_workspace(self.user, self.ws)
                     RetainedMessage.objects.filter(pk=self.message.pk).update(has_conflict=True)
                 return True
-            except OperationalError:
+            except OperationalError as exc:
+                if connection.vendor != 'sqlite' or 'locked' not in str(exc).lower():
+                    raise
                 return False  # Explicit caller retry below after winner commits.
             finally:
                 close_old_connections()
         with patch.object(service, 'extract_postings', parser), ThreadPoolExecutor(max_workers=1) as pool:
             future = pool.submit(conflict)
             first = self.produce()
-            future.result(timeout=15)
+            succeeded = future.result(timeout=15)
+            if connection.vendor == "postgresql":
+                self.assertTrue(succeeded)
         with transaction.atomic():
             lock_workspace(self.user, self.ws)
             RetainedMessage.objects.filter(pk=self.message.pk).update(has_conflict=True)

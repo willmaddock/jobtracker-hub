@@ -1,0 +1,2 @@
+# Isolated PostgreSQL validation only; local libpq comes from PostgreSQL 17.
+psycopg==3.3.6
