@@ -174,3 +174,39 @@ test('body serialization fails before registering an external abort listener',as
   assert.equal(fetched,1,'failed body must not reach fetch');
   assert.equal(added,0);assert.equal(removed,0);
 });
+
+
+const applicationHelpers = (()=>{
+  const html=require('node:fs').readFileSync(require('node:path').join(__dirname,'../../_app/frontend/index.html'),'utf8');
+  const code=html.split('// BEGIN DJANGO APPLICATION STATE')[1].split('// END DJANGO APPLICATION STATE')[0];
+  const vm=require('node:vm');const scope={JTHApi:{ApiError},Number,Date,Set};
+  vm.createContext(scope);vm.runInContext(code,scope);return scope;
+})();
+const applicationFixture = (id=7) => ({id,workspace:2,portable_id:uuid(id),company:'Repeat',role_label:'Role',section:'applications',
+  effective_status:'interviewing',effective_date_applied:null,is_trashed:false,effective_trashed:false,trashed_at:null,override:null,
+  first_activity:null,last_activity:null,first_activity_date:null,last_activity_date:null,activity_provenance:{},derivation_state:'pending',category_id:null});
+test('Application GET helpers use captured scope, safe IDs and cancellation only',async()=>{
+  const calls=[];const {client,context}=setup(async(p,o)=>{calls.push({p,o});return response(200,[]);});
+  await client.readApplications();await client.readApplication(7);
+  assert.deepEqual(calls.map(c=>c.p),['/api/workspaces/2/applications/','/api/workspaces/2/applications/7/']);
+  for(const c of calls){assert.equal(c.o.method,'GET');assert.equal(c.o.credentials,'same-origin');assert.equal(c.o.cache,'no-store');}
+  for(const id of [0,true,'7',1.2,9007199254740992]) assert.throws(()=>client.readApplication(id),{code:'unsafe_identifier'});
+  assert.equal(calls.length,2);
+  context.select(9007199254740992);assert.throws(()=>client.readApplications(),{code:'unsafe_identifier'});
+  context.select(2);const abort=new AbortController();abort.abort();await assert.rejects(client.readApplication(7,{signal:abort.signal}),{code:'aborted'});
+  assert.equal(calls.length,2);
+});
+test('Application projections validate identities and discard unrelated serializer fields',()=>{
+  const h=applicationHelpers,row=applicationFixture();
+  row.source_relpath='private';row.date_candidate={secret:'private'};row.derivation_fingerprint='private';
+  assert.equal(JSON.stringify(h.applicationRow(row,2,7)).includes('private'),false);
+  assert.equal(h.applicationList([row,applicationFixture(8)],2).length,2);
+  for(const change of [{workspace:3},{id:8},{company:null},{effective_status:null},{effective_trashed:true},{effective_date_applied:'2026-02-30'},
+    {portable_id:'bad'},{activity_provenance:[]},{override:{}},{category_id:9007199254740992}]){
+    assert.throws(()=>h.applicationRow({...row,...change},2,7));
+  }
+  assert.throws(()=>h.applicationList([row,row],2),{code:'unexpected_response'});
+  assert.throws(()=>h.applicationList({results:[]},2),{code:'unexpected_response'});
+  assert.throws(()=>h.applicationList([{...row,id:JSON.parse('9223372036854775807')}],2),{code:'unsafe_identifier'});
+  assert.equal(h.applicationFailure(new ApiError('network_error','SQL secret')).message.includes('secret'),false);
+});

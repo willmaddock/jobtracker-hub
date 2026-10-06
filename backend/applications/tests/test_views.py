@@ -247,3 +247,58 @@ class RetiredApplicationDeleteTests(ApplicationsAPITestCase):
         self.assertEqual(Application.objects.count(), 2)
         self.assertEqual(Override.objects.get().notes, "keep")
         self.assertEqual(StatusHistory.objects.count(), 1)
+
+
+class CoreReadContractTests(ApplicationsAPITestCase):
+    def urls(self, workspace=None, application=None):
+        return [reverse("application-list", args=[(workspace or self.workspace).pk]),
+                reverse("application-detail", args=[(workspace or self.workspace).pk, (application or self.application).pk])]
+
+    def test_read_auth_and_workspace_isolation(self):
+        for url in self.urls():
+            self.assertEqual(self.client.get(url).status_code, 401)
+        self.client.force_authenticate(self.user)
+        same_owner = Workspace.objects.create(owner=self.user, name="Second")
+        other = Application.objects.create(workspace=same_owner, section="applications", company="Separate", role_label="Role")
+        self.assertEqual(self.client.get(self.urls(same_owner, other)[0]).data[0]["id"], other.pk)
+        self.assertEqual(self.client.get(self.urls(self.workspace, other)[1]).status_code, 404)
+        for url in self.urls(self.other_workspace, self.other_application):
+            self.assertEqual(self.client.get(url).status_code, 404)
+
+    def test_default_list_trash_detail_and_archive_are_independent(self):
+        from core.lifecycle import set_trash
+        self.client.force_authenticate(self.user)
+        Override.objects.create(application=self.application, archived=True)
+        url, detail = self.urls()
+        self.assertTrue(self.client.get(url).data[0]["override"]["archived"])
+        set_trash(actor=self.user, workspace=self.workspace, kind="applications", pk=self.application.pk,
+                  trashed=True, expected_revision=0)
+        self.assertEqual(self.client.get(url).data, [])
+        row = self.client.get(detail).data
+        self.assertTrue(row["is_trashed"])
+        self.assertTrue(row["effective_trashed"])
+        self.assertIsNotNone(row["trashed_at"])
+        self.assertTrue(row["override"]["archived"])
+
+    def test_repeated_attempts_effective_values_and_read_purity(self):
+        from datetime import date
+        from unittest.mock import patch
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+        self.client.force_authenticate(self.user)
+        repeated = Application.objects.create(workspace=self.workspace, section="applications",
+            company=self.application.company, role_label=self.application.role_label)
+        Override.objects.create(application=self.application, manual_status="interviewing",
+            date_applied=date(2026, 9, 1), date_applied_mode="manual")
+        before = list(Application.objects.values()), list(Override.objects.values()), list(StatusHistory.objects.values())
+        with patch("applications.views.derive_application", side_effect=AssertionError("GET derived")), CaptureQueriesContext(connection) as queries:
+            rows = self.client.get(self.urls()[0]).data
+            row = self.client.get(self.urls()[1]).data
+        self.assertEqual({item["id"] for item in rows}, {self.application.pk, repeated.pk})
+        self.assertEqual(row["effective_status"], "interviewing")
+        self.assertEqual(str(row["effective_date_applied"]), "2026-09-01")
+        self.assertIsNone(next(item for item in rows if item["id"] == repeated.pk)["effective_date_applied"])
+        self.assertEqual(row["activity_provenance"], {})
+        self.assertEqual(row["derivation_state"], "pending")
+        self.assertFalse(any(q["sql"].lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE")) for q in queries))
+        self.assertEqual(before, (list(Application.objects.values()), list(Override.objects.values()), list(StatusHistory.objects.values())))

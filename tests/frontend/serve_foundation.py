@@ -41,6 +41,20 @@ with tempfile.TemporaryDirectory(prefix="jth-foundation-") as directory:
         for name in names:
             Workspace.objects.create(owner=user, name=name)
 
+    # Core read fixtures only; no user tracker is opened.
+    from applications.models import Application, Override
+    from documents.models import Category, CategoryMembership
+    from datetime import date
+    a = Workspace.objects.get(pk=1)
+    first = Application.objects.create(workspace=a, section="applications", company="Repeated Co", role_label="Engineer", status="applied")
+    Override.objects.create(application=first, manual_status="interviewing", archived=True,
+                            date_applied=date(2026, 9, 1), date_applied_mode="manual")
+    category = Category.objects.create(workspace=a, name="Fixture category", section="misc")
+    CategoryMembership.objects.create(application=first, category=category)
+    second = Application.objects.create(workspace=a, section="applications", company="Repeated Co", role_label="Engineer")
+    Application.objects.create(workspace=a, section="credentials", company="Certificate", role_label="Other section")
+    Application.objects.create(workspace=Workspace.objects.get(pk=3), section="applications", company="Bob private", role_label="Foreign")
+
     # Normal evidence is created exclusively through existing domain authorities.
     import uuid
     from email_sync.retention import establish_mailbox, retain_observation
@@ -134,6 +148,9 @@ with tempfile.TemporaryDirectory(prefix="jth-foundation-") as directory:
                                                              hook + '<script src="/workspace-context.js">', 1)
         return response
 
+    def application_fixtures(request):
+        return JsonResponse({"first": first.pk, "second": second.pk, "category": category.pk})
+
     def harness(request):
         return HttpResponse((ROOT / "tests/frontend/foundation-browser.html").read_text())
 
@@ -142,6 +159,7 @@ with tempfile.TemporaryDirectory(prefix="jth-foundation-") as directory:
     urlpatterns = [path("", framed_product),
                    path("foundation-tests", harness),
                    path("api/test-only/evidence-fixtures", evidence_fixtures),
+                   path("api/test-only/application-fixtures", application_fixtures),
                    path("api/test-only/upload", UploadProbe.as_view()),
                    path("api/test-only/slow", SlowProbe.as_view())] + product_urls
     print("Disposable fixtures: alice / bob; password browser-fixture-only; workspaces A=1 B=2 C=3", flush=True)

@@ -85,6 +85,8 @@ document.querySelector('#run').onclick = async function () {
       const positive=value=>/^[1-9]\d*$/.test(value)&&Number.isSafeInteger(Number(value));
       let match=/^\/api\/workspaces\/([1-9]\d*)\/insights\/$/.exec(path);
       if(match)return positive(match[1])&&!query.length;
+      match=/^\/api\/workspaces\/([1-9]\d*)\/applications\/(?:([1-9]\d*)\/)?$/.exec(path);
+      if(match)return positive(match[1])&&(!match[2]||positive(match[2]))&&!query.length;
       match=/^\/api\/workspaces\/([1-9]\d*)\/retained-messages\/$/.exec(path);
       if(match)return positive(match[1])&&(!query.length||query.length===1&&query[0][0]==='after'&&positive(query[0][1]));
       match=/^\/api\/workspaces\/([1-9]\d*)\/retained-messages\/([1-9]\d*)\/posting-extractions\/$/.exec(path);
@@ -94,6 +96,87 @@ document.querySelector('#run').onclick = async function () {
     let intercept=null;
     const nativeFetch=win.__fixtureNativeFetch;
     win.__fixtureIntercept=(url,options)=>intercept?.(url,options);
+    const response=(status,data)=>Promise.resolve(new win.Response(JSON.stringify(data),{status,headers:{'Content-Type':'application/json'}}));
+    const appFixtures=await client.request('/api/test-only/application-fixtures');
+    const appList='/api/workspaces/1/applications/';
+    const appUrl=id=>appList+id+'/';
+    const appButton=id=>doc.querySelector('[data-application-id="'+id+'"]');
+    const appPanel=()=>doc.querySelector('[data-testid="application-panel"]');
+    const realApps=await (await nativeFetch(appList)).json();
+    const realDetail=await (await nativeFetch(appUrl(appFixtures.first))).json();
+    await test('Applications show repeated attempts, server fields, back and close without resource route',async()=>{
+      const before=traffic.length;await click('Applications');await wait(()=>appButton(appFixtures.first),'Applications list');
+      assert(appButton(appFixtures.second),'repeated attempt collapsed');assert(text().includes('Credentials'),'non-pipeline hidden');
+      assert(text().includes('Applied date: Unknown')&&text().includes('interviewing')&&text().includes('Archived'),'server fields');
+      assert(text().includes('All current records load together'),'unpaginated limit hidden');
+      appButton(appFixtures.first).click();await wait(()=>doc.querySelector('[data-testid="application-detail"]'),'Application detail');
+      assert(text().includes('2026-09-01')&&text().includes('Category reference')&&text().includes(String(appFixtures.category)),'detail values');
+      assert(text().includes('Unknown / unreconciled'),'unknown provenance fabricated');
+      assert(win.location.hash==='#/workspaces/1','resource route introduced');
+      await click('Back to Applications');assert(appButton(appFixtures.first),'list not retained');
+      appButton(appFixtures.second).click();await wait(()=>doc.querySelector('[data-testid="application-detail"]'),'second detail');
+      assert(text().includes('Applied dateUnknown'),'unknown applied date');
+      await click('Close Applications');assert(!appPanel(),'close failed');
+      const calls=traffic.slice(before);assert(calls.every(c=>c.method==='GET'&&/^\/api\/workspaces\/1\/applications\/(?:[1-9]\d*\/)?$/.test(c.url)),'Application traffic escaped');
+    });
+    await test('Application list error and retry, detail error and retry, unavailable and trashed disclosure',async()=>{
+      let failed=true;
+      intercept=url=>url===appList&&failed?response(500,{detail:'SQL private-secret'}):null;
+      await click('Applications');await wait(()=>button('Try again'),'list error');assert(!text().includes('private-secret'),'raw error');
+      failed=false;await click('Try again');await wait(()=>appButton(appFixtures.first),'list retry');
+      failed=true;intercept=url=>url===appUrl(appFixtures.first)&&failed?response(500,{}):null;
+      appButton(appFixtures.first).click();await wait(()=>button('Try again'),'detail error');failed=false;await click('Try again');
+      await wait(()=>doc.querySelector('[data-testid="application-detail"]'),'detail retry');await click('Back to Applications');
+      intercept=url=>url===appUrl(appFixtures.first)?response(404,{detail:'private-secret'}):null;
+      appButton(appFixtures.first).click();await wait(()=>text().includes('Application or Workspace unavailable.'),'404');
+      assert(!doc.querySelector('[data-testid="application-detail"]'),'stale detail');await click('Back to Applications');
+      intercept=url=>url===appUrl(appFixtures.first)?response(200,{...realDetail,is_trashed:true,effective_trashed:true,trashed_at:'2026-10-05T12:00:00Z'}):null;
+      appButton(appFixtures.first).click();await wait(()=>text().includes('Trashed — read-only inspection'),'trashed detail');
+      assert(!button('Restore'),'restore control');await click('Close Applications');intercept=null;
+    });
+    await test('Application selection, back and close discard delayed detail responses',async()=>{
+      await click('Applications');await wait(()=>appButton(appFixtures.first),'race list');
+      for(const action of ['selection','back','close']){
+        let release;
+        intercept=url=>url===appUrl(appFixtures.first)?new Promise(resolve=>{release=()=>resolve(new win.Response(JSON.stringify({...realDetail,company:'STALE DETAIL'}),{status:200}));}):null;
+        appButton(appFixtures.first).click();await wait(()=>!!release,'detail held');
+        if(action==='selection'){
+          await click('Back to Applications');appButton(appFixtures.second).click();
+          await wait(()=>doc.querySelector('[data-testid="application-detail"]'),'new selection');
+        } else if(action==='back')await click('Back to Applications');else await click('Close Applications');
+        release();await new Promise(r=>setTimeout(r,60));assert(!text().includes('STALE DETAIL'),'late detail rendered');
+        intercept=null;
+        if(action==='selection')await click('Back to Applications');
+      }
+      assert(!appPanel(),'panel not closed');
+    });
+    await test('Application list ignores delayed response after Workspace navigation; empty Workspace works',async()=>{
+      let release;intercept=url=>url===appList?new Promise(resolve=>{release=()=>resolve(new win.Response(JSON.stringify(realApps),{status:200}));}):null;
+      await click('Applications');await wait(()=>!!release,'list held');
+      const selector=doc.querySelector('select[aria-label="Workspace"]');selector.value='2';selector.dispatchEvent(new win.Event('change',{bubbles:true}));
+      await wait(()=>text().includes('Connected to B.'),'Application Workspace race');release();await new Promise(r=>setTimeout(r,60));
+      assert(!appPanel()&&!text().includes('Repeated Co'),'old list');intercept=null;
+      await click('Applications');await wait(()=>text().includes('No Applications in this Workspace.'),'empty Applications');await click('Close Applications');
+      const currentSelector=doc.querySelector('select[aria-label="Workspace"]');currentSelector.value='1';currentSelector.dispatchEvent(new win.Event('change',{bubbles:true}));await wait(()=>text().includes('Connected to A.'),'return A');
+    });
+    await test('Applications reject unsafe and mismatched identities before detail navigation',async()=>{
+      for(const row of [{...realApps[0],id:9007199254740992},{...realApps[0],workspace:2}]){
+        intercept=url=>url===appList?response(200,[row]):null;
+        const before=traffic.length;await click('Applications');await wait(()=>appPanel()?.querySelector('[role="alert"]'),'invalid list');
+        assert(!appPanel().querySelector('[data-application-id]'),'invalid selectable row');
+        assert(!traffic.slice(before).some(c=>/applications\/\d/.test(c.url)),'unsafe detail request');await click('Close Applications');
+      }
+      intercept=null;await click('Applications');await wait(()=>appButton(appFixtures.first),'mismatch list');
+      intercept=url=>url===appUrl(appFixtures.first)?response(200,{...realDetail,id:appFixtures.second}):null;
+      appButton(appFixtures.first).click();await wait(()=>text().includes('Application data could not be displayed safely.'),'mismatched detail');
+      assert(!doc.querySelector('[data-testid="application-detail"]'),'mismatched render');await click('Close Applications');intercept=null;
+    });
+    await test('Application session expiry clears panel through foundation authentication',async()=>{
+      intercept=url=>url===appList?response(401,{code:'authentication_required',detail:'private'}):null;
+      await click('Applications');await wait(()=>text().includes('Your session ended. Sign in to continue.'),'Application expiry');assert(!appPanel(),'sensitive panel remains');
+      intercept=null;win.dispatchEvent(new win.Event('focus'));await wait(()=>text().includes('Signed in as alice'),'fixture session recheck');
+      const selector=doc.querySelector('select[aria-label="Workspace"]');selector.value='1';selector.dispatchEvent(new win.Event('change',{bubbles:true}));await wait(()=>text().includes('Connected to A.'),'restore fixture Workspace');
+    });
     await test('panel open fetches once; real source labels exclude private content', async()=>{
       await click('Extraction evidence');await wait(()=>sourceButton(fixtures.sources.history),'sources');
       assert(traffic.filter(c=>c.url==='/api/workspaces/1/retained-messages/').length===1,'duplicate list request');
@@ -143,7 +226,6 @@ document.querySelector('#run').onclick = async function () {
       const show=Array.from(doc.querySelectorAll('button')).find(b=>b.textContent==='Show outputs');show.click();await wait(()=>doc.querySelectorAll('dl').length===1,'single operation disclosure');
       assert(doc.querySelectorAll('dl').length===1,'multiple expanded operations');
     });
-    const response=(status,data)=>Promise.resolve(new win.Response(JSON.stringify(data),{status,headers:{'Content-Type':'application/json'}}));
     const evidenceUrl=id=>'/api/workspaces/1/retained-messages/'+id+'/posting-extractions/';
     const realPage=await (await nativeFetch(evidenceUrl(fixtures.sources.history))).json();
     await test('500 and network retry are explicit and preserve continuation',async()=>{

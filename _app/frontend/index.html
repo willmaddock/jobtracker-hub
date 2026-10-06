@@ -7301,6 +7301,148 @@ function RetainedExtractionEvidencePanel({client, context, workspaceId, onClose,
   </section>;
 }
 
+// BEGIN DJANGO APPLICATION STATE
+function applicationUnexpected() { throw new JTHApi.ApiError("unexpected_response", "Unexpected Application response."); }
+function applicationId(value) {
+  if (!Number.isSafeInteger(value) || value <= 0) throw new JTHApi.ApiError("unsafe_identifier", "This identifier cannot be represented safely in this browser workflow.");
+  return value;
+}
+function applicationText(value) { if (typeof value !== "string") applicationUnexpected(); return value; }
+function applicationDate(value) {
+  if (value === null) return null;
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value) || !Number.isFinite(Date.parse(value)) || new Date(value).toISOString().slice(0,10) !== value) applicationUnexpected();
+  return value;
+}
+function applicationStamp(value) {
+  if (value === null) return null;
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T.*(?:Z|[+-]\d{2}:\d{2})$/.test(value) || !Number.isFinite(Date.parse(value))) applicationUnexpected();
+  applicationDate(value.slice(0,10));
+  return value;
+}
+function applicationRow(row, workspace, detailId = null) {
+  if (!row || typeof row !== "object" || Array.isArray(row)) applicationUnexpected();
+  const id = applicationId(row.id), scope = applicationId(row.workspace);
+  if (scope !== applicationId(workspace) || (detailId !== null && id !== detailId)) applicationUnexpected();
+  for (const key of ["is_trashed","effective_trashed"]) if (typeof row[key] !== "boolean") applicationUnexpected();
+  const trashed_at = applicationStamp(row.trashed_at);
+  if (row.is_trashed !== (trashed_at !== null) || row.effective_trashed !== row.is_trashed) applicationUnexpected();
+  const override = row.override;
+  if (override !== null && (!override || typeof override !== "object" || Array.isArray(override) || typeof override.archived !== "boolean")) applicationUnexpected();
+  const result = {id, workspace:scope, company:applicationText(row.company), role_label:applicationText(row.role_label),
+    section:applicationText(row.section), effective_status:applicationText(row.effective_status),
+    effective_date_applied:applicationDate(row.effective_date_applied), is_trashed:row.is_trashed,
+    effective_trashed:row.effective_trashed, trashed_at, archived:override === null ? false : override.archived};
+  if (detailId === null) return result;
+  if (typeof row.portable_id !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(row.portable_id)) applicationUnexpected();
+  result.portable_id = row.portable_id;
+  for (const edge of ["first","last"]) {
+    result[edge + "_activity"] = applicationStamp(row[edge + "_activity"]);
+    result[edge + "_activity_date"] = applicationDate(row[edge + "_activity_date"]);
+    if (result[edge + "_activity"] && result[edge + "_activity_date"]) applicationUnexpected();
+  }
+  if (!["pending","current","incomplete","needs_reconciliation"].includes(row.derivation_state)) applicationUnexpected();
+  result.derivation_state = row.derivation_state;
+  // Keep only descriptive provenance; document identities/evidence remain outside this panel.
+  const provenance = row.activity_provenance;
+  if (!provenance || typeof provenance !== "object" || Array.isArray(provenance)) applicationUnexpected();
+  result.activity_provenance = {};
+  if (Object.keys(provenance).length) {
+    if (typeof provenance.timezone !== "string") applicationUnexpected();
+    result.activity_provenance.timezone = provenance.timezone;
+    for (const edge of ["first","last"]) {
+      const bound = provenance[edge];
+      if (!bound || !["unknown","date","instant"].includes(bound.precision) || !Array.isArray(bound.documents)) applicationUnexpected();
+      const sources = bound.documents.map(item => {
+        if (!item || typeof item !== "object" || typeof item.source !== "string") applicationUnexpected();
+        return item.source;
+      });
+      result.activity_provenance[edge] = {precision:bound.precision, sources:[...new Set(sources)]};
+    }
+  }
+  result.category_id = row.category_id === null ? null : applicationId(row.category_id);
+  return result;
+}
+function applicationList(data, workspace) {
+  if (!Array.isArray(data)) applicationUnexpected();
+  const rows = data.map(row => applicationRow(row, workspace));
+  if (new Set(rows.map(row => row.id)).size !== rows.length) applicationUnexpected();
+  return rows;
+}
+function applicationFailure(error) {
+  if (["stale_response","aborted"].includes(error.code) || error.name === "AbortError") return null;
+  if (error.code === "unsafe_identifier") return {message:"This identifier cannot be represented safely in this browser workflow.", retry:false};
+  if (error.status === 401 && error.code === "authentication_required") return {auth:true};
+  if (error.status === 404) return {message:"Application or Workspace unavailable.", retry:false};
+  if (error.status >= 500 || error.code === "network_error") return {message:"Applications could not be loaded. Try again.", retry:true};
+  return {message:"Application data could not be displayed safely.", retry:false};
+}
+// END DJANGO APPLICATION STATE
+
+function ApplicationPanel({client, context, workspaceId, onClose, onAuthFailure}) {
+  const [rows,setRows] = useState([]), [ready,setReady] = useState(false), [listBusy,setListBusy] = useState(false);
+  const [listError,setListError] = useState(null), [selected,setSelected] = useState(null);
+  const [detail,setDetail] = useState(null), [detailBusy,setDetailBusy] = useState(false), [detailError,setDetailError] = useState(null);
+  const listLane = useMemo(() => createEvidenceLane(context), [context]);
+  const detailLane = useMemo(() => createEvidenceLane(context), [context]);
+  const target = useRef(null), auth = useRef(onAuthFailure); auth.current = onAuthFailure;
+  function back() { detailLane.invalidate(); target.current=null; setSelected(null); setDetail(null); setDetailError(null); setDetailBusy(false); }
+  function fail(error, setter) {
+    const safe = applicationFailure(error);
+    if (!safe) return;
+    if (safe.auth) { listLane.invalidate(); back(); setRows([]); setReady(false); auth.current(error); }
+    else setter(safe);
+  }
+  async function loadList() {
+    back(); const token=listLane.start(); setRows([]); setReady(false); setListBusy(true); setListError(null);
+    try {
+      const data=applicationList(await client.readApplications({captured:token.captured,signal:token.signal}),workspaceId);
+      if (listLane.current(token)) {setRows(data);setReady(true);}
+    } catch(error) {if(listLane.current(token)) fail(error,setListError);}
+    finally {if(listLane.current(token)) setListBusy(false);}
+  }
+  async function select(id) {
+    applicationId(id); target.current=id;setSelected(id);setDetail(null);setDetailError(null);setDetailBusy(true);
+    const token=detailLane.start(id);
+    try {
+      const data=applicationRow(await client.readApplication(id,{captured:token.captured,signal:token.signal}),workspaceId,id);
+      if(detailLane.current(token,target.current)) setDetail(data);
+    } catch(error) {if(detailLane.current(token,target.current)) fail(error,setDetailError);}
+    finally {if(detailLane.current(token,target.current)) setDetailBusy(false);}
+  }
+  useEffect(() => {loadList();return () => {listLane.dispose();detailLane.dispose();target.current=null;};}, [listLane,detailLane]);
+  function close() {listLane.invalidate();back();setRows([]);setReady(false);onClose();}
+  const errorView=(error,retry)=>error && <div role="alert"><p>{error.message}</p>{error.retry && <button className="btn" onClick={retry}>Try again</button>}</div>;
+  const value=(v)=>v === null ? "Unknown" : v === "" ? "Not supplied" : v;
+  const sectionLabels={applications:"Applications",credentials:"Credentials",network:"Network",resume_library:"Resume library",leads:"Leads",personal:"Personal",compliance:"Compliance",misc:"Misc"};
+  return <section data-testid="application-panel" aria-label="Applications" style={{marginTop:20,textAlign:"left"}}>
+    <h2>Applications</h2><button className="btn" onClick={close}>Close Applications</button>
+    {selected === null ? <>
+      <p>All current records load together. Large Workspaces may take longer to display.</p>
+      {listBusy && <p role="status">Loading Applications…</p>}{errorView(listError,loadList)}
+      {ready && !rows.length && <p>No Applications in this Workspace.</p>}
+      {ready && <><p>{rows.length} records</p><button className="btn" onClick={loadList}>Refresh Applications</button></>}
+      {rows.map(row => <article key={row.id}><button className="btn" data-application-id={row.id} onClick={()=>select(row.id)}>{value(row.company)} — {value(row.role_label)} — Record {row.id}</button>
+        <p>{Object.prototype.hasOwnProperty.call(sectionLabels,row.section) ? sectionLabels[row.section] : row.section} · Status: {value(row.effective_status)} · Applied date: {value(row.effective_date_applied)}{row.archived ? " · Archived" : ""}{row.is_trashed ? " · Trashed" : ""}</p></article>)}
+    </> : <>
+      <button className="btn" onClick={back}>Back to Applications</button>
+      {detailBusy && <p role="status">Loading Application detail…</p>}{errorView(detailError,()=>select(selected))}
+      {detail && <article data-testid="application-detail">
+        <h3>{value(detail.company)} — {value(detail.role_label)}</h3>
+        {detail.is_trashed && <p role="status"><strong>Trashed — read-only inspection</strong></p>}
+        {detail.archived && <p>Archived</p>}
+        <dl>{[["Record",detail.id],["Portable identity",detail.portable_id],["Section",Object.prototype.hasOwnProperty.call(sectionLabels,detail.section) ? sectionLabels[detail.section] : detail.section],
+          ["Effective status",detail.effective_status],["Applied date",detail.effective_date_applied],["Category reference",detail.category_id],
+          ["Derivation state",detail.derivation_state]].map(([label,v])=><React.Fragment key={label}><dt>{label}</dt><dd style={{overflowWrap:"anywhere"}}>{value(v)}</dd></React.Fragment>)}</dl>
+        {["first","last"].map(edge=><div key={edge}><h4>{edge === "first" ? "First" : "Last"} activity</h4>
+          <p>{detail[edge+"_activity"] ? <><EvidenceTime value={detail[edge+"_activity"]} /> (instant)</> : detail[edge+"_activity_date"] ? detail[edge+"_activity_date"] + " (date only)" : "Unknown"}</p>
+          <p>Provenance: {detail.activity_provenance[edge] ? detail.activity_provenance[edge].precision + (detail.activity_provenance[edge].sources.length ? " — " + detail.activity_provenance[edge].sources.join(", ") : "") : "Unknown / unreconciled"}</p>
+        </div>)}
+        {detail.activity_provenance.timezone && <p>Activity calendar timezone: {detail.activity_provenance.timezone}</p>}
+      </article>}
+    </>}
+  </section>;
+}
+
 // The Django entry never mounts App: its effects and caches belong to FastAPI.
 function DjangoFoundation() {
   const theme = useTheme();
@@ -7317,12 +7459,13 @@ function DjangoFoundation() {
   const [busy, setBusy] = useState(false);
   const [connected, setConnected] = useState(false);
   const [evidenceOpen, setEvidenceOpen] = useState(false);
+  const [applicationsOpen, setApplicationsOpen] = useState(false);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
 
   function clearIdentity() {
-    setEvidenceOpen(false);
+    setEvidenceOpen(false); setApplicationsOpen(false);
     if (identity.current !== null) history.replaceState(null, "", location.pathname + location.search);
     context.invalidate(); context.setActor(null); client.clearCsrf();
     identity.current = null; setUser(null); setWorkspaces([]);
@@ -7337,7 +7480,7 @@ function DjangoFoundation() {
     } else setError(e.message);
   }
   async function selectRoute(list) {
-    setEvidenceOpen(false);
+    setEvidenceOpen(false); setApplicationsOpen(false);
     const id = JTHWorkspace.parseRoute(window.location.hash);
     context.invalidate(); context.select(null); setConnected(false); setSelected(null);
     if (!id) {
@@ -7360,7 +7503,7 @@ function DjangoFoundation() {
     await selectRoute(list);
   }
   async function checkSession() {
-    setEvidenceOpen(false);
+    setEvidenceOpen(false); setApplicationsOpen(false);
     context.invalidate(); setPhase("loading"); setConnected(false); setError("");
     try {
       await client.bootstrap();
@@ -7391,7 +7534,7 @@ function DjangoFoundation() {
     } catch (e) { report(e); } finally { setPassword(""); setBusy(false); }
   }
   async function signOut() {
-    setEvidenceOpen(false);
+    setEvidenceOpen(false); setApplicationsOpen(false);
     setBusy(true); setError("");
     try {
       await client.request("/api/auth/logout", {method:"POST"});
@@ -7432,10 +7575,12 @@ function DjangoFoundation() {
             <button className="btn" disabled={busy || !name.trim()}>Create workspace</button>
           </form>
           {selected && <p role="status">{connected ? "Connected to " + selected.name + "." : "Checking workspace connection…"}</p>}
-          {selected && connected && <button className="btn" disabled={evidenceOpen} onClick={() => setEvidenceOpen(true)}>Extraction evidence</button>}
+          {selected && connected && <button className="btn" disabled={evidenceOpen} onClick={() => {setApplicationsOpen(false);setEvidenceOpen(true);}}>Extraction evidence</button>}
           {selected && connected && evidenceOpen && <RetainedExtractionEvidencePanel key={user.id + ":" + selected.id}
             client={client} context={context} workspaceId={selected.id} onClose={() => setEvidenceOpen(false)} onAuthFailure={report} />}
-          <p>Application screens are not connected in this migration checkpoint.</p>
+          {selected && connected && <button className="btn" disabled={applicationsOpen} onClick={()=>{setEvidenceOpen(false);setApplicationsOpen(true);}}>Applications</button>}
+          {selected && connected && applicationsOpen && <ApplicationPanel key={user.id + ":" + selected.id}
+            client={client} context={context} workspaceId={selected.id} onClose={()=>setApplicationsOpen(false)} onAuthFailure={report} />}
           <button className="btn" disabled={busy} onClick={signOut}>Sign out</button>
         </>}
       {error && <button className="btn" disabled={busy} onClick={checkSession}>Refresh session and workspaces</button>}
