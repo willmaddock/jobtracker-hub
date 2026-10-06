@@ -1,9 +1,9 @@
 # Django migration: current status
 
 Maintained checkpoint: 2026-10-05. Authoritative branch: `django-migration`;
-checkpoint `b3a8d451272bd1ee5e4626e4b30ebd5f5f6cbc63`
-(`Implement source-scoped retained extraction inspection`), parent
-`09e07d821615b1571668dcc7c3e5734bafeed906`. Before this documentation edit,
+checkpoint `56214508cd646650863b23628e58c10b80fea010`
+(`Implement retained extraction evidence API`), parent
+`e96a33c13a3a554a4faa6bdffa6118a30a89316f`. Before this documentation edit,
 local HEAD, tracking ref and live remote were verified synchronized at that checkpoint,
 ahead/behind 0/0, with a clean working tree and empty index.
 
@@ -70,6 +70,11 @@ read-only domain contract exposes bounded source history before item association
 including no recorded history, completed zero-output operations and unassociated outputs.
 It reuses complete extraction-batch validation and returns detached immutable evidence
 with advisory current source eligibility; it adds no execution or downstream authority.
+Workspace-Scoped Read-Only Retained Extraction Evidence HTTP API was reviewed and
+committed/pushed at `56214508cd646650863b23628e58c10b80fea010`
+(`Implement retained extraction evidence API`). This authenticated, owner-scoped,
+bounded endpoint consumes the existing source-scoped evidence reader and adds HTTP
+transport/navigation only, without extraction execution or downstream mutation authority.
 Frontend integration, historical reconciliation, email derivation and operational
 cutover remain pending.
 
@@ -91,6 +96,56 @@ cutover remain pending.
 ## 2. Current verification evidence
 
 
+### Workspace-Scoped Read-Only Retained Extraction Evidence HTTP API — committed checkpoint, 2026-10-05
+
+Reviewed, committed and pushed at `56214508cd646650863b23628e58c10b80fea010`,
+parent `e96a33c13a3a554a4faa6bdffa6118a30a89316f`. The endpoint
+`GET /api/workspaces/{workspace_id}/retained-messages/{retained_message_id}/posting-extractions/`
+(route name `retained-posting-extraction-list`) requires authenticated session ownership,
+reuses existing Workspace scoping and explicit source routing, and calls the existing
+source-scoped evidence reader. Historical operations preserve no-history versus completed
+zero-output semantics and valid conflicted-source inspection with `source_eligible=false`.
+
+Strict bounded navigation uses default limit 2 and maximum 5, with a stateless unsigned
+canonical base64url cursor. The cursor carries navigation state, not authorization;
+Workspace/source context is independently revalidated. Valid numeric `last_extraction_id`
+changes intentionally alter navigation. Pagination remains advisory, not a snapshot.
+Explicit response-field whitelists exclude raw retained content, provider payload/locator,
+credentials and association/canonical identity fields. `input_spec_json` remains a canonical
+extraction-metadata string; historical order, nulls, blanks, duplicates and timestamps are
+preserved.
+
+JSON-only GET/HEAD/OPTIONS handling has no mutation handlers and sets
+`Cache-Control: no-store`. Existing 400/401/404/409 conventions are preserved; DatabaseError
+inside APIView dispatch receives a fixed sanitized 500 without raw exception text, SQL or
+source content. Earlier middleware failures remain governed by existing infrastructure.
+Ordinary endpoint/domain behavior is read-only; exceptional Django session maintenance may
+legitimately update/delete session infrastructure without becoming domain mutation.
+
+This adds HTTP transport/navigation authority only: no extraction execution, provider/sync
+adoption, automatic source admission, generated operation identity, selector inference,
+item association, interpretation, PostingSource mapping, allocation, arbitration,
+projection, Application mutation, frontend workflow, PostgreSQL validation or scheduling/
+retry state. No model, migration or durable cursor state is added.
+
+Retained implementation/final-review evidence: API **18 passed**, source inspection
+**22 passed**, recorder **34 passed**, producer **22 passed**, batch command **29 passed**,
+retained interpretation **58 passed**, retained posting review **53 passed**, Candidate
+Discovery **26 passed**, combined focused **262 passed**, postings **615 passed**, affected
+apps **1,332 passed** and full Django **1,332 passed**, with no failures/errors/skips.
+Django system check passed; postings migration drift: none. Global dry run reported only
+the known `EmailAccount.provider` alteration, not generated. Static/scope checks passed.
+Application tests were not rerun during commit/push and are not being rerun merely for
+this documentation maintenance; these are retained results, not fresh documentation-stage
+application tests.
+
+Accepted limitations: advisory pagination, unsigned valid boundary edits, APIView-local
+DatabaseError sanitization and exceptional session maintenance remain as described above.
+PostgreSQL operation and production deployment/operation remain unverified; provider
+extraction automation remains unresolved/unvalidated. A stable read-only HTTP contract now
+exists, but browser/frontend workflow remains unimplemented and separately scoped.
+Provider/storage/jobs/backup-restore/cutover gates remain open.
+
 ### Source-Scoped Retained Extraction Evidence Inspection — committed checkpoint, 2026-10-05
 
 Reviewed, committed and pushed at `b3a8d451272bd1ee5e4626e4b30ebd5f5f6cbc63`,
@@ -111,8 +166,8 @@ This adds read/navigation authority only: no extraction or replay execution, pro
 adoption, automatic admission, generated operation identity, inferred selectors, item
 association, interpretation/mapping/allocation/arbitration/projection or Application writes.
 No HTTP routes, serializers, frontend consumer, cursor transport encoding, durable work
-state or scheduling are introduced. A later read-only HTTP API could consume this domain
-contract, but remains separately scoped and unselected.
+state or scheduling were introduced by that slice. At that checkpoint, a later read-only
+HTTP API remained separately scoped and unselected; the completed adapter is recorded above.
 
 Retained implementation/final-review evidence: targeted correction **2 passed**, source
 inspection **22 passed**, combined focused **244 passed**, postings **597 passed**,
@@ -126,7 +181,8 @@ Accepted limitations: reads are advisory, not snapshots; PostgreSQL operational 
 remains unverified. Reusing the complete validator costs queries per returned operation
 and transient memory. Privileged evidence rewrites remain unsupported; arbitrarily
 oversized corrupt database JSON may allocate before validation rejects it. Cursor transport
-serialization remains future API work. Provider/storage/jobs/backup-restore/cutover gates
+serialization was future API work at that checkpoint and is now supplied by the adapter
+above. Provider/storage/jobs/backup-restore/cutover gates
 remain open.
 
 ### Explicit Retained Extraction Request Batch Command — committed checkpoint, 2026-10-05
@@ -996,18 +1052,21 @@ No newly accepted capability is marked verified merely because it is designed.
 | Provider connections | Gmail/Outlook/IMAP connect/sync/disconnect; encrypted credentials | Baseline provider/view coverage, mocked external seams | Historical Gmail OAuth/live-sync checkpoint; complete target flows unvalidated; Outlook/IMAP live validation unestablished |
 | Sync/jobs | Gmail per-message retention plus transitional match/discovery/thread projection; inline single sync, queued bulk/Beat | Gmail adoption/replay and existing sync/task coverage; not real-broker proof | Real Redis/worker/Beat operation unestablished |
 | Retained messages/review | Protected source/observation models, verified Gmail lineage and native-ID producer adoption; scoped review inspection, explicit attachment, independent disposition and atomic create-Application orchestration with durable results | Retention, Gmail adoption, attachment/disposition/creation APIs, migration preservation and SQLite logical concurrency coverage in §2 | Other-provider adoption, broader review actions, frontend and operational validation pending |
-| Postings | Integer PK plus immutable Workspace-scoped portable UUID; existing extractor/ingestion and list/save/dismiss/restore/apply APIs; explicit retained-text extraction production with validated historical replay, operator batch extraction execution and source-scoped read-only extraction evidence inspection; retained extraction/items and corrections, PostingSource mapping/corrections, item interpretation, posting-level arbitration, descriptor projection, canonical allocation, stateless review orchestration and bounded advisory candidate discovery | Identity/migration/replay and authority-boundary coverage in §2; latest retained inspection 22, combined focused 244, postings 597 and full Django 1,314 passed | Sync does not produce canonical postings; automatic retained-to-canonical workflows, broader canonical consumers, provider/sync adoption, API/frontend integration of retained-posting workflows and operational/end-to-end validation remain pending |
+| Postings | Integer PK plus immutable Workspace-scoped portable UUID; existing extractor/ingestion and list/save/dismiss/restore/apply APIs; explicit retained-text extraction production with validated historical replay, operator batch extraction execution and source-scoped read-only extraction evidence inspection, plus a workspace-scoped read-only retained extraction evidence HTTP API; retained extraction/items and corrections, PostingSource mapping/corrections, item interpretation, posting-level arbitration, descriptor projection, canonical allocation, stateless review orchestration and bounded advisory candidate discovery | Identity/migration/replay and authority-boundary coverage in §2; latest API 18, retained inspection 22, combined focused 262, postings 615 and full Django 1,332 passed | Sync does not produce canonical postings; automatic retained-to-canonical workflows, broader canonical consumers, provider/sync adoption, frontend/browser integration, broader retained-workflow APIs, PostgreSQL and production/operational validation remain pending |
 | Import/export | No Django legacy importer or portable export/restore | Unimplemented/unverified | Reconciliation/cutover pending |
 | Production | Partial settings/storage/task scaffolding; SQLite inherited, development fallbacks remain | Suite success is not deployment verification | PostgreSQL/storage/jobs/backup/restore/rollback pending |
 
 ## 6. Known parity gaps and blockers
 
-- Retained-text extraction production, explicit operator batch execution and source-level
-  evidence inspection are complete. Neither the batch command nor the reader is the
-  provider/sync adoption mechanism. That adoption requires
+- Retained-text extraction production, explicit operator batch execution, source-level
+  evidence inspection and its workspace-scoped read-only HTTP adapter are complete. A stable
+  evidence HTTP contract exists; browser/frontend integration and broader retained-workflow
+  APIs remain separately scoped gaps. The batch command, reader and HTTP adapter are not
+  the provider/sync adoption mechanism. That adoption requires
   separate decisions on recurring extraction-operation identity, source admission,
   selector ownership where applicable and failure/retry handling, plus PostgreSQL validation
-  before broader provider automation. The reader does not resolve these requirements.
+  before broader provider/write automation. The reader and HTTP API do not resolve these
+  requirements; the completed read endpoint does not establish PostgreSQL validation.
   Provider/sync adoption and automatic retained-to-canonical workflows remain unimplemented
   and require separate
   planning and authorization. Sync does not currently produce canonical JobPosting rows;
@@ -1479,7 +1538,7 @@ preservation, reverse limitations and verification evidence.
 
 ## 8. Next recommended implementation actions
 
-1. Retained-text extraction production, explicit operator batch execution and source-scoped read-only evidence inspection are complete through `b3a8d451272bd1ee5e4626e4b30ebd5f5f6cbc63`, alongside the existing explicit retained-posting authorities. The next substantive migration slice has not yet been selected or authorized. Provider/sync adoption, automatic canonical workflows, broader canonical consumers, API/frontend integration and remaining operational work require separate planning and authorization. Prior local database provenance remains unresolved.
+1. Retained-text extraction production, explicit operator batch execution, source-scoped read-only evidence inspection and its workspace-scoped read-only HTTP API are complete through `56214508cd646650863b23628e58c10b80fea010`, alongside the existing explicit retained-posting authorities. The next substantive migration slice has not been selected and has not been authorized. Provider/sync adoption, automatic canonical workflows, broader canonical consumers, broader retained-workflow APIs, browser/frontend integration, PostgreSQL and remaining operational work require separate planning and authorization. Prior local database provenance remains unresolved.
 2. Resolve the legacy verification blockers under separately approved scope before declaring a fully green checkpoint.
 3. Separately scope further review actions and future filtering/queue UX, along with broader email/job and frontend work.
 4. Plan provenance-aware historical reconciliation with importer/cutover work; do not silently backfill current records.
