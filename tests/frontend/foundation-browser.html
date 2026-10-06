@@ -10,6 +10,7 @@ document.querySelector('#run').onclick = async function () {
   let passed = 0;
   function assert(value, message) { if (!value) throw Error(message); }
   async function test(name, fn) { await fn(); passed++; output.textContent += 'PASS ' + name + '\n'; }
+  window.__fixtureAggregateTraffic=[];
   const context = JTHWorkspace.createContext();
   const client = JTHApi.createClient({context});
   try {
@@ -51,6 +52,219 @@ document.querySelector('#run').onclick = async function () {
       assert(await client.request('/api/auth/logout',{method:'POST'}) === null, '204 handling');
       try { await client.request('/api/auth/me'); throw Error('session remained'); } catch(e) { assert(e.code === 'authentication_required' && e.status === 401, e.message); }
     });
+    await test('evidence fixture login and actual Django product panel', async () => {
+      await client.bootstrap();
+      const user=await client.request('/api/auth/login',{method:'POST',body:{username:'alice',password:'browser-fixture-only'}});
+      context.setActor(user.id);context.select(1);await client.bootstrap();
+    });
+    const fixtures=await client.request('/api/test-only/evidence-fixtures');
+    const frame=document.createElement('iframe');frame.title='Disposable Django product workflow';frame.style.cssText='width:100%;height:700px';
+    document.body.appendChild(frame);
+    let win,doc;
+    const wait=async(predicate,label)=>{const end=Date.now()+20000;while(Date.now()<end){if(predicate())return;await new Promise(r=>setTimeout(r,20));}throw Error('Timed out: '+label);};
+    async function mount(workspace=1){frame.src='/#/workspaces/'+workspace;await wait(()=>frame.contentDocument?.querySelector('button')?.textContent !== undefined && frame.contentDocument.querySelector('#root')?.textContent.includes('Connected to '),'foundation ready');win=frame.contentWindow;doc=frame.contentDocument;}
+    const text=()=>doc.querySelector('#root')?.textContent||'';
+    const button=label=>Array.from(doc.querySelectorAll('button')).find(b=>b.textContent.trim()===label);
+    const sourceButton=id=>Array.from(doc.querySelectorAll('button')).find(b=>b.textContent.startsWith('Source '+id+' —'));
+    const click=async label=>{const node=button(label);assert(node&&!node.disabled,'Unavailable button '+label);node.click();await new Promise(r=>setTimeout(r,0));};
+    async function choose(label){sourceButton(fixtures.sources[label]).click();await new Promise(r=>setTimeout(r,0));await wait(()=>!text().includes('Loading extraction history…'),'history '+label);}
+    await mount();
+    const firstDocumentTraffic=win.__fixtureTraffic;
+    const traffic=window.__fixtureAggregateTraffic;
+    const rejectedProbes=new Set();
+    function allowedTraffic(call) {
+      let url;
+      try { url=new URL(call.url,location.origin); } catch (_) { return false; }
+      if(url.origin!==location.origin||url.hash||url.username||url.password)return false;
+      const path=url.pathname, query=Array.from(url.searchParams.entries());
+      // The sole mutation exception is the existing, explicitly exercised logout.
+      // The disposable hook marks it only around that foundation control action.
+      if(call.method==='POST')return call.foundationAction==='logout'&&path==='/api/auth/logout'&&!query.length;
+      if(call.method!=='GET')return false;
+      if(['/api/auth/csrf','/api/auth/me','/api/workspaces/'].includes(path))return !query.length;
+      const positive=value=>/^[1-9]\d*$/.test(value)&&Number.isSafeInteger(Number(value));
+      let match=/^\/api\/workspaces\/([1-9]\d*)\/insights\/$/.exec(path);
+      if(match)return positive(match[1])&&!query.length;
+      match=/^\/api\/workspaces\/([1-9]\d*)\/retained-messages\/$/.exec(path);
+      if(match)return positive(match[1])&&(!query.length||query.length===1&&query[0][0]==='after'&&positive(query[0][1]));
+      match=/^\/api\/workspaces\/([1-9]\d*)\/retained-messages\/([1-9]\d*)\/posting-extractions\/$/.exec(path);
+      return !!match&&positive(match[1])&&positive(match[2])&&(!query.length||query.length===1&&query[0][0]==='cursor'&&!!query[0][1]);
+    }
+    function assertTraffic(calls) { assert(calls.every(allowedTraffic),'unexpected product request route or method'); }
+    let intercept=null;
+    const nativeFetch=win.__fixtureNativeFetch;
+    win.__fixtureIntercept=(url,options)=>intercept?.(url,options);
+    await test('panel open fetches once; real source labels exclude private content', async()=>{
+      await click('Extraction evidence');await wait(()=>sourceButton(fixtures.sources.history),'sources');
+      assert(traffic.filter(c=>c.url==='/api/workspaces/1/retained-messages/').length===1,'duplicate list request');
+      assert(!text().includes('private-subject-')&&!text().includes('private-body-')&&!text().includes('private-locator-'),'private content');
+      assert(button('Load more sources'),'missing summary continuation');
+    });
+    await test('source selector and product panel remain viewport bounded',async()=>{
+      const list=doc.querySelector('[aria-label="Extraction evidence"] > ul');
+      assert(list.clientHeight<=240&&list.scrollHeight>list.clientHeight,'source selector unbounded');
+      const shell=doc.querySelector('main > section');
+      assert(shell.clientHeight<=win.innerHeight,'product controls clipped');
+      assert(win.getComputedStyle(shell).overflowY==='auto','product panel cannot scroll');
+    });
+    await test('no history and completed zero output are distinct',async()=>{
+      await choose('no-history');assert(text().includes('No completed extraction history for this source.'),'missing no-history');
+      await choose('zero');assert(text().includes('0 outputs'),'zero operation absent');assert(!text().includes('No completed extraction history'),'zero collapsed into empty');
+    });
+    await test('real outputs preserve duplicates, null/blank and escape scripts',async()=>{
+      await choose('history');await click('Show outputs');
+      assert(doc.querySelectorAll('dl').length===3,'duplicate output missing');
+      assert(text().includes('Not supplied')&&text().includes('Explicitly blank'),'null/blank');
+      assert(text().includes('<script>window.evidenceInjected=true<\/script>'),'script text missing');
+      assert(!win.evidenceInjected,'script executed');assert(!doc.querySelector('img[src="x"]'),'HTML injected');
+      assert(!text().includes('input_spec_json'),'spec shown');
+    });
+    await test('real history and source continuation use explicit controls',async()=>{
+      const before=doc.querySelectorAll('article').length;await click('Load more history');
+      await wait(()=>doc.querySelectorAll('article').length===before+1,'history append');assert(!button('Load more history'),'exhausted cursor');
+      const sources=Array.from(doc.querySelectorAll('button')).filter(b=>b.textContent.startsWith('Source ')).length;
+      await click('Load more sources');await wait(()=>Array.from(doc.querySelectorAll('button')).filter(b=>b.textContent.startsWith('Source ')).length>sources,'source append');
+      assert(!button('Load more sources'),'summary exhaustion');
+    });
+    await test('real conflicted source remains inspectable',async()=>{
+      await choose('conflict');assert(text().includes('Source currently ineligible. Historical evidence remains available.'),'conflict missing');assert(doc.querySelectorAll('article').length===1,'history hidden');
+    });
+    await test('real invalid source, corrupt history and lookahead failures',async()=>{
+      await choose('invalid-source');assert(text().includes('Source representation cannot be inspected safely.'),'source 409');
+      await choose('corrupt');assert(text().includes('Extraction history cannot be inspected safely.'),'history 409');assert(!doc.querySelector('article'),'partial corrupt evidence');
+      await choose('lookahead');assert(doc.querySelectorAll('article').length===2,'lookahead validated early');await click('Load more history');
+      await wait(()=>text().includes('Extraction history cannot be inspected safely.'),'lookahead 409');assert(!doc.querySelector('article'),'old partial history retained after structural failure');
+    });
+    await test('maximum output disclosure batches without extra requests',async()=>{
+      await choose('maximum');const requests=traffic.length;await click('Show outputs');
+      assert(doc.querySelectorAll('dl').length===50,'initial disclosure');
+      for(let index=0;index<19;index++)await click('Show 50 more outputs');
+      assert(doc.querySelectorAll('dl').length===1000,'silent output truncation');assert(!button('Show 50 more outputs'),'unbounded reveal');assert(traffic.length===requests,'expansion fetched');
+      const show=Array.from(doc.querySelectorAll('button')).find(b=>b.textContent==='Show outputs');show.click();await wait(()=>doc.querySelectorAll('dl').length===1,'single operation disclosure');
+      assert(doc.querySelectorAll('dl').length===1,'multiple expanded operations');
+    });
+    const response=(status,data)=>Promise.resolve(new win.Response(JSON.stringify(data),{status,headers:{'Content-Type':'application/json'}}));
+    const evidenceUrl=id=>'/api/workspaces/1/retained-messages/'+id+'/posting-extractions/';
+    const realPage=await (await nativeFetch(evidenceUrl(fixtures.sources.history))).json();
+    await test('500 and network retry are explicit and preserve continuation',async()=>{
+      await choose('history');let hits=0;
+      intercept=url=>url.includes('posting-extractions/?cursor=')?(++hits===1?response(500,{code:'request_failed',detail:'SQL private-error'}):null):null;
+      await click('Load more history');await wait(()=>text().includes('Inspection failed. Try again.'),'500');assert(doc.querySelectorAll('article').length===2,'history blanked');assert(!text().includes('private-error'),'raw error');
+      await click('Retry inspection');await wait(()=>doc.querySelectorAll('article').length===3,'page retry');assert(hits===2,'retry cursor changed');
+      intercept=url=>url===evidenceUrl(fixtures.sources.zero)?Promise.reject(new TypeError('private network trace')):null;
+      await choose('zero');assert(text().includes('Inspection failed. Try again.'),'network failure');intercept=null;await click('Retry inspection');await wait(()=>text().includes('0 outputs'),'network retry');
+    });
+    await test('400 restarts; 404 clears selection; malformed and unsafe responses fail closed',async()=>{
+      intercept=url=>url===evidenceUrl(fixtures.sources.zero)?response(400,{code:'validation_error',detail:'private'}):null;
+      await choose('zero');assert(text().includes('Evidence navigation failed.'),'400');intercept=null;await click('Restart from first page');await wait(()=>text().includes('0 outputs'),'restart');
+      intercept=url=>url===evidenceUrl(fixtures.sources.zero)?response(404,{code:'not_found',detail:'private'}):null;
+      await choose('zero');assert(text().includes('Source or Workspace unavailable.'),'404');assert(!text().includes('History for source'),'selection retained');
+      intercept=url=>url===evidenceUrl(fixtures.sources.zero)?response(200,{...realPage,has_more:true,next_cursor:null}):null;
+      await choose('zero');assert(text().includes('Unexpected response.'),'malformed');assert(!doc.querySelector('article'),'malformed page shown');
+      intercept=url=>url===evidenceUrl(fixtures.sources.zero)?response(200,{...realPage,source:{...realPage.source,retained_message_id:9007199254740992}}):null;
+      await choose('zero');assert(text().includes('This identifier cannot be represented safely in this browser workflow.'),'unsafe ID');assert(!doc.querySelector('article'),'unsafe page shown');intercept=null;
+    });
+    await test('late source success, error and finalization cannot overwrite current source',async()=>{
+      for(const lateStatus of [200,500]){
+        let release;
+        intercept=url=>url===evidenceUrl(fixtures.sources.history)?new Promise(resolve=>{release=()=>resolve(new win.Response(JSON.stringify(lateStatus===200?realPage:{code:'request_failed',detail:'private stale'}),{status:lateStatus,headers:{'Content-Type':'application/json'}}));}):null;
+        sourceButton(fixtures.sources.history).click();await wait(()=>!!release,'race started');
+        await choose('zero');release();await new Promise(r=>setTimeout(r,80));
+        assert(text().includes('0 outputs')&&!text().includes('private stale')&&!text().includes('Inspection failed.'),'stale response applied');assert(doc.querySelectorAll('article').length===1,'stale append');
+      }
+      intercept=null;
+    });
+    await test('close cancels lifetime; reopen refetches and clears source',async()=>{
+      let release, pendingSignal;
+      intercept=(url,options)=>url===evidenceUrl(fixtures.sources.history)?new Promise(resolve=>{pendingSignal=options.signal;release=()=>resolve(new win.Response(JSON.stringify(realPage),{status:200,headers:{'Content-Type':'application/json'}}));}):null;
+      sourceButton(fixtures.sources.history).click();await wait(()=>!!release,'close race');
+      await click('Close extraction evidence');assert(pendingSignal.aborted,'close did not abort');intercept=null;release();assert(!doc.querySelector('[data-testid="extraction-evidence-panel"]'),'panel retained');
+      const before=traffic.filter(c=>c.url==='/api/workspaces/1/retained-messages/').length;
+      await click('Extraction evidence');await wait(()=>sourceButton(fixtures.sources.history),'reopen');
+      assert(traffic.filter(c=>c.url==='/api/workspaces/1/retained-messages/').length===before+1,'reopen cache');assert(!text().includes('History for source'),'source persisted');
+    });
+    await test('Workspace switch cancels old source and isolates empty state',async()=>{
+      let release;
+      intercept=url=>url===evidenceUrl(fixtures.sources.history)?new Promise(resolve=>{release=()=>resolve(new win.Response(JSON.stringify(realPage),{status:200,headers:{'Content-Type':'application/json'}}));}):null;
+      sourceButton(fixtures.sources.history).click();await wait(()=>!!release,'Workspace race');
+      const select=doc.querySelector('select[aria-label="Workspace"]');select.value='2';select.dispatchEvent(new win.Event('change',{bubbles:true}));
+      await wait(()=>text().includes('Connected to B.'),'Workspace B');assert(!doc.querySelector('[data-testid="extraction-evidence-panel"]'),'panel remained');release();
+      await new Promise(r=>setTimeout(r,80));await click('Extraction evidence');await wait(()=>text().includes('No retained sources in this Workspace.'),'empty Workspace');assert(!text().includes('History for source'),'old history');intercept=null;
+    });
+    await test('refresh restores Workspace but not panel/source',async()=>{
+      const beforeRefresh=traffic.length;
+      frame.contentWindow.location.reload();await wait(()=>frame.contentDocument!==doc&&frame.contentDocument.querySelector('#root')?.textContent.includes('Connected to B.'),'refresh');win=frame.contentWindow;doc=frame.contentDocument;
+      assert(!doc.querySelector('[data-testid="extraction-evidence-panel"]'),'panel persisted');assert(win.location.hash==='#/workspaces/2','Workspace not restored');
+      assert(win.__fixtureTraffic!==firstDocumentTraffic,'document traffic not replaced');
+      assert(traffic.length>beforeRefresh&&win.__fixtureTraffic.every(call=>traffic.includes(call)),'refreshed traffic missing from aggregate');
+    });
+    await test('two tabs retain independent Workspace and source state',async()=>{
+      const second=document.createElement('iframe');second.title='Second disposable tab context';second.style.cssText='width:100%;height:400px';second.src='/#/workspaces/1';document.body.appendChild(second);
+      await wait(()=>second.contentDocument?.querySelector('#root')?.textContent.includes('Connected to A.'),'second context');
+      const secondDoc=second.contentDocument;Array.from(secondDoc.querySelectorAll('button')).find(b=>b.textContent==='Extraction evidence').click();
+      await wait(()=>Array.from(secondDoc.querySelectorAll('button')).find(b=>b.textContent.startsWith('Source '+fixtures.sources.zero+' —')),'second sources');
+      Array.from(secondDoc.querySelectorAll('button')).find(b=>b.textContent.startsWith('Source '+fixtures.sources.zero+' —')).click();
+      await wait(()=>secondDoc.querySelector('#root').textContent.includes('0 outputs'),'second history');
+      assert(second.contentWindow.__fixtureTraffic.length>0&&second.contentWindow.__fixtureTraffic.every(call=>traffic.includes(call)),'second document traffic missing');assert(text().includes('Connected to B.')&&!text().includes('History for source'),'context leaked');second.remove();
+    });
+    await test('unsafe source-list identity rejected without imprecise route',async()=>{
+      await click('Extraction evidence');await wait(()=>text().includes('No retained sources'),'open B');await click('Close extraction evidence');
+      const requests=[];
+      win.__fixtureIntercept=(url,options)=>{requests.push(String(url));return String(url)==='/api/workspaces/2/retained-messages/'?response(200,{results:[{id:9007199254740992,portable_id:'00000000-0000-4000-8000-000000000001',state:'retained',eligible:true,retained_at:'2026-10-05T12:00:00Z'}],next_after:null}):null;};
+      await click('Extraction evidence');await wait(()=>text().includes('This identifier cannot be represented safely'),'unsafe source');assert(!requests.some(p=>p.includes('posting-extractions')),'imprecise route');await click('Close extraction evidence');win.__fixtureIntercept=null;
+    });
+    await test('current 401 clears evidence and returns to existing session UI',async()=>{
+      // Return to A using the actual Workspace selector.
+      const select=doc.querySelector('select[aria-label="Workspace"]');select.value='1';select.dispatchEvent(new win.Event('change',{bubbles:true}));await wait(()=>text().includes('Connected to A.'),'back A');
+      win.__fixtureIntercept=(url,options)=>String(url).includes('/posting-extractions/')?response(401,{code:'authentication_required',detail:'private'}):null;
+      await click('Extraction evidence');await wait(()=>sourceButton(fixtures.sources.zero),'401 sources');sourceButton(fixtures.sources.zero).click();
+      await wait(()=>text().includes('Your session ended. Sign in to continue.'),'401 login');assert(!doc.querySelector('[data-testid="extraction-evidence-panel"]'),'old evidence on 401');
+    });
+    await test('real account change and logout remove all prior evidence context',async()=>{
+      win.__fixtureIntercept=null;
+      await client.bootstrap();
+      const bob=await client.request('/api/auth/login',{method:'POST',body:{username:'bob',password:'browser-fixture-only'}});
+      context.setActor(bob.id);context.select(3);await client.bootstrap();
+      win.dispatchEvent(new win.Event('focus'));
+      await wait(()=>text().includes('Signed in as bob'),'account change');
+      assert(!doc.querySelector('[data-testid="extraction-evidence-panel"]'),'previous actor panel');
+      assert(doc.querySelector('select[aria-label="Workspace"]').value==='','singleton selected automatically');
+      const select=doc.querySelector('select[aria-label="Workspace"]');select.value='3';select.dispatchEvent(new win.Event('change',{bubbles:true}));
+      await wait(()=>text().includes('Connected to C.'),'Bob C');await click('Extraction evidence');
+      await wait(()=>text().includes('No retained sources in this Workspace.'),'Bob panel');win.__fixtureFoundationAction='logout';await click('Sign out');
+      await wait(()=>text().includes('Sign in with your administrator-provided account.'),'logout');
+      assert(!doc.querySelector('[data-testid="extraction-evidence-panel"]'),'logout evidence remained');
+    });
+    await test('collected forbidden requests are rejected after document replacement',async()=>{
+      const probes=[{url:'/api/workspaces/1/applications/',method:'POST'},
+                    {url:'/api/email/sync',method:'GET'},{url:'/api/email/sync',method:'POST'},
+                    {url:'/api/workspaces/1/retained-messages/1/',method:'GET'},
+                    {url:'/api/workspaces/1/retained-messages/',method:'PATCH'},
+                    {url:'/api/job-postings',method:'GET'}];
+      const prior=win.__fixtureIntercept;
+      try {
+        for(const probe of probes){
+          // Exercise the real captured-fetch logger, but never transmit the forbidden call.
+          win.__fixtureIntercept=url=>url===probe.url?response(200,{testOnly:true}):null;
+          const before=traffic.length;
+          await win.fetch(probe.url,{method:probe.method});
+          assert(traffic.length===before+1,'injected call bypassed aggregate logger');
+          const recorded=traffic[before];
+          assert(recorded.url===probe.url&&recorded.method===probe.method,'wrong collected probe');
+          let rejected=false;try { assertTraffic([recorded]); } catch (_) { rejected=true; }
+          assert(rejected,'forbidden collected request accepted');rejectedProbes.add(recorded);
+        }
+      } finally { win.__fixtureIntercept=prior; }
+    });
+    await test('entire product traffic allowlist covers all document lifetimes',async()=>{
+      assert(traffic.length>0,'no product traffic collected');
+      assert(rejectedProbes.size===6,'negative probes incomplete');
+      for(const call of traffic){
+        if(rejectedProbes.has(call))assert(!allowedTraffic(call),'forbidden probe became allowed');
+        else assertTraffic([call]);
+      }
+    });
+    frame.remove();
     output.textContent += `${passed} passed; 0 failed\n` + navigator.userAgent;
   } catch(e) { output.textContent += 'FAIL ' + e.message + '\n' + `${passed} passed; 1 failed`; }
   finally { this.disabled = false; }

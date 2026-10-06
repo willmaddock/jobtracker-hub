@@ -7093,6 +7093,214 @@ function App(){
   );
 }
 
+// BEGIN DJANGO EVIDENCE STATE — pure helpers also exercised by Node tests.
+function evidenceInitialState() {
+  return {sources:[], after:null, source:null, operations:[], cursor:null, eligible:true,
+    listReady:false, evidenceReady:false, listLoading:null, evidenceLoading:null,
+    listError:null, evidenceError:null, expanded:null, visible:50};
+}
+function evidenceSafeId(value) {
+  if (!Number.isSafeInteger(value) || value < 1) throw new JTHApi.ApiError("unsafe_identifier", "This identifier cannot be represented safely in this browser workflow.");
+  return value;
+}
+function evidenceUnexpected() { throw new JTHApi.ApiError("unexpected_response", "Unexpected response."); }
+function evidenceUuid(value) {
+  if (typeof value !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) evidenceUnexpected();
+  return value;
+}
+function evidenceStamp(value) {
+  if (typeof value !== "string" || !Number.isFinite(Date.parse(value))) evidenceUnexpected();
+  return value;
+}
+function evidenceSources(page) {
+  if (!page || !Array.isArray(page.results) || !("next_after" in page)) evidenceUnexpected();
+  const keys = new Set();
+  const results = page.results.map(row => {
+    if (!row || typeof row.eligible !== "boolean" || !["retained","conflict"].includes(row.state)
+        || row.eligible !== (row.state === "retained")) evidenceUnexpected();
+    const portable = evidenceUuid(row.portable_id);
+    if (keys.has(portable)) evidenceUnexpected(); keys.add(portable);
+    return {id:evidenceSafeId(row.id), portable_id:portable, retained_at:evidenceStamp(row.retained_at),
+      state:row.state, eligible:row.eligible};
+  });
+  const after = page.next_after === null ? null : evidenceSafeId(page.next_after);
+  if (after !== null && (!results.length || after !== results[results.length - 1].id)) evidenceUnexpected();
+  return {results, after};
+}
+function evidencePage(page, workspaceId, sourceId) {
+  if (!page || !page.source || !Array.isArray(page.operations) || typeof page.has_more !== "boolean"
+      || typeof page.source.source_eligible !== "boolean" || page.consistency !== "advisory") evidenceUnexpected();
+  if (evidenceSafeId(page.source.workspace_id) !== workspaceId
+      || evidenceSafeId(page.source.retained_message_id) !== sourceId) evidenceUnexpected();
+  evidenceUuid(page.source.retained_message_portable_id);
+  if (page.has_more ? typeof page.next_cursor !== "string" || !page.next_cursor : page.next_cursor !== null) evidenceUnexpected();
+  const operationKeys = new Set();
+  const operations = page.operations.map(op => {
+    if (!op || typeof op.extractor_method !== "string" || typeof op.extractor_version !== "string"
+        || !Number.isSafeInteger(op.output_count) || op.output_count < 0 || !Array.isArray(op.outputs)
+        || op.output_count !== op.outputs.length) evidenceUnexpected();
+    const operationId = evidenceUuid(op.operation_id);
+    if (operationKeys.has(operationId)) evidenceUnexpected(); operationKeys.add(operationId);
+    const outputKeys = new Set();
+    const outputs = op.outputs.map(output => {
+      if (!output || typeof output.source !== "string") evidenceUnexpected();
+      const portable = evidenceUuid(output.portable_id);
+      if (outputKeys.has(portable)) evidenceUnexpected(); outputKeys.add(portable);
+      const result = {portable_id:portable, source:output.source};
+      for (const field of ["title","company","location","salary","employment_type"]) {
+        if (output[field] !== null && typeof output[field] !== "string") evidenceUnexpected();
+        result[field] = output[field];
+      }
+      return result;
+    });
+    return {operation_id:operationId, extracted_at:evidenceStamp(op.extracted_at), recorded_at:evidenceStamp(op.recorded_at),
+      extractor_method:op.extractor_method, extractor_version:op.extractor_version, output_count:op.output_count, outputs};
+  });
+  if (page.has_more && !operations.length) evidenceUnexpected();
+  return {operations, cursor:page.next_cursor, eligible:page.source.source_eligible};
+}
+function createEvidenceLane(context) {
+  let generation = 0, alive = true, controller = null;
+  return {
+    start(source = null) {
+      if (controller) controller.abort();
+      controller = new AbortController();
+      return {generation:++generation, captured:context.capture(), source, signal:controller.signal};
+    },
+    current(token, source = token.source) {
+      return alive && generation === token.generation && token.source === source && context.current(token.captured);
+    },
+    invalidate() { generation++; if (controller) controller.abort(); },
+    dispose() { alive = false; generation++; if (controller) controller.abort(); },
+  };
+}
+function evidenceFailure(error) {
+  if (["stale_response","aborted"].includes(error.code) || error.name === "AbortError") return null;
+  if (error.code === "unsafe_identifier") return {message:"This identifier cannot be represented safely in this browser workflow.", retry:null, clear:true};
+  if (error.status === 401 && error.code === "authentication_required") return {auth:true, clear:true};
+  if (error.status === 404) return {message:"Source or Workspace unavailable.", retry:null, clear:true, unselect:true};
+  if (error.status === 409 && error.code === "retained_source_invalid") return {message:"Source representation cannot be inspected safely.", retry:null, clear:true};
+  if (error.status === 409 && error.code === "posting_extraction_evidence_invalid") return {message:"Extraction history cannot be inspected safely.", retry:null, clear:true};
+  if (error.status === 400) return {message:"Evidence navigation failed. Restart from the first page.", retry:"restart", clear:true};
+  if (error.status === 500 || error.code === "network_error") return {message:"Inspection failed. Try again.", retry:"same", clear:false};
+  return {message:"Unexpected response.", retry:null, clear:true};
+}
+function evidenceTransition(state, action) {
+  if (action.type === "reset") return evidenceInitialState();
+  if (action.type === "select") return {...state, source:action.source, operations:[], cursor:null,
+    eligible:action.source.eligible, evidenceReady:false, evidenceError:null, evidenceLoading:null, expanded:null, visible:50};
+  if (action.type === "start") return {...state, [action.lane + "Loading"]:action.more ? "more" : "initial", [action.lane + "Error"]:null};
+  if (action.type === "finish") return {...state, [action.lane + "Loading"]:null};
+  if (action.type === "sources") return {...state, sources:action.more ? [...state.sources,...action.page.results] : action.page.results,
+    after:action.page.after, listReady:true, listError:null};
+  if (action.type === "page") return {...state, operations:action.more ? [...state.operations,...action.page.operations] : action.page.operations,
+    cursor:action.page.cursor, eligible:action.page.eligible, evidenceReady:true, evidenceError:null};
+  if (action.type === "error") {
+    const error = {...action.error, navigation:action.navigation};
+    if (action.lane === "list") return {...state, listError:error, listLoading:null, ...(error.clear ? {sources:[],after:null,source:null,operations:[],cursor:null,expanded:null,evidenceReady:false,evidenceLoading:null} : {})};
+    return {...state, evidenceError:error, evidenceLoading:null, ...(error.clear ? {operations:[],cursor:null,expanded:null,evidenceReady:false} : {}), ...(error.unselect ? {source:null} : {})};
+  }
+  if (action.type === "expand") return {...state, expanded:state.expanded === action.id ? null : action.id, visible:50};
+  if (action.type === "reveal") return {...state, visible:Math.min(state.visible + 50, action.total)};
+  return state;
+}
+// END DJANGO EVIDENCE STATE
+
+function EvidenceTime({value}) {
+  return <time dateTime={value} title={value}>{new Date(value).toLocaleString()} (local time)</time>;
+}
+function EvidenceValue({value}) {
+  return value === null ? <em>Not supplied</em> : value === "" ? <em>Explicitly blank</em> : <span style={{whiteSpace:"pre-wrap",overflowWrap:"anywhere"}}>{value}</span>;
+}
+function RetainedExtractionEvidencePanel({client, context, workspaceId, onClose, onAuthFailure}) {
+  const [state, dispatch] = React.useReducer(evidenceTransition, undefined, evidenceInitialState);
+  const listLane = useMemo(() => createEvidenceLane(context), [context]);
+  const evidenceLane = useMemo(() => createEvidenceLane(context), [context]);
+  const selected = useRef(null);
+  const auth = useRef(onAuthFailure); auth.current = onAuthFailure;
+  function valid(lane, token) { return lane.current(token, lane === evidenceLane ? selected.current : null); }
+  function fail(lane, token, error, navigation) {
+    if (!valid(lane, token)) return;
+    const failure = evidenceFailure(error);
+    if (!failure) return;
+    if (failure.auth) {
+      listLane.invalidate(); evidenceLane.invalidate(); selected.current = null;
+      dispatch({type:"reset"}); auth.current({code:"authentication_required"}); return;
+    }
+    if (failure.unselect || lane === listLane && failure.clear) { evidenceLane.invalidate(); selected.current = null; }
+    dispatch({type:"error",lane:lane === listLane ? "list" : "evidence",error:failure,navigation});
+  }
+  async function loadSources(after = null) {
+    const token = listLane.start();
+    dispatch({type:"start",lane:"list",more:after !== null});
+    try {
+      const page = evidenceSources(await client.readRetainedMessages({after,captured:token.captured,signal:token.signal}));
+      if (!valid(listLane, token)) return;
+      dispatch({type:"sources",page,more:after !== null});
+    } catch (error) { fail(listLane,token,error,after); }
+    finally { if (valid(listLane,token)) dispatch({type:"finish",lane:"list"}); }
+  }
+  async function loadEvidence(sourceId, cursor = null) {
+    const token = evidenceLane.start(sourceId);
+    dispatch({type:"start",lane:"evidence",more:cursor !== null});
+    try {
+      const page = evidencePage(await client.readRetainedExtractionEvidence(sourceId,
+        {cursor,captured:token.captured,signal:token.signal}), workspaceId, sourceId);
+      if (!valid(evidenceLane, token)) return;
+      dispatch({type:"page",page,more:cursor !== null});
+    } catch (error) { fail(evidenceLane,token,error,cursor); }
+    finally { if (valid(evidenceLane,token)) dispatch({type:"finish",lane:"evidence"}); }
+  }
+  function selectSource(source) {
+    evidenceSafeId(source.id); selected.current = source.id;
+    dispatch({type:"select",source}); loadEvidence(source.id);
+  }
+  useEffect(() => {
+    loadSources();
+    return () => { selected.current = null; listLane.dispose(); evidenceLane.dispose(); };
+  }, [client, context, workspaceId, listLane, evidenceLane]);
+  function errorView(error, lane) {
+    if (!error) return null;
+    return <div role="alert"><p>{error.message}</p>{error.retry && <button className="btn" disabled={!!state[lane + "Loading"]}
+      onClick={() => lane === "list" ? loadSources(error.retry === "restart" ? null : error.navigation)
+        : state.source && loadEvidence(state.source.id,error.retry === "restart" ? null : error.navigation)}>
+      {error.retry === "restart" ? "Restart from first page" : "Retry inspection"}</button>}</div>;
+  }
+  return <section aria-label="Extraction evidence" data-testid="extraction-evidence-panel" style={{marginTop:16,textAlign:"left",overflowWrap:"anywhere"}}>
+    <h2>Extraction evidence</h2><button className="btn" onClick={onClose}>Close extraction evidence</button>
+    <h3>Retained sources</h3>
+    {state.listLoading && <p role="status">{state.listLoading === "more" ? "Loading more sources…" : "Loading retained sources…"}</p>}
+    {errorView(state.listError,"list")}
+    {state.listReady && !state.sources.length && !state.listError && <p>No retained sources in this Workspace.</p>}
+    <ul style={{paddingLeft:20,maxHeight:240,overflowY:"auto"}}>{state.sources.map(source => <li key={source.portable_id}>
+      <button className="btn" aria-pressed={state.source?.id === source.id} onClick={() => selectSource(source)}>
+        Source {source.id} — <EvidenceTime value={source.retained_at} /> — {source.eligible ? "Retained" : "Conflicted"}
+      </button></li>)}</ul>
+    {state.after !== null && !state.listError && <button className="btn" disabled={!!state.listLoading} onClick={() => loadSources(state.after)}>Load more sources</button>}
+    {state.source && <h3>History for source {state.source.id}</h3>}
+    {state.source && !state.eligible && <p role="status">Source currently ineligible. Historical evidence remains available.</p>}
+    {state.evidenceLoading && <p role="status">{state.evidenceLoading === "more" ? "Loading more history…" : "Loading extraction history…"}</p>}
+    {errorView(state.evidenceError,"evidence")}
+    {state.evidenceReady && !state.operations.length && !state.evidenceError && <p>No completed extraction history for this source.</p>}
+    {state.operations.map(operation => <article key={operation.operation_id} style={{borderTop:"1px solid currentColor",paddingTop:12,marginTop:12}}>
+      <h4>{operation.output_count} outputs — {operation.extractor_method} / {operation.extractor_version}</h4>
+      <p>Extracted: <EvidenceTime value={operation.extracted_at} /><br />Recorded: <EvidenceTime value={operation.recorded_at} /></p>
+      <details><summary>Operation identity</summary><p>{operation.operation_id}</p></details>
+      {operation.output_count > 0 && <button className="btn" aria-expanded={state.expanded === operation.operation_id}
+        onClick={() => dispatch({type:"expand",id:operation.operation_id})}>{state.expanded === operation.operation_id ? "Hide outputs" : "Show outputs"}</button>}
+      {state.expanded === operation.operation_id && <div>
+        <p role="status">Showing {Math.min(state.visible,operation.output_count)} of {operation.output_count} outputs</p>
+        {operation.outputs.slice(0,state.visible).map(output => <dl key={output.portable_id} style={{borderTop:"1px dotted currentColor"}}>
+          {[['title','Title'],['company','Company'],['location','Location'],['salary','Salary'],['employment_type','Employment type'],['source','Extraction source']].map(([field,label]) =>
+            <React.Fragment key={field}><dt>{label}</dt><dd><EvidenceValue value={output[field]} /></dd></React.Fragment>)}</dl>)}
+        {state.visible < operation.output_count && <button className="btn" onClick={() => dispatch({type:"reveal",total:operation.output_count})}>Show 50 more outputs</button>}
+      </div>}
+    </article>)}
+    {state.cursor !== null && !state.evidenceError && <button className="btn" disabled={!!state.evidenceLoading} onClick={() => loadEvidence(state.source.id,state.cursor)}>Load more history</button>}
+    {state.evidenceReady && <p>History navigation is advisory, not a snapshot.</p>}
+  </section>;
+}
+
 // The Django entry never mounts App: its effects and caches belong to FastAPI.
 function DjangoFoundation() {
   const theme = useTheme();
@@ -7108,11 +7316,13 @@ function DjangoFoundation() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [connected, setConnected] = useState(false);
+  const [evidenceOpen, setEvidenceOpen] = useState(false);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
 
   function clearIdentity() {
+    setEvidenceOpen(false);
     if (identity.current !== null) history.replaceState(null, "", location.pathname + location.search);
     context.invalidate(); context.setActor(null); client.clearCsrf();
     identity.current = null; setUser(null); setWorkspaces([]);
@@ -7127,6 +7337,7 @@ function DjangoFoundation() {
     } else setError(e.message);
   }
   async function selectRoute(list) {
+    setEvidenceOpen(false);
     const id = JTHWorkspace.parseRoute(window.location.hash);
     context.invalidate(); context.select(null); setConnected(false); setSelected(null);
     if (!id) {
@@ -7149,6 +7360,7 @@ function DjangoFoundation() {
     await selectRoute(list);
   }
   async function checkSession() {
+    setEvidenceOpen(false);
     context.invalidate(); setPhase("loading"); setConnected(false); setError("");
     try {
       await client.bootstrap();
@@ -7179,6 +7391,7 @@ function DjangoFoundation() {
     } catch (e) { report(e); } finally { setPassword(""); setBusy(false); }
   }
   async function signOut() {
+    setEvidenceOpen(false);
     setBusy(true); setError("");
     try {
       await client.request("/api/auth/logout", {method:"POST"});
@@ -7198,7 +7411,7 @@ function DjangoFoundation() {
     } catch (e) { report(e); } finally { setBusy(false); }
   }
   return <main className="app-shell" style={{alignItems:"center",justifyContent:"center"}}>
-    <section className="workspace-preview" style={{width:420,maxWidth:"90vw",padding:24}}>
+    <section className="workspace-preview" style={{width:420,maxWidth:"90vw",padding:24,maxHeight:"calc(100vh - 32px)",overflowY:"auto"}}>
       <h1>JobTracker Hub</h1>
       {error && <p role="alert" className="workspace-pop-err">{error}</p>}
       {phase === "loading" ? <p role="status">Checking session…</p> : phase === "unavailable" ? <p>Session could not be verified. Refresh to continue.</p> : phase === "login" ?
@@ -7219,6 +7432,9 @@ function DjangoFoundation() {
             <button className="btn" disabled={busy || !name.trim()}>Create workspace</button>
           </form>
           {selected && <p role="status">{connected ? "Connected to " + selected.name + "." : "Checking workspace connection…"}</p>}
+          {selected && connected && <button className="btn" disabled={evidenceOpen} onClick={() => setEvidenceOpen(true)}>Extraction evidence</button>}
+          {selected && connected && evidenceOpen && <RetainedExtractionEvidencePanel key={user.id + ":" + selected.id}
+            client={client} context={context} workspaceId={selected.id} onClose={() => setEvidenceOpen(false)} onAuthFailure={report} />}
           <p>Application screens are not connected in this migration checkpoint.</p>
           <button className="btn" disabled={busy} onClick={signOut}>Sign out</button>
         </>}

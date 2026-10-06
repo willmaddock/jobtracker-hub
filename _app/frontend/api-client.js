@@ -30,15 +30,18 @@
         throw new ApiError("invalid_request", "Expected a same-origin API path.");
       }
     }
-    async function request(path, { method = "GET", body, captured = context.capture() } = {}) {
+    async function request(path, { method = "GET", body, captured = context.capture(), signal } = {}) {
       pathCheck(path); check(captured);
       const unsafe = !["GET", "HEAD", "OPTIONS"].includes(method);
       if (unsafe && !csrf) throw new ApiError("csrf_required", "Refresh authentication before trying again.");
+      if (signal && signal.aborted) throw new ApiError("aborted", "Request canceled.", 0, null, captured);
+      const payload = body === undefined ? undefined : JSON.stringify(body);
       const controller = new AbortController();
+      const externalAbort = () => controller.abort();
+      if (signal) signal.addEventListener("abort", externalAbort, {once:true});
       const release = !unsafe ? context.trackRead(() => controller.abort()) : () => {};
       const headers = { Accept: "application/json" };
       if (unsafe) headers["X-CSRFToken"] = csrf;
-      const payload = body === undefined ? undefined : JSON.stringify(body);
       if (payload !== undefined) headers["Content-Type"] = "application/json";
       try {
         const response = await fetchImpl(path, { method, headers, body: payload, credentials: "same-origin", cache: "no-store", signal: controller.signal });
@@ -49,10 +52,33 @@
         check(captured);
         if (e instanceof ApiError) throw e;
         throw new ApiError(e.name === "AbortError" ? "aborted" : "network_error", unsafe ? "Connection lost. The change may have completed. Refresh before trying again." : "Connection failed. Try again.", 0, null, captured);
-      } finally { release(); }
+      } finally { release(); if (signal) signal.removeEventListener("abort", externalAbort); }
+    }
+    function safeId(value) {
+      if (!Number.isSafeInteger(value) || value < 1) throw new ApiError("unsafe_identifier", "This identifier cannot be represented safely in this browser workflow.");
+      return value;
+    }
+    function retainedPath(captured) {
+      check(captured);
+      if (!captured.actor) throw new ApiError("workspace_required", "Select a workspace first.");
+      return `/api/workspaces/${safeId(captured.workspace)}/retained-messages/`;
     }
     return {
       request,
+      readRetainedMessages({after = null, captured = context.capture(), signal} = {}) {
+        const path = retainedPath(captured), query = new URLSearchParams();
+        if (after !== null) query.set("after", safeId(after));
+        return request(path + (query.size ? "?" + query.toString() : ""), {captured, signal});
+      },
+      readRetainedExtractionEvidence(retainedMessageId, {cursor = null, captured = context.capture(), signal} = {}) {
+        const path = retainedPath(captured) + safeId(retainedMessageId) + "/posting-extractions/";
+        const query = new URLSearchParams();
+        if (cursor !== null) {
+          if (typeof cursor !== "string" || !cursor) throw new ApiError("invalid_request", "Invalid evidence navigation.");
+          query.set("cursor", cursor);
+        }
+        return request(path + (query.size ? "?" + query.toString() : ""), {captured, signal});
+      },
       clearCsrf() { csrf = null; },
       async bootstrap() {
         const result = await request("/api/auth/csrf");
