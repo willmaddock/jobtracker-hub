@@ -1,10 +1,10 @@
 # Django migration: current status
 
 Maintained checkpoint: 2026-10-06. Authoritative branch: `django-migration`;
-implementation checkpoint `bcad64038e6fbb4c224dc5a7ddfe075d4b3f22f7`
-(`Implement retained Application review browser`), parent documentation checkpoint
-`4fea42f9de9baa2ce86e4cf26f3c6138fde15d90`
-(`Reconcile Application browser migration status`). Before this documentation edit,
+implementation checkpoint `17ec29a476503d0e91ce7b6f123604386e04dad3`
+(`Implement read-only Category workspace browser`), parent documentation checkpoint
+`6b91cd0f8c0b3a58334535db2a42a122a6ce73c0`
+(`Reconcile retained Application review browser status`). Before this documentation edit,
 local HEAD, tracking ref and live remote were verified synchronized at that checkpoint,
 ahead/behind 0/0, with a clean working tree and empty index.
 
@@ -89,11 +89,14 @@ Workspace-Scoped Read-Only Application List and Core Detail Browser Workflow is
 committed/pushed at `845ad1f57addaf350b974aeaecc5aba5a750d2fa`, consuming existing
 Application GET authority without changing backend semantics. Workspace-Scoped Read-Only
 Retained Application Review Inspection and Application Core Navigation is committed/pushed
-at the current implementation checkpoint, adding presentation and transient navigation
-only over existing review/Application GETs. Accumulated browser capability is
+at `bcad64038e6fbb4c224dc5a7ddfe075d4b3f22f7`. Workspace-Scoped Read-Only Category
+Navigation and Application Core Inspection is committed/pushed at the current implementation
+checkpoint, adding presentation and transient navigation only over existing Category/Application
+GETs. Accumulated browser capability is
 Workspace/session shell → extraction-evidence inspection → Application list/core-detail
-browsing → retained-review inspection with Application navigation. These are separate
-consumers, not one domain authority chain. Review/Application browser mutations, broader
+browsing → retained-review inspection with Application navigation → named Category inspection
+with Application navigation. These are separate consumers, not one domain authority chain.
+Category/review/Application browser mutations, broader
 evidence workflows, frontend migration, historical reconciliation, email derivation and operational
 cutover remain pending.
 
@@ -114,6 +117,89 @@ cutover remain pending.
 
 ## 2. Current verification evidence
 
+
+### Workspace-Scoped Read-Only Category Navigation and Application Core Inspection — committed checkpoint, 2026-10-06
+
+Reviewed, committed and pushed at `17ec29a476503d0e91ce7b6f123604386e04dad3`
+(`Implement read-only Category workspace browser`), parent documentation checkpoint
+`6b91cd0f8c0b3a58334535db2a42a122a6ce73c0`
+(`Reconcile retained Application review browser status`). Six files changed, with
+511 insertions and nine deletions: browser/client, disposable fixtures and tests only.
+Production Category/Application APIs and business semantics, models, migrations, settings,
+dependencies, provider code and documentation were unchanged in the implementation commit.
+
+Authenticated Django mode now offers Workspace-scoped named Category list/detail/member
+inspection and direct member Application core-detail navigation. This consumes existing
+backend GET authority; new authority is read-only browser presentation and transient
+navigation only. Back/Close, explicit refresh, loading/error/retry and unavailable states
+are supported. Request generations, aborts and immediate cancellation protect Category
+list, sequential detail/member inspection and shared Application detail, including obsolete
+success/error/finalization and authentication responses. Workspace/session/selection changes
+clear obsolete state; one primary workflow panel is active. Category/member strings render
+as plain text without raw HTML presentation or a general security-audit claim.
+
+Archived, non-trashed Categories are intentionally included. Empty Categories remain
+inspectable; duplicate/similar names remain distinct by stable numeric and portable identity,
+with ID, organization section and Archive disclosure distinguishing records. Server ordering
+is preserved. Archived Category detail and archived live member Applications remain visible;
+Archive is independent from Trash. Category organization section and Application section may
+differ legitimately; neither determines or rewrites the other. The protected `applications`
+pipeline classification remains outside named Categories; no pipeline/uncategorized row is
+synthesized.
+
+Displayed membership comes only from the Category membership GET, not reconstruction from
+the Application list or inference from names/sections. It is a current observation, not
+historical provenance or cached frontend authority. Category detail and membership are
+sequential advisory reads, not one transaction-wide snapshot. Known trashed detail prevents
+a member request. If later membership reports Category Trash or unavailability, previously
+validated detail may remain as an earlier observation while members clear. Trash, 404 and
+request errors are not empty Categories; empty is shown only after successful empty membership.
+Retry Category inspection clears dependent state and repeats detail before eligible membership.
+
+Known member Applications open directly by scoped detail GET without loading the full
+Application list, reusing existing core-detail read authority and lifecycle disclosure.
+Supplied portable Application identity is verified case-insensitively. Current detail may
+show changed Category, Archive, Trash or unavailability; Application identity is distinct
+from membership state, and later observations do not erase the earlier Category observation
+or prove continued membership. The standalone Application detail Category reference remains
+non-navigable: this slice adds Category → Application navigation, not the reverse direction.
+
+Retained pre-commit implementation evidence: Node **28 passed, zero failed/skipped**;
+Chromium combined Category/Application/review/extraction-evidence workflow **65 passed,
+zero failed**; focused Category/membership Django **23 passed**; neighboring Django
+**128 passed**. Explicitly labelled `accounts applications documents email_sync postings core`
+suites **1,342 passed, 13 PostgreSQL-only skipped**, zero failures/errors (1,355 total;
+final run 144.211 seconds). System, Python AST/static, JavaScript syntax and whitespace
+checks passed. Postings drift: none; global drift: only known `EmailAccount.provider`
+alteration, not generated. Tests ran before implementation commit; the staged snapshot
+matched the reviewed implementation. Tests were not rerun after commit/push or during
+documentation reconciliation. No fresh Safari, production-browser, PostgreSQL operational,
+legacy-suite or generic-discovery validation is claimed.
+
+Generic no-label discovery remains a **PRE-EXISTING NON-BLOCKER**, unresolved, unremediated
+and not green. This Category slice did not change discovery/settings; earlier evidence remains
+below. The prior retained-review traffic-coverage caveat remains unchanged in its entry below.
+
+**MINOR — Category traffic assertion excludes later coexistence intervals** remains a
+non-blocking testing limitation: the narrow assertion covers the main Category workflow,
+while later coexistence-test Category intervals use the broader combined traffic policy.
+No unauthorized production Category request was observed. No remediation was performed.
+
+Accepted limitations: Category list and membership arrays are unpaginated; all returned
+records render without silent truncation. Full serializer/download cost is inherited;
+payloads are not bounded by this slice; large-scale performance remains unvalidated.
+JavaScript-safe numeric IDs remain required; unsafe identities fail visibly without changing
+backend representation or providing arbitrary-large-ID support. Selection is transient,
+Workspace hash routing is unchanged, and panel state is not persisted; browser refresh loses
+selection. No pagination API or resource/deep links were added.
+
+No Category create/rename/edit/archive/unarchive/Trash/restore, Application assignment/
+Trash/restore/manual override, retained-review mutation, pipeline redesign, document/message/
+body/dossier browsing, canonical posting UI, provider automation, generalized routing or
+persistence was added. This is frontend/product progress only; production browser support,
+scale/performance, deployment, operations, backup/restore and cutover gates remain open.
+The future documentation commit is not yet created; its SHA is unknown and its parent must
+be this implementation checkpoint.
 
 ### Workspace-Scoped Read-Only Retained Application Review Inspection and Application Core Navigation — committed checkpoint, 2026-10-06
 
@@ -193,8 +279,11 @@ extraction execution, canonical posting navigation, provider automation, candida
 pagination or generalized routing was added. This is frontend/product progress only;
 production browser support, large-scale performance, deployment, operations, backup/restore
 and cutover gates remain open.
-The future documentation commit is not yet created; its SHA is unknown and its parent must
-be this implementation checkpoint.
+Its documentation reconciliation was subsequently committed at
+`6b91cd0f8c0b3a58334535db2a42a122a6ce73c0`
+(`Reconcile retained Application review browser status`), with this retained-review
+implementation checkpoint as parent. Later Category browsing above extends the browser
+consumers; original scope, counts, exclusions and limitations remain historical.
 
 ### Workspace-Scoped Read-Only Application List and Core Detail Browser Workflow — committed checkpoint, 2026-10-06
 
@@ -1336,10 +1425,10 @@ No newly accepted capability is marked verified merely because it is designed.
 | Area | Implemented now | Automated verification | Operational/end-to-end evidence |
 |---|---|---|---|
 | Auth/workspaces | Session-only product auth, anonymous-login CSRF bootstrap/protection, structured DRF exception codes; owned workspace list/create and explicit route selection in Django entry | 104 accounts/core subset; bounded browser session/tab checks described in §2 | Local foundation validated; broader onboarding/production/cutover pending |
-| Frontend/desktop | Existing HTML has explicit DjangoFoundation root/client/context with authenticated read-only retained extraction evidence, Application list/core-detail browsing and retained Application review inspection/navigation; legacy App never mounts in Django mode and remains unchanged; desktop remains FastAPI | Current combined review/Application/evidence browser and read-contract evidence in §2; prior retained UI counts remain historical; historical foundation Safari/Chromium 7/7 retained in §2; current Safari unvalidated; three parent-reproduced legacy failures | Local foundation, evidence, core Application and retained-review inspection/navigation validated in disposable fixtures; broader Application/domain frontend migration and production/cutover remain incomplete |
-| Applications/overrides | Stable numeric PKs plus workspace portable UUID; shared protected creation, explicit repeat challenges and durable replay; existing scoped list/detail reads consumed by read-only Workspace browser and referenced review destinations | Identity/ownership and duplicate-safe future transition coverage plus current browser/read-contract evidence in §2 | Local read-only core browsing validated; creation/edit/override and duplicate-warning UI, dossier/documents/messages and broader workflows pending |
+| Frontend/desktop | Existing HTML has explicit DjangoFoundation root/client/context with authenticated read-only retained extraction evidence, Application list/core-detail browsing, retained Application review inspection/navigation and named Category list/detail/member inspection with Application navigation; legacy App never mounts in Django mode and remains unchanged; desktop remains FastAPI | Current combined Category/review/Application/evidence browser and read-contract evidence in §2; prior retained UI counts remain historical; historical foundation Safari/Chromium 7/7 retained in §2; current Safari unvalidated; three parent-reproduced legacy failures | Local foundation, evidence, core Application, retained-review and named Category inspection/navigation validated in disposable fixtures; broader Application/domain frontend migration and production/cutover remain incomplete |
+| Applications/overrides | Stable numeric PKs plus workspace portable UUID; shared protected creation, explicit repeat challenges and durable replay; existing scoped list/detail reads consumed by read-only Workspace browser, referenced review destinations and Category member navigation | Identity/ownership and duplicate-safe future transition coverage plus current browser/read-contract evidence in §2 | Local read-only core browsing validated; creation/edit/override and duplicate-warning UI, dossier/documents/messages and broader workflows pending |
 | Derivation/dossier | Canonical per-Application status/activity, manual precedence, source precision, confirmation candidate/modes, duplicate-safe transitions; read-only dossier GET | Current derivation/forward-migration/SQLite coverage in §2 | Historical reconciliation, import provenance, dossier/evidence frontend and operations pending; core server-resolved fields are displayed read-only |
-| Categories | Native stable identity, single revision-protected membership, independent Archive; committed at `3f564ba`; reversible Trash committed at `74f1e91` | Current Category and lifecycle coverage in §2 | Frontend category workflow pending |
+| Categories | Native stable identity, single revision-protected membership, independent Archive; committed at `3f564ba`; reversible Trash committed at `74f1e91`; DjangoFoundation now consumes existing list/detail/membership GETs for read-only named Category inspection, archived visibility and Application navigation | Current Category read-contract/combined browser evidence and historical lifecycle coverage in §2 | Local read-only named Category inspection/navigation validated in disposable fixtures; Category create/edit/archive/Trash/restore and Application assignment browser mutations, performance and operations pending |
 | Documents/files | Upload/list/type correction/metadata rename; storage URL; retained Trash and effective parent eligibility | Current Document/lifecycle coverage in §2 | Production storage/previews and frontend integration pending |
 | Trash/recovery | Application/Document/Category Trash and Restore, revisions, mutation/admin guards; old deletes retired | Current lifecycle/migration/SQLite race coverage in §2 | Workspace lifecycle, purge, frontend and operational validation deferred |
 | Search/dashboards/settings | Included reads, counts, search, section adapters, merges, and settings scoped to URL workspace; search parity and Ghosted still pending | Scoped isolation coverage; broader target parity pending | Frontend integration pending |
@@ -1381,9 +1470,13 @@ No newly accepted capability is marked verified merely because it is designed.
   importer/cutover work must supply verified provenance and preserve history.
 - Add Ghosted choices/metrics/UI parity. This main-branch change exists only
   in the legacy implementation.
-- Named Categories and Application/Document/Category Trash are now implemented
-  in the backend. Their frontend integration, Workspace lifecycle and confirmed
-  permanent cleanup remain pending.
+- Named Categories and Application/Document/Category Trash are implemented in the
+  backend. Read-only named Category list/detail/member inspection and Category →
+  Application navigation are now implemented in the browser. Category create/edit/archive/
+  Trash/restore, Application assignment and Application/Document Trash/restore browser
+  mutations, Workspace lifecycle and confirmed permanent cleanup remain pending.
+- Manual override API lacks expected-version rejection semantics; safe manual-status browser mutation
+  remains unresolved. Category browsing does not change this concurrency limitation.
 - Complete remaining workspace integration for email/jobs and the frontend;
   included synchronous core APIs are scoped. Adapt remaining payloads/errors and
   search semantics deliberately. Preserve PDF/text/DOCX browser previews.
@@ -1393,13 +1486,17 @@ No newly accepted capability is marked verified merely because it is designed.
 - Legacy Finding 9 lock mitigations are present, but its field root cause is
   unresolved; do not turn that unrelated investigation into migration scope.
 
-Current Application browser limitations are recorded in §2: JavaScript-safe IDs,
-unpaginated full-list loading, transient selection/no deep links, no Category names or
-navigation, no evidence/mutation controls and unvalidated large-Workspace performance.
+Standalone Application list/core-detail panel limitations are recorded in §2:
+JavaScript-safe IDs, unpaginated full-list loading, transient selection/no deep links,
+reference-only Category identity without names or reverse navigation, no evidence/mutation
+controls and unvalidated large-Workspace performance. Separate Category → Application
+inspection is now available; it does not make the Application Category reference navigable.
 Retained-review inspection/navigation is complete, with accumulated-page memory, unpaginated
 detail arrays, inherited creation-result payload cost and transient selection limitations
 recorded in §2. Review mutations, broader evidence/creation-result browsing and canonical-
-posting frontend workflows remain incomplete.
+posting frontend workflows remain incomplete. Named Category inspection/navigation retains
+unpaginated Category/member arrays, inherited serializer/download costs, advisory observations,
+safe-ID and transient-navigation limits; scale/performance remains unvalidated.
 
 ## 7. Current implementation phase
 
@@ -1533,7 +1630,9 @@ Native Category IDs/portable IDs, empty containers, independent archive state,
 single revision-protected membership, creation replay and conservative synthetic
 backfill are implemented. Sections remain classifications. Category membership
 never owns Applications. The supplied historical 245/245 result is distinct from
-the fresh regression verification in §2.
+the fresh regression verification in §2. Later read-only named Category browser inspection
+and Application navigation are recorded in §2; this backend checkpoint's scope and counts
+remain historical.
 
 ### Backend Trash & Restore — committed and pushed at `74f1e91`
 
@@ -1851,11 +1950,11 @@ preservation, reverse limitations and verification evidence.
 
 ## 8. Next recommended implementation actions
 
-1. Retained-text extraction production, explicit operator batch execution, source-scoped read-only evidence inspection, its workspace-scoped read-only HTTP API and authenticated Workspace browser evidence UI are complete through `8a4af32e4fb9949430487449e5cbaaea5ab93a3c`; bounded extraction/retention PostgreSQL validation is complete at `c71f6cdcf183a4e76333b2c62582b8ecfdb1fc68`, alongside the existing explicit retained-posting authorities. Read-only Application list/core-detail browsing is complete at `845ad1f57addaf350b974aeaecc5aba5a750d2fa`; retained Application review inspection with core-detail navigation is complete at `bcad64038e6fbb4c224dc5a7ddfe075d4b3f22f7`, consuming existing GET authority only. The next substantive migration slice remains unselected and unauthorized. Provider/sync adoption, automatic canonical workflows, broader canonical consumers, broader retained-workflow APIs, remaining Application/domain frontend work, concurrency outside the exercised boundary, production load and production/operational/cutover validation require separate planning and authorization. Prior local database provenance remains unresolved.
+1. Retained-text extraction production, explicit operator batch execution, source-scoped read-only evidence inspection, its workspace-scoped read-only HTTP API and authenticated Workspace browser evidence UI are complete through `8a4af32e4fb9949430487449e5cbaaea5ab93a3c`; bounded extraction/retention PostgreSQL validation is complete at `c71f6cdcf183a4e76333b2c62582b8ecfdb1fc68`, alongside the existing explicit retained-posting authorities. Read-only Application list/core-detail browsing is complete at `845ad1f57addaf350b974aeaecc5aba5a750d2fa`; retained Application review inspection with core-detail navigation is complete at `bcad64038e6fbb4c224dc5a7ddfe075d4b3f22f7`; read-only named Category inspection with Application navigation is complete at `17ec29a476503d0e91ce7b6f123604386e04dad3`, consuming existing GET authority only. The next substantive migration slice remains unselected and unauthorized. Provider/sync adoption, automatic canonical workflows, broader canonical consumers, broader retained-workflow APIs, remaining Application/domain frontend work, concurrency outside the exercised boundary, production load and production/operational/cutover validation require separate planning and authorization. Prior local database provenance remains unresolved.
 2. Resolve the legacy verification blockers under separately approved scope before declaring a fully green checkpoint.
 3. Separately scope further review actions and future filtering/queue UX, along with broader email/job and frontend work.
 4. Plan provenance-aware historical reconciliation with importer/cutover work; do not silently backfill current records.
-5. Separately scope remaining core, retained email/review and posting browser workflows; retained extraction evidence inspection, Application core browsing and read-only retained-review inspection/navigation are implemented, without completing review mutations or broader frontend migration.
+5. Separately scope remaining core, retained email/review and posting browser workflows; retained extraction evidence inspection, Application core browsing, read-only retained-review inspection/navigation and named Category inspection/Application navigation are implemented, without completing Category/Application/review mutations or broader frontend migration.
 6. Develop import/export alongside models; rehearse representative workspaces.
 7. Validate production operations and cutover gates before retiring legacy.
 
@@ -1882,7 +1981,7 @@ All remain open unless supported by new, recorded evidence:
   Redis, separate web/worker/Beat, safe required secrets and static/media delivery.
 - Full enabled-provider flows, including retained evidence, retries, and disconnect.
 - Production browser acceptance/support and large-scale frontend performance for core
-  workflows, imports/exports, previews and Trash; local read-only Application/review browsing
+  workflows, imports/exports, previews and Trash; local read-only Application/review/Category browsing
   does not establish mutation workflow or deployment/operational/cutover readiness.
 - Coordinated database/content backup and tested restoration.
 - Documented/logged deployment, migrations, jobs, storage, and rollback operations.
