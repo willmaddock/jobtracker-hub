@@ -1,10 +1,10 @@
 # Django migration: current status
 
 Maintained checkpoint: 2026-10-06. Authoritative branch: `django-migration`;
-implementation checkpoint `845ad1f57addaf350b974aeaecc5aba5a750d2fa`
-(`Implement read-only Application workspace browser`), parent documentation checkpoint
-`29142286011a2e4d15ae148f998506ed08bcbaea`
-(`Reconcile PostgreSQL validation migration status`). Before this documentation edit,
+implementation checkpoint `bcad64038e6fbb4c224dc5a7ddfe075d4b3f22f7`
+(`Implement retained Application review browser`), parent documentation checkpoint
+`4fea42f9de9baa2ce86e4cf26f3c6138fde15d90`
+(`Reconcile Application browser migration status`). Before this documentation edit,
 local HEAD, tracking ref and live remote were verified synchronized at that checkpoint,
 ahead/behind 0/0, with a clean working tree and empty index.
 
@@ -86,12 +86,16 @@ Isolated PostgreSQL validation at `c71f6cdcf183a4e76333b2c62582b8ecfdb1fc68` add
 extraction/retention concurrency evidence for existing production services, without
 changing production transaction semantics or adding mutation authority.
 Workspace-Scoped Read-Only Application List and Core Detail Browser Workflow is
-committed/pushed at the current implementation checkpoint. It consumes existing
-Application GET authority without changing backend semantics. Browser capability
-progress is Workspace/session shell → read-only extraction evidence browsing →
-read-only Application list/core-detail browsing; these are separate consumers, not
-one domain authority chain. Application mutation/evidence workflows, broader frontend
-migration, historical reconciliation, email derivation and operational cutover remain pending.
+committed/pushed at `845ad1f57addaf350b974aeaecc5aba5a750d2fa`, consuming existing
+Application GET authority without changing backend semantics. Workspace-Scoped Read-Only
+Retained Application Review Inspection and Application Core Navigation is committed/pushed
+at the current implementation checkpoint, adding presentation and transient navigation
+only over existing review/Application GETs. Accumulated browser capability is
+Workspace/session shell → extraction-evidence inspection → Application list/core-detail
+browsing → retained-review inspection with Application navigation. These are separate
+consumers, not one domain authority chain. Review/Application browser mutations, broader
+evidence workflows, frontend migration, historical reconciliation, email derivation and operational
+cutover remain pending.
 
 ## 1. Scope and source of truth
 
@@ -110,6 +114,87 @@ migration, historical reconciliation, email derivation and operational cutover r
 
 ## 2. Current verification evidence
 
+
+### Workspace-Scoped Read-Only Retained Application Review Inspection and Application Core Navigation — committed checkpoint, 2026-10-06
+
+Reviewed, committed and pushed at `bcad64038e6fbb4c224dc5a7ddfe075d4b3f22f7`
+(`Implement retained Application review browser`), parent documentation checkpoint
+`4fea42f9de9baa2ce86e4cf26f3c6138fde15d90`
+(`Reconcile Application browser migration status`). Six files changed, with
+586 insertions and 38 deletions: browser/client, disposable fixtures and tests only.
+Production review/Application APIs and business semantics, models, migrations, settings,
+dependencies, provider/Category production code and documentation were unchanged.
+
+Authenticated Django mode now offers Workspace-scoped inclusive retained Application
+review list/detail inspection, with explicit **Load more reviews**, Back/Close and
+loading/empty/unavailable/error/retry states. It consumes existing backend GET authority;
+new authority is presentation and transient navigation only. Request generations,
+aborts and immediate navigation cancellation protect list/page, review and Application
+reads, including obsolete success/error/finalization and authentication responses.
+Workspace/session/selection changes clear obsolete state; only one workflow panel is active.
+Provider/user strings render as plain text, without a body/HTML viewer or a general
+security-audit claim. Existing Application and extraction-evidence workflows passed
+combined regression validation; legacy frontend separation is preserved.
+
+**Initial candidate snapshot** membership and initial classification are historical
+provenance. **Current Application information** (company/role/section) and **Current
+availability** are current observations; original company/role snapshot labels are not
+supplied or fabricated. Candidates remain distinct and are not relationships or acceptance;
+ordering is not confidence ranking. **Existing source relationships** are separate canonical
+retained-source/Application links, not review completion or proof of a browser action.
+Current disposition is **Active** or **Dismissed**; restored reviews appear Active.
+Current sticky source conflict is independent of disposition and does not mean dismissal,
+acceptance or review invalidity. No corrective-action authority was introduced.
+
+Referenced Applications open directly by scoped detail GET without loading the full
+Application list, reusing existing core-detail read behavior and lifecycle disclosure.
+Candidate destinations additionally verify the known Application portable UUID; relationship
+references do not supply that UUID. Live and archived targets are inspectable; Archive is
+separate from Trash. Trashed targets have read-only disclosure and no restore control.
+Removed candidates retain portable provenance without a destination request; unavailable/
+disappearing destinations clear detail without erasing historical review provenance.
+
+Retained pre-commit implementation evidence: Node **23 passed, zero failed/skipped**;
+Chromium combined review/Application/extraction-evidence workflow **51 passed, zero failed**;
+retained-review Django **27 passed**; neighboring regression **127 passed**; combined
+focused/neighboring **154 passed**. Explicitly labelled
+`accounts applications documents email_sync postings core` suites **1,338 passed,
+13 PostgreSQL-only skipped**, zero failures/errors (1,351 total; final run 159.765 seconds).
+System, Python AST/static, JavaScript syntax and whitespace checks passed. Postings drift:
+none; global drift: only known `EmailAccount.provider` alteration, not generated.
+Tests ran before implementation commit; the staged snapshot matched the reviewed state.
+Tests were not rerun after commit/push or during documentation reconciliation. No fresh
+Safari, PostgreSQL, legacy-suite or generic-discovery validation is claimed.
+
+Generic no-label discovery remains a **PRE-EXISTING NON-BLOCKER**: harness-gated
+`config.settings.test_postgres` requires its PostgreSQL manifest. This slice did not
+cause or remediate the limitation; discovery/settings are unchanged and generic discovery
+is not green. Earlier observed discovery evidence remains below.
+
+**MINOR — workflow-specific traffic assertion coverage** remains a non-blocking testing
+limitation: the combined browser allowlist permits reads used by other panels and is
+broader than the review-specific GET boundary. Reviewed production retained-review code
+contains no unauthorized extra reads. No remediation was performed in this slice.
+
+Accepted limitations: review-list traversal uses existing deterministic keyset continuation,
+not a snapshot; current values may change between reads and accumulated pages consume
+browser memory. Complete returned candidate/relationship arrays are unpaginated and not
+silently truncated. Reported counts can differ from returned references under filtering/
+concurrency; large-detail performance remains unvalidated. Creation-result history is not
+retained in browser state, rendered or navigated; inherited backend serialization, payload
+and validation work remains. JavaScript-safe numeric IDs remain required; unsafe IDs fail
+visibly without changing backend identity representation or adding general large-ID support.
+Navigation is transient, Workspace hash routing unchanged, and panel state is not persisted;
+refresh loses selection. No resource routes, deep links or generalized pagination were added.
+
+No review create-Application/attach/accept/dismiss/restore or other browser mutation, Category
+workflow, document/message/body/dossier/AccountMatch or creation-result-history browsing,
+extraction execution, canonical posting navigation, provider automation, candidate/relationship
+pagination or generalized routing was added. This is frontend/product progress only;
+production browser support, large-scale performance, deployment, operations, backup/restore
+and cutover gates remain open.
+The future documentation commit is not yet created; its SHA is unknown and its parent must
+be this implementation checkpoint.
 
 ### Workspace-Scoped Read-Only Application List and Core Detail Browser Workflow — committed checkpoint, 2026-10-06
 
@@ -176,8 +261,11 @@ permanent deletion, Category workflow, document/upload/dossier/message browsing,
 acceptance, canonical posting mutation, provider automation, execution state, pagination,
 generalized routing, deep links or framework migration was added. Production browser
 acceptance/support, performance, mutation workflows, deployment and cutover remain open.
-The future documentation commit is not yet created; its SHA is unknown and its parent
-must be this implementation checkpoint.
+Its documentation reconciliation was subsequently committed at
+`4fea42f9de9baa2ce86e4cf26f3c6138fde15d90`
+(`Reconcile Application browser migration status`), with this Application implementation
+checkpoint as parent. Later retained-review browsing above extends its consumers; the
+original slice scope, exclusions, counts and limitations remain historical.
 
 ### Isolated PostgreSQL Validation of Retained Extraction Transactions and Workspace Gating — committed checkpoint, 2026-10-05
 
@@ -1248,8 +1336,8 @@ No newly accepted capability is marked verified merely because it is designed.
 | Area | Implemented now | Automated verification | Operational/end-to-end evidence |
 |---|---|---|---|
 | Auth/workspaces | Session-only product auth, anonymous-login CSRF bootstrap/protection, structured DRF exception codes; owned workspace list/create and explicit route selection in Django entry | 104 accounts/core subset; bounded browser session/tab checks described in §2 | Local foundation validated; broader onboarding/production/cutover pending |
-| Frontend/desktop | Existing HTML has explicit DjangoFoundation root/client/context with authenticated read-only retained extraction evidence and Application list/core-detail browsing; legacy App never mounts in Django mode and remains unchanged; desktop remains FastAPI | Current Application/evidence browser and Application read-contract evidence in §2; prior retained UI counts remain historical; historical foundation Safari/Chromium 7/7 retained in §2; current Safari unvalidated; three parent-reproduced legacy failures | Local foundation, evidence and core Application browsing validated in disposable fixtures; broader Application/domain frontend migration and production/cutover remain incomplete |
-| Applications/overrides | Stable numeric PKs plus workspace portable UUID; shared protected creation, explicit repeat challenges and durable replay; existing scoped list/detail reads now consumed by read-only Workspace browser | Identity/ownership and duplicate-safe future transition coverage plus current browser/read-contract evidence in §2 | Local read-only core browsing validated; creation/edit/override and duplicate-warning UI, dossier/documents/messages and broader workflows pending |
+| Frontend/desktop | Existing HTML has explicit DjangoFoundation root/client/context with authenticated read-only retained extraction evidence, Application list/core-detail browsing and retained Application review inspection/navigation; legacy App never mounts in Django mode and remains unchanged; desktop remains FastAPI | Current combined review/Application/evidence browser and read-contract evidence in §2; prior retained UI counts remain historical; historical foundation Safari/Chromium 7/7 retained in §2; current Safari unvalidated; three parent-reproduced legacy failures | Local foundation, evidence, core Application and retained-review inspection/navigation validated in disposable fixtures; broader Application/domain frontend migration and production/cutover remain incomplete |
+| Applications/overrides | Stable numeric PKs plus workspace portable UUID; shared protected creation, explicit repeat challenges and durable replay; existing scoped list/detail reads consumed by read-only Workspace browser and referenced review destinations | Identity/ownership and duplicate-safe future transition coverage plus current browser/read-contract evidence in §2 | Local read-only core browsing validated; creation/edit/override and duplicate-warning UI, dossier/documents/messages and broader workflows pending |
 | Derivation/dossier | Canonical per-Application status/activity, manual precedence, source precision, confirmation candidate/modes, duplicate-safe transitions; read-only dossier GET | Current derivation/forward-migration/SQLite coverage in §2 | Historical reconciliation, import provenance, dossier/evidence frontend and operations pending; core server-resolved fields are displayed read-only |
 | Categories | Native stable identity, single revision-protected membership, independent Archive; committed at `3f564ba`; reversible Trash committed at `74f1e91` | Current Category and lifecycle coverage in §2 | Frontend category workflow pending |
 | Documents/files | Upload/list/type correction/metadata rename; storage URL; retained Trash and effective parent eligibility | Current Document/lifecycle coverage in §2 | Production storage/previews and frontend integration pending |
@@ -1257,8 +1345,8 @@ No newly accepted capability is marked verified merely because it is designed.
 | Search/dashboards/settings | Included reads, counts, search, section adapters, merges, and settings scoped to URL workspace; search parity and Ghosted still pending | Scoped isolation coverage; broader target parity pending | Frontend integration pending |
 | Provider connections | Gmail/Outlook/IMAP connect/sync/disconnect; encrypted credentials | Baseline provider/view coverage, mocked external seams | Historical Gmail OAuth/live-sync checkpoint; complete target flows unvalidated; Outlook/IMAP live validation unestablished |
 | Sync/jobs | Gmail per-message retention plus transitional match/discovery/thread projection; inline single sync, queued bulk/Beat | Gmail adoption/replay and existing sync/task coverage; not real-broker proof | Real Redis/worker/Beat operation unestablished |
-| Retained messages/review | Protected source/observation models, verified Gmail lineage and native-ID producer adoption; scoped review inspection, explicit attachment, independent disposition and atomic create-Application orchestration with durable results; retained-source summary browsing supports extraction evidence selection in DjangoFoundation | Retention, Gmail adoption, attachment/disposition/creation APIs, migration preservation and SQLite logical concurrency coverage in §2; evidence UI Node/Chromium coverage and bounded PostgreSQL retention/extraction conflict evidence above | Other-provider adoption, broader review actions/UI and operational validation pending |
-| Postings | Integer PK plus immutable Workspace-scoped portable UUID; existing extractor/ingestion and list/save/dismiss/restore/apply APIs; explicit retained-text extraction production with validated historical replay, operator batch extraction execution and source-scoped read-only extraction evidence inspection, plus a workspace-scoped read-only retained extraction evidence HTTP API and read-only Workspace browser evidence UI; retained extraction/items and corrections, PostingSource mapping/corrections, item interpretation, posting-level arbitration, descriptor projection, canonical allocation, stateless review orchestration and bounded advisory candidate discovery | Identity/migration/replay and authority-boundary coverage in §2; HTTP checkpoint API 18, retained inspection 22, combined focused 262 and postings 615 passed; UI checkpoint Node 16, Chromium 28, relevant Django 95 and full Django 1,332 passed; bounded PostgreSQL extraction/retention evidence above | Sync does not produce canonical postings; automatic retained-to-canonical workflows, broader canonical consumers, provider/sync adoption, broader posting/Application frontend and retained-review UI, broader retained-workflow APIs, concurrency outside the exercised extraction/retention boundary, production load and deployment/cutover validation remain pending |
+| Retained messages/review | Protected source/observation models, verified Gmail lineage and native-ID producer adoption; scoped review inspection, explicit attachment, independent disposition and atomic create-Application orchestration with durable results; retained-source summary browsing supports extraction evidence selection; DjangoFoundation now provides read-only retained Application review inspection and navigation to existing Application core detail | Retention, Gmail adoption, attachment/disposition/creation APIs, migration preservation and SQLite logical concurrency coverage in §2; current combined browser/read-contract evidence and bounded PostgreSQL retention/extraction conflict evidence above | Browser review dismiss/restore/create/attach and broader evidence/creation-result workflows, other-provider adoption and operational validation pending |
+| Postings | Integer PK plus immutable Workspace-scoped portable UUID; existing extractor/ingestion and list/save/dismiss/restore/apply APIs; explicit retained-text extraction production with validated historical replay, operator batch extraction execution and source-scoped read-only extraction evidence inspection, plus a workspace-scoped read-only retained extraction evidence HTTP API and read-only Workspace browser evidence UI; retained extraction/items and corrections, PostingSource mapping/corrections, item interpretation, posting-level arbitration, descriptor projection, canonical allocation, stateless review orchestration and bounded advisory candidate discovery | Identity/migration/replay and authority-boundary coverage in §2; HTTP checkpoint API 18, retained inspection 22, combined focused 262 and postings 615 passed; UI checkpoint Node 16, Chromium 28, relevant Django 95 and full Django 1,332 passed; bounded PostgreSQL extraction/retention evidence above | Sync does not produce canonical postings; automatic retained-to-canonical workflows, broader canonical consumers, provider/sync adoption, canonical-posting/review frontend and remaining Application/review action/evidence UI, broader retained-workflow APIs, concurrency outside the exercised extraction/retention boundary, production load and deployment/cutover validation remain pending |
 | Import/export | No Django legacy importer or portable export/restore | Unimplemented/unverified | Reconciliation/cutover pending |
 | Production | Partial settings/storage/task scaffolding; SQLite inherited, development fallbacks remain | Suite success is not deployment verification | Isolated extraction/retention PostgreSQL evidence above; production PostgreSQL/storage/jobs/backup/restore/rollback pending |
 
@@ -1268,8 +1356,9 @@ No newly accepted capability is marked verified merely because it is designed.
   evidence inspection, its workspace-scoped read-only HTTP adapter and authenticated
   DjangoFoundation browser evidence UI are complete. Broader retained-review/Application
   frontend work and retained-workflow APIs remain separately scoped gaps; core read-only
-  Application list/detail browsing is now complete without connecting review actions,
-  evidence or mutations. The batch command,
+  Application list/detail browsing and retained-review inspection with Application navigation
+  are complete. Review actions/mutations, broader evidence browsing and creation-result
+  history remain incomplete. The batch command,
   reader, HTTP adapter and browser consumer are not
   the provider/sync adoption mechanism. That adoption requires
   separate decisions on recurring extraction-operation identity, source admission,
@@ -1307,7 +1396,10 @@ No newly accepted capability is marked verified merely because it is designed.
 Current Application browser limitations are recorded in §2: JavaScript-safe IDs,
 unpaginated full-list loading, transient selection/no deep links, no Category names or
 navigation, no evidence/mutation controls and unvalidated large-Workspace performance.
-Broader retained-review and canonical-posting frontend workflows remain incomplete.
+Retained-review inspection/navigation is complete, with accumulated-page memory, unpaginated
+detail arrays, inherited creation-result payload cost and transient selection limitations
+recorded in §2. Review mutations, broader evidence/creation-result browsing and canonical-
+posting frontend workflows remain incomplete.
 
 ## 7. Current implementation phase
 
@@ -1670,7 +1762,9 @@ availability and existing relationships. Admin is read-only. Additive Applicatio
 migration `0008_retained_application_review` creates no historical reviews/candidates.
 The foundation added no review decisions, attachment, detach, evidence, posting-source
 ingestion, provider expansion, permanent purge or frontend integration. Explicit
-attachment is now added below. See the
+attachment is now added below. Later read-only review browser inspection/navigation
+is recorded in §2; the foundation
+exclusions and evidence here remain historical. See the
 [retained Application review](DJANGO_RETAINED_APPLICATION_REVIEW.md) for full contracts,
 verification, changed files and limitations. The queue does not cover all legacy history.
 
@@ -1757,11 +1851,11 @@ preservation, reverse limitations and verification evidence.
 
 ## 8. Next recommended implementation actions
 
-1. Retained-text extraction production, explicit operator batch execution, source-scoped read-only evidence inspection, its workspace-scoped read-only HTTP API and authenticated Workspace browser evidence UI are complete through `8a4af32e4fb9949430487449e5cbaaea5ab93a3c`; bounded extraction/retention PostgreSQL validation is complete at `c71f6cdcf183a4e76333b2c62582b8ecfdb1fc68`, alongside the existing explicit retained-posting authorities. Read-only Application list/core-detail browsing is complete at `845ad1f57addaf350b974aeaecc5aba5a750d2fa`, consuming existing GET authority. The next substantive migration slice remains unselected and unauthorized. Provider/sync adoption, automatic canonical workflows, broader canonical consumers, broader retained-workflow APIs, remaining Application/domain frontend work, concurrency outside the exercised boundary, production load and production/operational/cutover validation require separate planning and authorization. Prior local database provenance remains unresolved.
+1. Retained-text extraction production, explicit operator batch execution, source-scoped read-only evidence inspection, its workspace-scoped read-only HTTP API and authenticated Workspace browser evidence UI are complete through `8a4af32e4fb9949430487449e5cbaaea5ab93a3c`; bounded extraction/retention PostgreSQL validation is complete at `c71f6cdcf183a4e76333b2c62582b8ecfdb1fc68`, alongside the existing explicit retained-posting authorities. Read-only Application list/core-detail browsing is complete at `845ad1f57addaf350b974aeaecc5aba5a750d2fa`; retained Application review inspection with core-detail navigation is complete at `bcad64038e6fbb4c224dc5a7ddfe075d4b3f22f7`, consuming existing GET authority only. The next substantive migration slice remains unselected and unauthorized. Provider/sync adoption, automatic canonical workflows, broader canonical consumers, broader retained-workflow APIs, remaining Application/domain frontend work, concurrency outside the exercised boundary, production load and production/operational/cutover validation require separate planning and authorization. Prior local database provenance remains unresolved.
 2. Resolve the legacy verification blockers under separately approved scope before declaring a fully green checkpoint.
 3. Separately scope further review actions and future filtering/queue UX, along with broader email/job and frontend work.
 4. Plan provenance-aware historical reconciliation with importer/cutover work; do not silently backfill current records.
-5. Separately scope remaining core, retained email/review and posting browser workflows; retained extraction evidence inspection and Application core browsing are implemented, without completing broader frontend migration.
+5. Separately scope remaining core, retained email/review and posting browser workflows; retained extraction evidence inspection, Application core browsing and read-only retained-review inspection/navigation are implemented, without completing review mutations or broader frontend migration.
 6. Develop import/export alongside models; rehearse representative workspaces.
 7. Validate production operations and cutover gates before retiring legacy.
 
@@ -1788,8 +1882,8 @@ All remain open unless supported by new, recorded evidence:
   Redis, separate web/worker/Beat, safe required secrets and static/media delivery.
 - Full enabled-provider flows, including retained evidence, retries, and disconnect.
 - Production browser acceptance/support and large-scale frontend performance for core
-  workflows, imports/exports, previews and Trash; local read-only Application browsing
-  does not establish mutation workflow or deployment/cutover readiness.
+  workflows, imports/exports, previews and Trash; local read-only Application/review browsing
+  does not establish mutation workflow or deployment/operational/cutover readiness.
 - Coordinated database/content backup and tested restoration.
 - Documented/logged deployment, migrations, jobs, storage, and rollback operations.
 - Successful reconciliation, end-to-end acceptance, and rollback readiness before
