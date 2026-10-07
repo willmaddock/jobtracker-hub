@@ -210,3 +210,66 @@ test('Application projections validate identities and discard unrelated serializ
   assert.throws(()=>h.applicationList([{...row,id:JSON.parse('9223372036854775807')}],2),{code:'unsafe_identifier'});
   assert.equal(h.applicationFailure(new ApiError('network_error','SQL secret')).message.includes('secret'),false);
 });
+
+const reviewHelpers=(()=>{
+  const scope={JTHApi:{ApiError},Number,Date,Set,AbortController};vm.createContext(scope);
+  const app=html.split('// BEGIN DJANGO APPLICATION STATE')[1].split('// END DJANGO APPLICATION STATE')[0];
+  const review=html.split('// BEGIN DJANGO REVIEW STATE')[1].split('// END DJANGO REVIEW STATE')[0];
+  vm.runInContext(app+'\n'+review,scope);return scope;
+})();
+const reviewFixture=(id=7)=>({id,workspace_id:2,portable_id:uuid(id),initial_classification:'ambiguous',snapshot_version:1,
+  candidate_count:9,relationship_count:1,attachment_status:'attached',subject:'<img src=x>',created_at:'2026-10-06T12:00:00Z',
+  observed_at:'2026-10-05T12:00:00Z',originating_observation_id:4,disposition:{state:'active',dismissed_at:null,revision:999},
+  retained_message:{id:3,portable_id:uuid(3),state:'retained',eligible:true,retained_at:'2026-10-05T12:00:01Z',representation_version:1,mailbox_id:99},
+  candidates:[{id:5,application_id:8,application_portable_id:uuid(8),created_at:'2026-10-06T12:00:00Z',availability:'live',attachable:true,
+    current_application:{company:'Current',role_label:'Role',section:'applications',trashed_at:null,lifecycle_revision:99}}],
+  relationships:[{id:6,portable_id:uuid(6),application_id:8,origin:'manual',created_at:'2026-10-06T12:00:00Z',availability:'live'}],
+  creation_results:{results:[{secret:'CREATION PRIVATE PAYLOAD'}],next_after:99},body:'private'});
+test('review reads use exact scoped GETs, explicit cursor, captured context and abort',async()=>{
+  const calls=[];const {client,context}=setup(async(p,o)=>{calls.push({p,o});return response(200,{});});
+  await client.readApplicationReviews();await client.readApplicationReviews({after:50});await client.readApplicationReview(7);
+  assert.deepEqual(calls.map(c=>c.p),['/api/workspaces/2/application-reviews/','/api/workspaces/2/application-reviews/?after=50','/api/workspaces/2/application-reviews/7/']);
+  for(const c of calls){assert.equal(c.o.method,'GET');assert.equal(c.o.credentials,'same-origin');assert.equal(c.o.cache,'no-store');assert.equal(c.o.body,undefined);}
+  for(const id of [0,-1,true,'7',1.1,9007199254740992,JSON.parse('9223372036854775807')]){
+    assert.throws(()=>client.readApplicationReview(id),{code:'unsafe_identifier'});assert.throws(()=>client.readApplicationReviews({after:id}),{code:'unsafe_identifier'});
+  }
+  const abort=new AbortController();abort.abort();await assert.rejects(client.readApplicationReviews({signal:abort.signal}),{code:'aborted'});
+  let release,signal;const pendingClient=createClient({context,fetchImpl:(p,o)=>{signal=o.signal;return new Promise(r=>release=r);}});
+  const pending=pendingClient.readApplicationReview(7,{signal:abort.signal});await assert.rejects(pending,{code:'aborted'});
+  const active=new AbortController();const running=pendingClient.readApplicationReview(7,{signal:active.signal});active.abort();assert(signal.aborted);release(response(200,{}));await running;
+  const captured=context.capture();context.select(3);assert.throws(()=>client.readApplicationReviews({captured}),{code:'stale_response'});
+  context.select(9007199254740992);assert.throws(()=>client.readApplicationReviews(),{code:'unsafe_identifier'});assert.equal(calls.length,3);
+});
+test('actual review projection distinguishes initial membership/current state and drops excluded payload',()=>{
+  const h=reviewHelpers,row=reviewFixture(),detail=h.reviewRow(row,2,7),encoded=JSON.stringify(detail);
+  assert.equal(detail.candidate_count,9);assert.equal(detail.candidates.length,1);assert.equal(detail.candidates[0].current_application.company,'Current');
+  assert.equal(detail.subject,'<img src=x>');for(const key of ['revision','attachable','creation_results','mailbox_id','body','secret'])assert(!encoded.includes('"'+key+'"'));
+  assert.equal(h.reviewRow(row,2).candidates,undefined);
+  const removed=structuredClone(row);Object.assign(removed.candidates[0],{application_id:null,current_application:null,availability:'removed'});assert.equal(h.reviewRow(removed,2,7).candidates[0].application_id,null);
+  const trashed=structuredClone(row);trashed.candidates[0].availability='trashed';trashed.candidates[0].current_application.trashed_at='2026-10-06T12:00:00Z';h.reviewRow(trashed,2,7);
+  const conflict=structuredClone(row);conflict.retained_message.state='conflict';conflict.retained_message.eligible=false;assert.equal(h.reviewRow(conflict,2,7).disposition.state,'active');
+});
+test('review projections reject scope/identity/version/lifecycle mismatches and unsafe nested IDs',()=>{
+  const h=reviewHelpers;
+  for(const mutate of [r=>r.workspace_id=3,r=>r.id=8,r=>r.snapshot_version=2,r=>r.initial_classification='accepted',
+    r=>r.disposition.state='restored',r=>r.disposition.dismissed_at='2026-10-06T12:00:00Z',r=>r.retained_message.representation_version=2,
+    r=>r.retained_message.eligible=false,r=>r.candidates[0].application_id=9007199254740992,r=>r.candidates[0].id=0,
+    r=>r.relationships[0].application_id=9007199254740992,r=>r.relationships[0].origin='accepted',
+    r=>r.relationships.push(r.relationships[0]),r=>r.candidates.push(r.candidates[0]),r=>r.candidates[0].current_application=null]){
+    const row=reviewFixture();mutate(row);assert.throws(()=>h.reviewRow(row,2,7));
+  }
+});
+test('review pages require ascending unique identities and progressive exact continuation',()=>{
+  const h=reviewHelpers,rows=Array.from({length:50},(_,n)=>reviewFixture(n+1));
+  const page=h.reviewPage({results:rows,next_after:50},2);assert.equal(page.rows.length,50);assert.equal(page.after,50);
+  assert.equal(h.reviewPage({results:[reviewFixture(51)],next_after:null},2,50,page.rows).after,null);
+  for(const bad of [{results:rows,next_after:49},{results:rows,next_after:9007199254740992},{results:[rows[1],rows[0]],next_after:null},{results:[rows[0],rows[0]],next_after:null},{results:rows.slice(0,1),next_after:1}])assert.throws(()=>h.reviewPage(bad,2));
+  assert.throws(()=>h.reviewPage({results:[reviewFixture(51)],next_after:null},2,50,[reviewFixture(51)]));
+  assert.throws(()=>h.reviewPage({results:[reviewFixture(50)],next_after:null},2,50));
+});
+test('review errors never expose raw server messages; restart preserves explicit choice',()=>{
+  const h=reviewHelpers;
+  for(const e of [{status:404,message:'private'},{status:500,message:'private'},{status:400,message:'private'},{code:'unexpected_review',message:'private'}])assert(!h.reviewFailure(e,true).message.includes('private'));
+  assert.equal(h.reviewFailure({status:400},true).restart,true);assert.equal(h.reviewFailure({status:500},true).retry,true);
+  assert.equal(h.reviewFailure({code:'stale_response'}),null);assert.equal(h.reviewFailure({status:401,code:'authentication_required'}).auth,true);
+});

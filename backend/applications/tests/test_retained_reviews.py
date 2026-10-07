@@ -242,6 +242,71 @@ class ReviewTests(ReviewFixtures, TestCase):
         self.assertEqual(before, [list(model.objects.values()) for model in models])
         self.assertTrue(self.ensure([self.app.pk, other.pk])[1])
 
+    def test_browser_read_contract_inclusive_disposition_conflict_and_current_labels(self):
+        from applications.retained_reviews import set_review_dismissal
+        other = self.application(self.ws)
+        review, _ = self.ensure([self.app.pk, other.pk])
+        self.attach()
+        self.app.company = "<img src=x> Current company"
+        self.app.role_label = "Changed current role"
+        self.app.save(update_fields=["company", "role_label"])
+        RetainedMessage.objects.filter(pk=self.message.pk).update(has_conflict=True)
+        for dismissed, revision in [(True, 0), (False, 1)]:
+            set_review_dismissal(actor=self.user, workspace=self.ws, review_id=review.pk,
+                                dismissed=dismissed, expected_revision=revision)
+            data = self.detail(review)
+            self.assertEqual(data["disposition"]["state"], "dismissed" if dismissed else "active")
+            self.assertEqual(data["retained_message"]["state"], "conflict")
+            self.assertFalse(data["retained_message"]["eligible"])
+            self.assertEqual(data["initial_classification"], "ambiguous")
+            self.assertEqual((data["candidate_count"], data["relationship_count"]), (2, 1))
+            candidates = {row["application_id"]: row for row in data["candidates"]}
+            self.assertEqual(candidates[self.app.pk]["current_application"]["company"], "<img src=x> Current company")
+            self.assertEqual(candidates[self.app.pk]["application_portable_id"], str(self.app.portable_id))
+            self.assertEqual(data["relationships"][0]["application_id"], self.app.pk)
+            self.assertEqual(data["relationships"][0]["origin"], "manual")
+            rows = self.client.get(self.review_url()).data["results"]
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["disposition"]["state"], data["disposition"]["state"])
+
+    def test_review_gets_are_domain_read_only_without_hidden_dispatch_or_admission(self):
+        from contextlib import ExitStack
+        from django.apps import apps
+        from django.test.utils import CaptureQueriesContext
+        from applications.models import RetainedApplicationReviewDisposition
+        review, _ = self.ensure()
+        self.attach()
+        models = list(apps.get_models(include_auto_created=True))
+        before = [list(model.objects.order_by("pk").values()) for model in models]
+        blocked = ["applications.review_views.attach_review", "applications.review_views.set_review_dismissal",
+                   "applications.review_views.request_creation", "email_sync.sync_service.sync_account",
+                   "applications.views.derive_application"]
+        with ExitStack() as stack:
+            for name in blocked:
+                stack.enter_context(patch(name, side_effect=AssertionError("GET invoked " + name)))
+            queries = stack.enter_context(CaptureQueriesContext(connection))
+            self.assertEqual(self.client.get(self.review_url()).status_code, 200)
+            self.assertEqual(self.client.get(self.review_url(review)).status_code, 200)
+            self.assertEqual(self.client.get(f"/api/workspaces/{self.ws.pk}/applications/{self.app.pk}/").status_code, 200)
+        self.assertFalse(any(q["sql"].lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE")) for q in queries))
+        self.assertEqual(before, [list(model.objects.order_by("pk").values()) for model in models])
+        self.assertFalse(RetainedApplicationReviewDisposition.objects.exists())
+
+    def test_browser_foreign_nested_targets_are_filtered_and_destination_reauthorizes(self):
+        review, _ = self.ensure()
+        self.attach()
+        foreign = self.application(self.ws_b)
+        Candidate.objects.filter(review=review).update(application=foreign)
+        ApplicationMessage.objects.filter(retained_message=self.message).update(application=foreign)
+        data = self.detail(review)
+        self.assertEqual(data["candidate_count"], 1)
+        self.assertEqual(data["candidates"], [])  # reported snapshot count is not returned length
+        self.assertEqual(data["relationships"], [])
+        self.assertEqual(data["relationship_count"], 0)
+        for ws in (self.ws_b, self.ws_c):
+            self.assertEqual(self.client.get(self.review_url(review, ws)).status_code, 404)
+        self.assertEqual(self.client.get(f"/api/workspaces/{self.ws.pk}/applications/{foreign.pk}/").status_code, 404)
+
     def test_queue_pagination(self):
         for n in range(51):
             data = deepcopy(self.data)

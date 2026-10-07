@@ -89,6 +89,18 @@
         if (!captured.actor) throw new ApiError("workspace_required", "Select a workspace first.");
         return request(`/api/workspaces/${safeId(captured.workspace)}/applications/${safeId(applicationId)}/`, {captured, signal});
       },
+      readApplicationReviews({after = null, captured = context.capture(), signal} = {}) {
+        check(captured);
+        if (!captured.actor) throw new ApiError("workspace_required", "Select a workspace first.");
+        const query = new URLSearchParams();
+        if (after !== null) query.set("after", safeId(after));
+        return request(`/api/workspaces/${safeId(captured.workspace)}/application-reviews/` + (query.size ? "?" + query.toString() : ""), {captured, signal});
+      },
+      readApplicationReview(reviewId, {captured = context.capture(), signal} = {}) {
+        check(captured);
+        if (!captured.actor) throw new ApiError("workspace_required", "Select a workspace first.");
+        return request(`/api/workspaces/${safeId(captured.workspace)}/application-reviews/${safeId(reviewId)}/`, {captured, signal});
+      },
       clearCsrf() { csrf = null; },
       async bootstrap() {
         const result = await request("/api/auth/csrf");

@@ -7378,14 +7378,56 @@ function applicationFailure(error) {
 }
 // END DJANGO APPLICATION STATE
 
+function ApplicationDetailInspection({client, context, workspaceId, applicationId: id, expectedPortable = null, inspectionControl, onAuthFailure}) {
+  const [detail,setDetail] = useState(null), [busy,setBusy] = useState(false), [error,setError] = useState(null);
+  const lane = useMemo(() => createEvidenceLane(context), [context]);
+  const auth = useRef(onAuthFailure); auth.current = onAuthFailure;
+  async function load() {
+    const token=lane.start(id);setDetail(null);setError(null);setBusy(true);
+    try {
+      const data=applicationRow(await client.readApplication(id,{captured:token.captured,signal:token.signal}),workspaceId,id);
+      if(expectedPortable !== null && data.portable_id.toLowerCase() !== expectedPortable.toLowerCase()) applicationUnexpected();
+      if(lane.current(token,id)) setDetail(data);
+    } catch(e) {
+      if(lane.current(token,id)) {
+        const failure=applicationFailure(e);
+        if(failure?.auth) {lane.invalidate();setDetail(null);auth.current(e);}
+        else if(failure) setError(failure);
+      }
+    } finally {if(lane.current(token,id)) setBusy(false);}
+  }
+  useEffect(()=>{
+    const cancel=()=>lane.invalidate();inspectionControl.current=cancel;load();
+    return ()=>{lane.dispose();if(inspectionControl.current === cancel) inspectionControl.current=null;};
+  },[lane]);
+  const value=v=>v === null ? "Unknown" : v === "" ? "Not supplied" : v;
+  const sectionLabels={applications:"Applications",credentials:"Credentials",network:"Network",resume_library:"Resume library",leads:"Leads",personal:"Personal",compliance:"Compliance",misc:"Misc"};
+  return <>
+    {busy && <p role="status">Loading Application detail…</p>}
+    {error && <div role="alert"><p>{error.message}</p>{error.retry && <button className="btn" onClick={load}>Try again</button>}</div>}
+    {detail && <article data-testid="application-detail">
+        <h3>{value(detail.company)} — {value(detail.role_label)}</h3>
+        {detail.is_trashed && <p role="status"><strong>Trashed — read-only inspection</strong></p>}
+        {detail.archived && <p>Archived</p>}
+        <dl>{[["Record",detail.id],["Portable identity",detail.portable_id],["Section",Object.prototype.hasOwnProperty.call(sectionLabels,detail.section) ? sectionLabels[detail.section] : detail.section],
+          ["Effective status",detail.effective_status],["Applied date",detail.effective_date_applied],["Category reference",detail.category_id],
+          ["Derivation state",detail.derivation_state]].map(([label,v])=><React.Fragment key={label}><dt>{label}</dt><dd style={{overflowWrap:"anywhere"}}>{value(v)}</dd></React.Fragment>)}</dl>
+        {["first","last"].map(edge=><div key={edge}><h4>{edge === "first" ? "First" : "Last"} activity</h4>
+          <p>{detail[edge+"_activity"] ? <><EvidenceTime value={detail[edge+"_activity"]} /> (instant)</> : detail[edge+"_activity_date"] ? detail[edge+"_activity_date"] + " (date only)" : "Unknown"}</p>
+          <p>Provenance: {detail.activity_provenance[edge] ? detail.activity_provenance[edge].precision + (detail.activity_provenance[edge].sources.length ? " — " + detail.activity_provenance[edge].sources.join(", ") : "") : "Unknown / unreconciled"}</p>
+        </div>)}
+        {detail.activity_provenance.timezone && <p>Activity calendar timezone: {detail.activity_provenance.timezone}</p>}
+      </article>}
+  </>;
+}
+
 function ApplicationPanel({client, context, workspaceId, onClose, onAuthFailure}) {
   const [rows,setRows] = useState([]), [ready,setReady] = useState(false), [listBusy,setListBusy] = useState(false);
   const [listError,setListError] = useState(null), [selected,setSelected] = useState(null);
-  const [detail,setDetail] = useState(null), [detailBusy,setDetailBusy] = useState(false), [detailError,setDetailError] = useState(null);
   const listLane = useMemo(() => createEvidenceLane(context), [context]);
-  const detailLane = useMemo(() => createEvidenceLane(context), [context]);
-  const target = useRef(null), auth = useRef(onAuthFailure); auth.current = onAuthFailure;
-  function back() { detailLane.invalidate(); target.current=null; setSelected(null); setDetail(null); setDetailError(null); setDetailBusy(false); }
+  const auth = useRef(onAuthFailure); auth.current = onAuthFailure;
+  const inspectionControl=useRef(null);
+  function back() {inspectionControl.current?.();setSelected(null);}
   function fail(error, setter) {
     const safe = applicationFailure(error);
     if (!safe) return;
@@ -7400,16 +7442,8 @@ function ApplicationPanel({client, context, workspaceId, onClose, onAuthFailure}
     } catch(error) {if(listLane.current(token)) fail(error,setListError);}
     finally {if(listLane.current(token)) setListBusy(false);}
   }
-  async function select(id) {
-    applicationId(id); target.current=id;setSelected(id);setDetail(null);setDetailError(null);setDetailBusy(true);
-    const token=detailLane.start(id);
-    try {
-      const data=applicationRow(await client.readApplication(id,{captured:token.captured,signal:token.signal}),workspaceId,id);
-      if(detailLane.current(token,target.current)) setDetail(data);
-    } catch(error) {if(detailLane.current(token,target.current)) fail(error,setDetailError);}
-    finally {if(detailLane.current(token,target.current)) setDetailBusy(false);}
-  }
-  useEffect(() => {loadList();return () => {listLane.dispose();detailLane.dispose();target.current=null;};}, [listLane,detailLane]);
+  function select(id) {applicationId(id);inspectionControl.current?.();setSelected(id);}
+  useEffect(() => {loadList();return () => listLane.dispose();}, [listLane]);
   function close() {listLane.invalidate();back();setRows([]);setReady(false);onClose();}
   const errorView=(error,retry)=>error && <div role="alert"><p>{error.message}</p>{error.retry && <button className="btn" onClick={retry}>Try again</button>}</div>;
   const value=(v)=>v === null ? "Unknown" : v === "" ? "Not supplied" : v;
@@ -7425,19 +7459,167 @@ function ApplicationPanel({client, context, workspaceId, onClose, onAuthFailure}
         <p>{Object.prototype.hasOwnProperty.call(sectionLabels,row.section) ? sectionLabels[row.section] : row.section} · Status: {value(row.effective_status)} · Applied date: {value(row.effective_date_applied)}{row.archived ? " · Archived" : ""}{row.is_trashed ? " · Trashed" : ""}</p></article>)}
     </> : <>
       <button className="btn" onClick={back}>Back to Applications</button>
-      {detailBusy && <p role="status">Loading Application detail…</p>}{errorView(detailError,()=>select(selected))}
-      {detail && <article data-testid="application-detail">
-        <h3>{value(detail.company)} — {value(detail.role_label)}</h3>
-        {detail.is_trashed && <p role="status"><strong>Trashed — read-only inspection</strong></p>}
-        {detail.archived && <p>Archived</p>}
-        <dl>{[["Record",detail.id],["Portable identity",detail.portable_id],["Section",Object.prototype.hasOwnProperty.call(sectionLabels,detail.section) ? sectionLabels[detail.section] : detail.section],
-          ["Effective status",detail.effective_status],["Applied date",detail.effective_date_applied],["Category reference",detail.category_id],
-          ["Derivation state",detail.derivation_state]].map(([label,v])=><React.Fragment key={label}><dt>{label}</dt><dd style={{overflowWrap:"anywhere"}}>{value(v)}</dd></React.Fragment>)}</dl>
-        {["first","last"].map(edge=><div key={edge}><h4>{edge === "first" ? "First" : "Last"} activity</h4>
-          <p>{detail[edge+"_activity"] ? <><EvidenceTime value={detail[edge+"_activity"]} /> (instant)</> : detail[edge+"_activity_date"] ? detail[edge+"_activity_date"] + " (date only)" : "Unknown"}</p>
-          <p>Provenance: {detail.activity_provenance[edge] ? detail.activity_provenance[edge].precision + (detail.activity_provenance[edge].sources.length ? " — " + detail.activity_provenance[edge].sources.join(", ") : "") : "Unknown / unreconciled"}</p>
-        </div>)}
-        {detail.activity_provenance.timezone && <p>Activity calendar timezone: {detail.activity_provenance.timezone}</p>}
+      <ApplicationDetailInspection key={selected} client={client} context={context} workspaceId={workspaceId}
+        applicationId={selected} inspectionControl={inspectionControl} onAuthFailure={e=>{listLane.invalidate();back();setRows([]);setReady(false);auth.current(e);}} />
+    </>}
+  </section>;
+}
+
+// BEGIN DJANGO REVIEW STATE
+function reviewUnexpected() {throw new JTHApi.ApiError("unexpected_review", "Review data could not be displayed safely.");}
+function reviewObject(value) {if(!value || typeof value !== "object" || Array.isArray(value)) reviewUnexpected();return value;}
+function reviewUuid(value) {if(typeof value !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) reviewUnexpected();return value;}
+function reviewStamp(value) {if(value === null) reviewUnexpected();return applicationStamp(value);}
+function reviewCount(value) {if(!Number.isSafeInteger(value) || value < 0) reviewUnexpected();return value;}
+function reviewRow(raw, workspace, requested = null) {
+  const row=reviewObject(raw), id=applicationId(row.id), scope=applicationId(row.workspace_id);
+  if(scope !== applicationId(workspace) || requested !== null && id !== requested) reviewUnexpected();
+  if(row.snapshot_version !== 1 || !["match","ambiguous","application"].includes(row.initial_classification)) reviewUnexpected();
+  const disposition=reviewObject(row.disposition), source=reviewObject(row.retained_message);
+  if(!["active","dismissed"].includes(disposition.state)) reviewUnexpected();
+  const dismissed_at=applicationStamp(disposition.dismissed_at);
+  if((disposition.state === "dismissed") !== (dismissed_at !== null)) reviewUnexpected();
+  if(!["retained","conflict"].includes(source.state) || typeof source.eligible !== "boolean" || source.eligible !== (source.state === "retained") || source.representation_version !== 1) reviewUnexpected();
+  const relationship_count=reviewCount(row.relationship_count);
+  if(row.attachment_status !== (relationship_count ? "attached" : "unattached")) reviewUnexpected();
+  if(row.subject !== null && typeof row.subject !== "string") reviewUnexpected();
+  const result={id,workspace_id:scope,portable_id:reviewUuid(row.portable_id),subject:row.subject,
+    initial_classification:row.initial_classification,snapshot_version:1,candidate_count:reviewCount(row.candidate_count),
+    relationship_count,attachment_status:row.attachment_status,created_at:reviewStamp(row.created_at),
+    observed_at:reviewStamp(row.observed_at),originating_observation_id:applicationId(row.originating_observation_id),
+    disposition:{state:disposition.state,dismissed_at},
+    retained_message:{id:applicationId(source.id),portable_id:reviewUuid(source.portable_id),state:source.state,
+      eligible:source.eligible,retained_at:reviewStamp(source.retained_at),representation_version:1}};
+  if(requested === null) return result;
+  // Detail GET includes creation-result payload server-side; never project or retain it here.
+  if(!Array.isArray(row.candidates) || !Array.isArray(row.relationships)) reviewUnexpected();
+  result.candidates=row.candidates.map(rawCandidate=>{
+    const c=reviewObject(rawCandidate), availability=c.availability;
+    if(!["live","trashed","removed"].includes(availability)) reviewUnexpected();
+    const application_id=c.application_id === null ? null : applicationId(c.application_id);
+    let current_application=null;
+    if(availability === "removed") {if(application_id !== null || c.current_application !== null) reviewUnexpected();}
+    else {
+      if(application_id === null) reviewUnexpected();
+      const a=reviewObject(c.current_application), trashed_at=applicationStamp(a.trashed_at);
+      if((availability === "trashed") !== (trashed_at !== null)) reviewUnexpected();
+      current_application={company:applicationText(a.company),role_label:applicationText(a.role_label),section:applicationText(a.section),trashed_at};
+    }
+    return {id:applicationId(c.id),application_id,application_portable_id:reviewUuid(c.application_portable_id),
+      created_at:reviewStamp(c.created_at),availability,current_application};
+  });
+  result.relationships=row.relationships.map(rawLink=>{
+    const link=reviewObject(rawLink);
+    if(!["live","trashed"].includes(link.availability) || link.origin !== "manual") reviewUnexpected();
+    return {id:applicationId(link.id),portable_id:reviewUuid(link.portable_id),application_id:applicationId(link.application_id),
+      origin:link.origin,created_at:reviewStamp(link.created_at),availability:link.availability};
+  });
+  for(const [rows,key] of [[result.candidates,"id"],[result.candidates,"application_portable_id"],[result.relationships,"id"],[result.relationships,"portable_id"],[result.relationships,"application_id"]])
+    if(new Set(rows.map(row=>typeof row[key] === "string" ? row[key].toLowerCase() : row[key])).size !== rows.length) reviewUnexpected();
+  return result;
+}
+function reviewPage(raw, workspace, after = null, existing = []) {
+  const page=reviewObject(raw);
+  if(!Array.isArray(page.results) || page.results.length > 50 || !("next_after" in page)) reviewUnexpected();
+  const rows=page.results.map(row=>reviewRow(row,workspace)), seen=new Set(existing.map(row=>row.id));
+  let previous=after === null ? 0 : applicationId(after);
+  for(const row of rows) {if(row.id <= previous || seen.has(row.id)) reviewUnexpected();seen.add(row.id);previous=row.id;}
+  const next=page.next_after === null ? null : applicationId(page.next_after);
+  if(next !== null && (rows.length !== 50 || next !== previous)) reviewUnexpected();
+  return {rows,after:next};
+}
+function reviewFailure(error, page = false) {
+  if(["stale_response","aborted"].includes(error.code) || error.name === "AbortError") return null;
+  if(error.code === "unsafe_identifier") return {message:"This identifier cannot be represented safely in this browser workflow.",restart:page};
+  if(error.status === 401 && error.code === "authentication_required") return {auth:true};
+  if(error.status === 404) return {message:"Review or Workspace unavailable."};
+  if(error.status === 400) return {message:"Review navigation failed. Restart from the first page.",restart:page};
+  if(error.status >= 500 || error.code === "network_error") return {message:"Reviews could not be loaded. Try again.",retry:true};
+  return {message:"Review data could not be displayed safely.",restart:page};
+}
+function reviewInitial() {return {rows:[],after:null,ready:false,listBusy:false,listError:null,review:null,detail:null,detailBusy:false,detailError:null,application:null};}
+// END DJANGO REVIEW STATE
+
+function ApplicationReviewPanel({client, context, workspaceId, onClose, onAuthFailure}) {
+  const [state,setState]=useState(reviewInitial);
+  const listLane=useMemo(()=>createEvidenceLane(context),[context]), detailLane=useMemo(()=>createEvidenceLane(context),[context]);
+  const selected=useRef(null), inspectionControl=useRef(null), auth=useRef(onAuthFailure);auth.current=onAuthFailure;
+  function patch(values) {setState(old=>({...old,...values}));}
+  function reset() {listLane.invalidate();detailLane.invalidate();inspectionControl.current?.();selected.current=null;setState(reviewInitial());}
+  function authFailure(error) {reset();auth.current(error);}
+  function fail(error, lane, token, after = null) {
+    if(!lane.current(token,lane === detailLane ? selected.current : after)) return;
+    const safe=reviewFailure(error,lane === listLane);
+    if(!safe) return;
+    if(safe.auth) authFailure(error);
+    else patch(lane === listLane ? {listError:{...safe,after},listBusy:false} : {detailError:safe,detail:null,detailBusy:false});
+  }
+  async function loadList(after = null) {
+    if(after === null) {detailLane.invalidate();inspectionControl.current?.();selected.current=null;patch({...reviewInitial(),listBusy:true});}
+    const existing=after === null ? [] : state.rows;
+    const token=listLane.start(after);patch({listBusy:true,listError:null});
+    try {
+      const page=reviewPage(await client.readApplicationReviews({after,captured:token.captured,signal:token.signal}),workspaceId,after,existing);
+      if(listLane.current(token,after)) patch({rows:[...existing,...page.rows],after:page.after,ready:true});
+    } catch(error) {fail(error,listLane,token,after);}
+    finally {if(listLane.current(token,after)) patch({listBusy:false});}
+  }
+  async function selectReview(id) {
+    applicationId(id);listLane.invalidate();inspectionControl.current?.();selected.current=id;
+    patch({review:id,detail:null,detailError:null,detailBusy:true,application:null,listBusy:false});
+    const token=detailLane.start(id);
+    try {
+      const detail=reviewRow(await client.readApplicationReview(id,{captured:token.captured,signal:token.signal}),workspaceId,id);
+      if(detailLane.current(token,selected.current)) patch({detail});
+    } catch(error) {fail(error,detailLane,token);}
+    finally {if(detailLane.current(token,selected.current)) patch({detailBusy:false});}
+  }
+  useEffect(()=>{loadList();return ()=>{listLane.dispose();detailLane.dispose();selected.current=null;};},[listLane,detailLane]);
+  function back() {detailLane.invalidate();inspectionControl.current?.();selected.current=null;patch({review:null,detail:null,detailError:null,detailBusy:false,application:null});}
+  function open(id, portable = null) {applicationId(id);inspectionControl.current?.();patch({application:{id,portable}});}
+  const value=v=>v === null ? "Unknown" : v === "" ? "Not supplied" : v;
+  const classification={match:"Single candidate",ambiguous:"Multiple candidates",application:"No candidate"};
+  const summary=row=><>
+    <p>Subject: {value(row.subject)}</p><p>Initial classification: {classification[row.initial_classification]} · Current review disposition: {row.disposition.state === "active" ? "Active" : "Dismissed"}</p>
+    <p>Retained source {row.retained_message.id} · Source state: {row.retained_message.state}</p>
+    {row.retained_message.state === "conflict" && <p role="status">Source conflict recorded. Historical review information remains inspectable; no corrective action is available here.</p>}
+    <p>Observed: <EvidenceTime value={row.observed_at} /> · Retained: <EvidenceTime value={row.retained_message.retained_at} /> · Review created: <EvidenceTime value={row.created_at} /></p>
+  </>;
+  const errorView=(error,retry)=><>{error && <div role="alert"><p>{error.message}</p>{error.retry && <button className="btn" onClick={retry}>Retry reviews</button>}{error.restart && <button className="btn" onClick={()=>loadList()}>Restart reviews from first page</button>}</div>}</>;
+  const detail=state.detail;
+  return <section data-testid="review-panel" aria-label="Retained Application reviews" style={{marginTop:20,textAlign:"left",overflowWrap:"anywhere"}}>
+    <h2>Retained Application reviews</h2><button className="btn" onClick={()=>{reset();onClose();}}>Close reviews</button>
+    {state.application ? <>
+      <button className="btn" onClick={()=>{inspectionControl.current?.();patch({application:null});}}>Back to review</button>
+      <ApplicationDetailInspection key={state.application.id+":"+(state.application.portable||"")} client={client} context={context} workspaceId={workspaceId}
+        applicationId={state.application.id} expectedPortable={state.application.portable} inspectionControl={inspectionControl} onAuthFailure={authFailure} />
+    </> : state.review === null ? <>
+      {state.listBusy && <p role="status">Loading reviews…</p>}{errorView(state.listError,()=>loadList(state.listError.after))}
+      {state.ready && !state.rows.length && <p>No retained Application reviews in this Workspace.</p>}
+      {state.ready && <button className="btn" disabled={state.listBusy} onClick={()=>loadList()}>Refresh reviews</button>}
+      {state.rows.map(row=><article key={row.id}><button className="btn" data-review-id={row.id} onClick={()=>selectReview(row.id)}>Review {row.id}</button>{summary(row)}</article>)}
+      {state.after !== null && !state.listError && <button className="btn" disabled={state.listBusy} onClick={()=>loadList(state.after)}>Load more reviews</button>}
+      <p>Review navigation is advisory, not a snapshot.</p>
+    </> : <>
+      <button className="btn" onClick={back}>Back to reviews</button>
+      {state.detailBusy && <p role="status">Loading review detail…</p>}{errorView(state.detailError,()=>selectReview(state.review))}
+      {detail && <article data-testid="review-detail"><h3>Review {detail.id}</h3>{summary(detail)}
+        <dl>{[["Review portable identity",detail.portable_id],["Retained source portable identity",detail.retained_message.portable_id],["Originating observation reference",detail.originating_observation_id],
+          ["Dismissed at",detail.disposition.dismissed_at],["Reported candidate count",detail.candidate_count],["Reported source relationship count",detail.relationship_count],
+          ["Source attachment summary",detail.attachment_status]].map(([label,v])=><React.Fragment key={label}><dt>{label}</dt><dd>{value(v)}</dd></React.Fragment>)}</dl>
+        <button className="btn" onClick={()=>selectReview(detail.id)}>Reload review</button>
+        <p>All returned references load together; large reviews may take longer.</p>
+        <h4>Initial candidate snapshot</h4><p>{detail.candidates.length} returned candidate references. Membership is initial provenance, not an existing relationship or acceptance. Order is not a confidence ranking.</p>
+        {detail.candidates.map(c=><section key={c.id} data-testid="review-candidate"><p>Candidate {c.id} · Application portable identity: {c.application_portable_id}</p>
+          <p>Snapshot recorded: <EvidenceTime value={c.created_at} /> · Current availability: {c.availability}</p>
+          {c.current_application ? <><p>Current Application information: {value(c.current_application.company)} — {value(c.current_application.role_label)} · Current section: {c.current_application.section} · Record {c.application_id}</p>
+            <button className="btn" data-review-candidate={c.id} onClick={()=>open(c.application_id,c.application_portable_id)}>Open candidate Application {c.application_id}</button></> : <p>Application removed/unavailable; portable provenance retained.</p>}
+        </section>)}
+        <h4>Existing source relationships</h4><p>{detail.relationships.length} returned relationships. These link the retained source to Applications; they do not imply review acceptance.</p>
+        {detail.relationships.map(link=><section key={link.id} data-testid="review-relationship"><p>Relationship {link.id} · Portable identity: {link.portable_id}</p>
+          <p>Recorded origin: {link.origin} · Created: <EvidenceTime value={link.created_at} /> · Current availability: {link.availability}</p>
+          <button className="btn" data-review-relationship={link.id} onClick={()=>open(link.application_id)}>Open related Application {link.application_id}</button>
+        </section>)}
       </article>}
     </>}
   </section>;
@@ -7460,12 +7642,13 @@ function DjangoFoundation() {
   const [connected, setConnected] = useState(false);
   const [evidenceOpen, setEvidenceOpen] = useState(false);
   const [applicationsOpen, setApplicationsOpen] = useState(false);
+  const [reviewsOpen, setReviewsOpen] = useState(false);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
 
   function clearIdentity() {
-    setEvidenceOpen(false); setApplicationsOpen(false);
+    setEvidenceOpen(false); setApplicationsOpen(false); setReviewsOpen(false);
     if (identity.current !== null) history.replaceState(null, "", location.pathname + location.search);
     context.invalidate(); context.setActor(null); client.clearCsrf();
     identity.current = null; setUser(null); setWorkspaces([]);
@@ -7480,7 +7663,7 @@ function DjangoFoundation() {
     } else setError(e.message);
   }
   async function selectRoute(list) {
-    setEvidenceOpen(false); setApplicationsOpen(false);
+    setEvidenceOpen(false); setApplicationsOpen(false); setReviewsOpen(false);
     const id = JTHWorkspace.parseRoute(window.location.hash);
     context.invalidate(); context.select(null); setConnected(false); setSelected(null);
     if (!id) {
@@ -7503,7 +7686,7 @@ function DjangoFoundation() {
     await selectRoute(list);
   }
   async function checkSession() {
-    setEvidenceOpen(false); setApplicationsOpen(false);
+    setEvidenceOpen(false); setApplicationsOpen(false); setReviewsOpen(false);
     context.invalidate(); setPhase("loading"); setConnected(false); setError("");
     try {
       await client.bootstrap();
@@ -7534,7 +7717,7 @@ function DjangoFoundation() {
     } catch (e) { report(e); } finally { setPassword(""); setBusy(false); }
   }
   async function signOut() {
-    setEvidenceOpen(false); setApplicationsOpen(false);
+    setEvidenceOpen(false); setApplicationsOpen(false); setReviewsOpen(false);
     setBusy(true); setError("");
     try {
       await client.request("/api/auth/logout", {method:"POST"});
@@ -7575,12 +7758,15 @@ function DjangoFoundation() {
             <button className="btn" disabled={busy || !name.trim()}>Create workspace</button>
           </form>
           {selected && <p role="status">{connected ? "Connected to " + selected.name + "." : "Checking workspace connection…"}</p>}
-          {selected && connected && <button className="btn" disabled={evidenceOpen} onClick={() => {setApplicationsOpen(false);setEvidenceOpen(true);}}>Extraction evidence</button>}
+          {selected && connected && <button className="btn" disabled={evidenceOpen} onClick={() => {context.invalidate();setApplicationsOpen(false);setReviewsOpen(false);setEvidenceOpen(true);}}>Extraction evidence</button>}
           {selected && connected && evidenceOpen && <RetainedExtractionEvidencePanel key={user.id + ":" + selected.id}
             client={client} context={context} workspaceId={selected.id} onClose={() => setEvidenceOpen(false)} onAuthFailure={report} />}
-          {selected && connected && <button className="btn" disabled={applicationsOpen} onClick={()=>{setEvidenceOpen(false);setApplicationsOpen(true);}}>Applications</button>}
+          {selected && connected && <button className="btn" disabled={applicationsOpen} onClick={()=>{context.invalidate();setEvidenceOpen(false);setReviewsOpen(false);setApplicationsOpen(true);}}>Applications</button>}
           {selected && connected && applicationsOpen && <ApplicationPanel key={user.id + ":" + selected.id}
             client={client} context={context} workspaceId={selected.id} onClose={()=>setApplicationsOpen(false)} onAuthFailure={report} />}
+          {selected && connected && <button className="btn" disabled={reviewsOpen} onClick={()=>{context.invalidate();setEvidenceOpen(false);setApplicationsOpen(false);setReviewsOpen(true);}}>Application reviews</button>}
+          {selected && connected && reviewsOpen && <ApplicationReviewPanel key={user.id+":"+selected.id} client={client} context={context} workspaceId={selected.id}
+            onClose={()=>setReviewsOpen(false)} onAuthFailure={report} />}
           <button className="btn" disabled={busy} onClick={signOut}>Sign out</button>
         </>}
       {error && <button className="btn" disabled={busy} onClick={checkSession}>Refresh session and workspaces</button>}

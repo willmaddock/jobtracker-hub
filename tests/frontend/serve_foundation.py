@@ -68,10 +68,10 @@ with tempfile.TemporaryDirectory(prefix="jth-foundation-") as directory:
     mailbox = establish_mailbox(actor=alice, workspace=workspace, provider="gmail",
                                evidence={"method":"test", "reference":"browser-fixtures"})
     sources = {}
-    def retained(label):
+    def retained(label, subject=None):
         data = fixture(mailbox)
         data["source"]["value"] = "private-locator-" + label
-        data["content"]["subject"] = "private-subject-" + label
+        data["content"]["subject"] = subject if subject is not None else "private-subject-" + label
         data["content"]["text"]["value"] = "private-body-" + label
         result = retain_observation(actor=alice, workspace=workspace, key=str(uuid.uuid4()), observation=data)
         return RetainedMessage.objects.get(pk=result.message_id)
@@ -107,6 +107,49 @@ with tempfile.TemporaryDirectory(prefix="jth-foundation-") as directory:
     # More than 50 sources exercises the actual summary endpoint continuation.
     for index in range(46):
         retained("summary-" + str(index))
+
+    # Canonical review fixtures share the disposable source authority, never credentials.
+    from applications.retained_reviews import ensure_application_review, set_review_dismissal
+    from applications.message_relationships import attach_message
+    from applications.review_views import RetainedApplicationReviewCreate
+    from rest_framework.test import APIRequestFactory, force_authenticate
+    from core.lifecycle import set_trash
+    reviews = {}
+    renamed = Application.objects.create(workspace=workspace, section="applications", company="Initial name", role_label="Initial role")
+    removed = Application.objects.create(workspace=workspace, section="misc", company="Removed", role_label="Gone")
+    trashed = Application.objects.create(workspace=workspace, section="credentials", company="Trashed reference", role_label="Read only")
+    for label, ids in (("multiple", [first.pk, second.pk, renamed.pk, removed.pk]), ("dismissed", [first.pk]),
+                       ("restored", []), ("conflict", []), ("trashed", [trashed.pk]), ("created", [])):
+        message = retained("review-" + label, subject="<img src=x onerror=window.reviewInjected=true> Review " + label)
+        review, _ = ensure_application_review(actor=alice, workspace=workspace, retained_message_id=message.pk,
+            observation_id=message.observations.order_by("pk").first().pk,
+            classification="ambiguous" if len(ids)>1 else "match" if ids else "application", candidate_ids=ids)
+        reviews[label] = review.pk
+        if label == "multiple":
+            attach_message(actor=alice, workspace=workspace, application_id=first.pk, retained_message_id=message.pk)
+            attach_message(actor=alice, workspace=workspace, application_id=second.pk, retained_message_id=message.pk)
+        if label in {"dismissed", "restored"}:
+            set_review_dismissal(actor=alice, workspace=workspace, review_id=review.pk, dismissed=True, expected_revision=0)
+            if label == "restored":
+                set_review_dismissal(actor=alice, workspace=workspace, review_id=review.pk, dismissed=False, expected_revision=1)
+        if label == "conflict":
+            RetainedMessage.objects.filter(pk=message.pk).update(has_conflict=True)
+        if label == "created":
+            request = APIRequestFactory().post("/fixture", {"company":"CREATION PRIVATE PAYLOAD","role_label":"Excluded creation"}, format="json", HTTP_IDEMPOTENCY_KEY=str(uuid.uuid4()))
+            force_authenticate(request, user=alice)
+            result = RetainedApplicationReviewCreate.as_view()(request, workspace_id=workspace.pk, pk=review.pk)
+            assert result.status_code == 201, result.data
+    renamed.company = "<script>window.reviewInjected=true</script> Current name"
+    renamed.role_label = "Current role"; renamed.save(update_fields=["company", "role_label"])
+    # Privileged fixture deletion exercises the existing nullable candidate contract only.
+    removed.delete()
+    set_trash(actor=alice, workspace=workspace, kind="applications", pk=trashed.pk, trashed=True, expected_revision=0)
+    for index in range(46):
+        message=retained("review-page-"+str(index))
+        ensure_application_review(actor=alice, workspace=workspace, retained_message_id=message.pk,
+            observation_id=message.observations.get().pk, classification="application",candidate_ids=[])
+    def review_fixtures(request):
+        return JsonResponse({"reviews":reviews,"renamed":renamed.pk,"trashed":trashed.pk})
 
     def evidence_fixtures(request):
         return JsonResponse({"sources":sources, "empty_workspace":2, "foreign_workspace":3})
@@ -160,6 +203,7 @@ with tempfile.TemporaryDirectory(prefix="jth-foundation-") as directory:
                    path("foundation-tests", harness),
                    path("api/test-only/evidence-fixtures", evidence_fixtures),
                    path("api/test-only/application-fixtures", application_fixtures),
+                   path("api/test-only/review-fixtures", review_fixtures),
                    path("api/test-only/upload", UploadProbe.as_view()),
                    path("api/test-only/slow", SlowProbe.as_view())] + product_urls
     print("Disposable fixtures: alice / bob; password browser-fixture-only; workspaces A=1 B=2 C=3", flush=True)

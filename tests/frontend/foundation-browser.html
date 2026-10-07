@@ -87,6 +87,8 @@ document.querySelector('#run').onclick = async function () {
       if(match)return positive(match[1])&&!query.length;
       match=/^\/api\/workspaces\/([1-9]\d*)\/applications\/(?:([1-9]\d*)\/)?$/.exec(path);
       if(match)return positive(match[1])&&(!match[2]||positive(match[2]))&&!query.length;
+      match=/^\/api\/workspaces\/([1-9]\d*)\/application-reviews\/(?:([1-9]\d*)\/)?$/.exec(path);
+      if(match)return positive(match[1])&&(!match[2]||positive(match[2]))&&(match[2] ? !query.length : !query.length||query.length===1&&query[0][0]==='after'&&positive(query[0][1]));
       match=/^\/api\/workspaces\/([1-9]\d*)\/retained-messages\/$/.exec(path);
       if(match)return positive(match[1])&&(!query.length||query.length===1&&query[0][0]==='after'&&positive(query[0][1]));
       match=/^\/api\/workspaces\/([1-9]\d*)\/retained-messages\/([1-9]\d*)\/posting-extractions\/$/.exec(path);
@@ -177,6 +179,177 @@ document.querySelector('#run').onclick = async function () {
       intercept=null;win.dispatchEvent(new win.Event('focus'));await wait(()=>text().includes('Signed in as alice'),'fixture session recheck');
       const selector=doc.querySelector('select[aria-label="Workspace"]');selector.value='1';selector.dispatchEvent(new win.Event('change',{bubbles:true}));await wait(()=>text().includes('Connected to A.'),'restore fixture Workspace');
     });
+    const reviewFixtures=await client.request('/api/test-only/review-fixtures');
+    const reviewList='/api/workspaces/1/application-reviews/';
+    const reviewUrl=id=>reviewList+id+'/';
+    const reviewButton=id=>doc.querySelector('[data-review-id="'+id+'"]');
+    const reviewPanel=()=>doc.querySelector('[data-testid="review-panel"]');
+    const reviewDetail=()=>doc.querySelector('[data-testid="review-detail"]');
+    const initialReviews=await (await nativeFetch(reviewList)).json();
+    const multipleReview=await (await nativeFetch(reviewUrl(reviewFixtures.reviews.multiple))).json();
+    const continuation=reviewList+'?after='+initialReviews.next_after;
+    const finalReviews=await (await nativeFetch(continuation)).json();
+    async function openReviews(){await click('Application reviews');await wait(()=>reviewButton(reviewFixtures.reviews.multiple),'review list');}
+    async function chooseReview(label){reviewButton(reviewFixtures.reviews[label]).click();await wait(()=>reviewDetail()&&!text().includes('Loading review detail…'),'review '+label);}
+    async function returnA(){const select=doc.querySelector('select[aria-label="Workspace"]');select.value='1';select.dispatchEvent(new win.Event('change',{bubbles:true}));await wait(()=>text().includes('Connected to A.'),'review return A');}
+    await test('review keyset continuation retries same token, accumulates complete pages and retains list',async()=>{
+      await openReviews();assert(doc.querySelectorAll('[data-review-id]').length===50,'review page size');
+      assert(text().includes('Current review disposition: Active')&&text().includes('Current review disposition: Dismissed'),'inclusive disposition');
+      let hits=0;intercept=url=>url===continuation&&++hits===1?response(500,{detail:'private-page-error'}):null;
+      await click('Load more reviews');await wait(()=>button('Retry reviews'),'page error');
+      assert(doc.querySelectorAll('[data-review-id]').length===50&&!text().includes('private-page-error'),'valid rows lost/raw error');
+      await click('Retry reviews');await wait(()=>doc.querySelectorAll('[data-review-id]').length===52,'page retry');
+      assert(hits===2&&!button('Load more reviews'),'continuation token/exhaustion');
+      await chooseReview('multiple');await click('Back to reviews');assert(doc.querySelectorAll('[data-review-id]').length===52,'pages lost');
+      await click('Close reviews');intercept=null;
+    });
+    await test('review detail separates candidate snapshot, current text and source relationships',async()=>{
+      await openReviews();await chooseReview('multiple');
+      assert(text().includes('Initial candidate snapshot')&&text().includes('Current Application information')&&text().includes('Existing source relationships'),'semantic headings');
+      assert(doc.querySelectorAll('[data-testid="review-candidate"]').length===4&&doc.querySelectorAll('[data-testid="review-relationship"]').length===2,'references omitted');
+      assert(text().includes('Application removed/unavailable; portable provenance retained.'),'removed provenance');
+      assert(text().includes('<img src=x onerror=window.reviewInjected=true>')&&text().includes('<script>window.reviewInjected=true<\/script> Current name'),'provider text changed');
+      assert(!win.reviewInjected&&!reviewPanel().querySelector('img')&&!reviewPanel().querySelector('script'),'HTML rendered');
+      assert(!text().includes('Initial name')&&!text().includes('lifecycle_revision')&&!text().includes('attachable'),'historical labels/revisions invented');
+      assert(text().includes('Reported candidate count')&&text().includes('4 returned candidate references'),'counts conflated');
+      await click('Close reviews');
+    });
+    await test('candidate and relationship destinations share core detail with no Application list fetch',async()=>{
+      await openReviews();await chooseReview('multiple');const before=traffic.length;
+      for(const id of [appFixtures.first,appFixtures.second,reviewFixtures.renamed]){
+        const candidate=multipleReview.candidates.find(c=>c.application_id===id);
+        doc.querySelector('[data-review-candidate="'+candidate.id+'"]').click();await wait(()=>doc.querySelector('[data-testid="application-detail"]'),'candidate destination');
+        if(id===appFixtures.first)assert(text().includes('Archived')&&text().includes('interviewing'),'existing core fields lost');
+        assert(!reviewDetail(),'two views active');await click('Back to review');assert(reviewDetail(),'review lost');
+      }
+      doc.querySelector('[data-review-relationship]').click();await wait(()=>doc.querySelector('[data-testid="application-detail"]'),'relationship destination');await click('Back to review');
+      assert(traffic.slice(before).every(c=>c.method==='GET'&&/^\/api\/workspaces\/1\/applications\/[1-9]\d*\/$/.test(c.url)),'destination loaded list/excluded endpoint');
+      assert(win.location.hash==='#/workspaces/1','review resource route');await click('Back to reviews');await click('Close reviews');
+    });
+    await test('trashed references, conflict, zero candidates, restored Active and excluded creation history',async()=>{
+      await openReviews();await chooseReview('trashed');assert(text().includes('Current availability: trashed'),'trashed candidate');
+      doc.querySelector('[data-review-candidate]').click();await wait(()=>text().includes('Trashed — read-only inspection'),'trashed destination');assert(!button('Restore'),'restore control');
+      await click('Back to review');await click('Back to reviews');await chooseReview('conflict');
+      assert(text().includes('Source conflict recorded.')&&text().includes('Current review disposition: Active')&&text().includes('0 returned candidate references'),'conflict conflated');
+      await click('Back to reviews');await chooseReview('restored');assert(text().includes('Current review disposition: Active')&&!text().includes('Restored'),'restored label');
+      await click('Back to reviews');await chooseReview('created');assert(text().includes('1 returned relationships')&&!text().includes('CREATION PRIVATE PAYLOAD')&&!text().includes('input_snapshot'),'creation payload displayed');
+      await click('Close reviews');
+    });
+    await test('review list/detail and Application errors retry explicitly; disappeared target clears detail',async()=>{
+      let failed=true;intercept=url=>url===reviewList&&failed?response(500,{detail:'private review error'}):null;
+      await click('Application reviews');await wait(()=>button('Retry reviews'),'list failure');assert(!text().includes('private review error'),'raw error');failed=false;await click('Retry reviews');await wait(()=>reviewButton(reviewFixtures.reviews.multiple),'list retry');
+      failed=true;intercept=url=>url===reviewUrl(reviewFixtures.reviews.multiple)&&failed?response(500,{}):null;
+      reviewButton(reviewFixtures.reviews.multiple).click();await wait(()=>button('Retry reviews'),'detail failure');failed=false;await click('Retry reviews');await wait(()=>reviewDetail(),'detail retry');
+      const candidate=multipleReview.candidates.find(c=>c.application_id===appFixtures.first);
+      failed=true;intercept=url=>url===appUrl(appFixtures.first)&&failed?response(500,{}):null;
+      doc.querySelector('[data-review-candidate="'+candidate.id+'"]').click();await wait(()=>button('Try again'),'destination failure');failed=false;await click('Try again');await wait(()=>doc.querySelector('[data-testid="application-detail"]'),'destination retry');
+      await click('Back to review');intercept=url=>url===appUrl(appFixtures.first)?response(404,{detail:'private'}):null;
+      doc.querySelector('[data-review-candidate="'+candidate.id+'"]').click();await wait(()=>text().includes('Application or Workspace unavailable.'),'disappeared');assert(!doc.querySelector('[data-testid="application-detail"]'),'old detail retained');
+      await click('Back to review');assert(reviewDetail(),'historical review lost');await click('Close reviews');intercept=null;
+    });
+    await test('review malformed continuation preserves prior valid rows and offers explicit restart',async()=>{
+      await openReviews();intercept=url=>url===continuation?response(200,{results:[initialReviews.results[0]],next_after:null}):null;
+      await click('Load more reviews');await wait(()=>button('Restart reviews from first page'),'overlap failure');assert(doc.querySelectorAll('[data-review-id]').length===50,'valid pages blanked');
+      intercept=null;await click('Restart reviews from first page');await wait(()=>reviewButton(reviewFixtures.reviews.multiple),'restart');assert(doc.querySelectorAll('[data-review-id]').length===50,'restart duplicate append');await click('Close reviews');
+    });
+    await test('review projections reject unsafe/scope IDs, invalid detail and candidate UUID mismatch',async()=>{
+      for(const row of [{...initialReviews.results[0],id:9007199254740992},{...initialReviews.results[0],workspace_id:2}]){
+        intercept=url=>url===reviewList?response(200,{results:[row],next_after:null}):null;const before=traffic.length;
+        await click('Application reviews');await wait(()=>reviewPanel()?.querySelector('[role="alert"]'),'bad list');assert(!doc.querySelector('[data-review-id]'),'unsafe selectable');assert(!traffic.slice(before).some(c=>/application-reviews\/\d/.test(c.url)),'unsafe detail requested');await click('Close reviews');
+      }
+      intercept=null;await openReviews();
+      for(const mutate of [r=>r.id++,r=>r.workspace_id=2,r=>r.candidates[0].application_id=9007199254740992,r=>r.relationships[0].application_id=9007199254740992]){
+        const bad=structuredClone(multipleReview);mutate(bad);intercept=url=>url===reviewUrl(reviewFixtures.reviews.multiple)?response(200,bad):null;
+        reviewButton(reviewFixtures.reviews.multiple).click();await wait(()=>reviewPanel()?.querySelector('[role="alert"]'),'bad detail');assert(!reviewDetail(),'bad detail displayed');await click('Back to reviews');
+      }
+      intercept=null;await chooseReview('multiple');intercept=url=>url===appUrl(appFixtures.first)?response(200,{...realDetail,portable_id:'00000000-0000-4000-8000-000000000999'}):null;
+      const candidate=multipleReview.candidates.find(c=>c.application_id===appFixtures.first);doc.querySelector('[data-review-candidate="'+candidate.id+'"]').click();
+      await wait(()=>text().includes('Application data could not be displayed safely.'),'UUID mismatch');assert(!doc.querySelector('[data-testid="application-detail"]'),'mismatched UUID rendered');await click('Close reviews');intercept=null;
+    });
+    await test('held review detail success/error/obsolete auth cannot replace newer selection or finalization',async()=>{
+      await openReviews();
+      for(const status of [200,500,401]){
+        let release,signal;intercept=(url,options)=>url===reviewUrl(reviewFixtures.reviews.multiple)?new Promise(resolve=>{signal=options.signal;release=()=>resolve(new win.Response(JSON.stringify(status===200?{...multipleReview,subject:'STALE REVIEW'}:{code:status===401?'authentication_required':'request_failed'}),{status}));}):null;
+        reviewButton(reviewFixtures.reviews.multiple).click();await wait(()=>!!release,'held review');await click('Back to reviews');await chooseReview('restored');assert(signal.aborted,'review Back did not abort');release();await new Promise(r=>setTimeout(r,60));
+        assert(reviewDetail()&&!text().includes('STALE REVIEW')&&!text().includes('Reviews could not')&&!text().includes('Your session ended')&&!text().includes('Loading review detail'),'stale review/error/finally');await click('Back to reviews');
+      }
+      intercept=null;await click('Close reviews');
+    });
+    await test('held referenced Application success/error/obsolete auth is ignored after Back',async()=>{
+      await openReviews();await chooseReview('multiple');const candidate=multipleReview.candidates.find(c=>c.application_id===appFixtures.first);
+      for(const status of [200,500,401]){
+        let release,signal;intercept=(url,options)=>url===appUrl(appFixtures.first)?new Promise(resolve=>{signal=options.signal;release=()=>resolve(new win.Response(JSON.stringify(status===200?{...realDetail,company:'STALE APP'}:{code:status===401?'authentication_required':'request_failed'}),{status}));}):null;
+        doc.querySelector('[data-review-candidate="'+candidate.id+'"]').click();await wait(()=>!!release,'held Application');button('Back to review').click();assert(signal.aborted,'Application Back did not abort synchronously');release();await new Promise(r=>setTimeout(r,60));
+        assert(reviewDetail()&&!text().includes('STALE APP')&&!text().includes('Your session ended')&&!text().includes('Applications could not'),'stale destination');
+      }
+      intercept=null;await click('Close reviews');
+    });
+    await test('held continuation success/error/obsolete auth cannot append after selecting a review',async()=>{
+      await openReviews();
+      for(const status of [200,500,401]){
+        let release,signal;intercept=(url,options)=>url===continuation?new Promise(resolve=>{signal=options.signal;release=()=>resolve(new win.Response(JSON.stringify(status===200?finalReviews:{code:status===401?'authentication_required':'request_failed'}),{status}));}):null;
+        await click('Load more reviews');await wait(()=>!!release,'held page');await chooseReview('restored');assert(signal.aborted,'selection did not abort page');release();await new Promise(r=>setTimeout(r,60));
+        assert(reviewDetail()&&!text().includes('Your session ended'),'late page auth');await click('Back to reviews');assert(doc.querySelectorAll('[data-review-id]').length===50&&!text().includes('Reviews could not'),'late page append/finally');
+      }
+      intercept=null;await click('Close reviews');
+    });
+    await test('review Workspace change, empty state and current expiry clear all sensitive state',async()=>{
+      await openReviews();let release;intercept=url=>url===reviewUrl(reviewFixtures.reviews.multiple)?new Promise(resolve=>{release=()=>resolve(new win.Response(JSON.stringify(multipleReview),{status:200}));}):null;
+      reviewButton(reviewFixtures.reviews.multiple).click();await wait(()=>!!release,'Workspace held review');const select=doc.querySelector('select[aria-label="Workspace"]');select.value='2';select.dispatchEvent(new win.Event('change',{bubbles:true}));await wait(()=>text().includes('Connected to B.'),'review B');release();await new Promise(r=>setTimeout(r,60));assert(!reviewPanel(),'old review panel');intercept=null;
+      await click('Application reviews');await wait(()=>text().includes('No retained Application reviews in this Workspace.'),'empty reviews');await click('Close reviews');await returnA();
+      intercept=url=>url===reviewList?response(401,{code:'authentication_required'}):null;await click('Application reviews');await wait(()=>text().includes('Your session ended. Sign in to continue.'),'review expiry');assert(!reviewPanel(),'sensitive review remained');
+      intercept=null;win.dispatchEvent(new win.Event('focus'));await wait(()=>text().includes('Signed in as alice'),'review session check');await returnA();
+    });
+    await test('review detail displays all returned references independently of reported counts',async()=>{
+      const expanded=structuredClone(multipleReview), template=expanded.candidates.find(c=>c.application_id===appFixtures.first), link=expanded.relationships[0];
+      expanded.candidates=Array.from({length:61},(_,n)=>({...template,id:1000+n,application_id:1000+n,application_portable_id:'00000000-0000-4000-8000-'+String(1000+n).padStart(12,'0')}));
+      expanded.relationships=Array.from({length:61},(_,n)=>({...link,id:2000+n,application_id:2000+n,portable_id:'00000000-0000-4000-8000-'+String(2000+n).padStart(12,'0')}));
+      intercept=url=>url===reviewUrl(reviewFixtures.reviews.multiple)?response(200,expanded):null;await openReviews();await chooseReview('multiple');
+      assert(doc.querySelectorAll('[data-testid="review-candidate"]').length===61&&doc.querySelectorAll('[data-testid="review-relationship"]').length===61,'references truncated');
+      assert(text().includes('61 returned candidate references')&&text().includes('Reported candidate count4'),'reported count replaced');await click('Close reviews');intercept=null;
+    });
+    await test('review initial-list close and reopen reject held success/error and obsolete authentication',async()=>{
+      for(const status of [200,500,401]){
+        let release,signal;intercept=(url,options)=>url===reviewList?new Promise(resolve=>{signal=options.signal;release=()=>resolve(new win.Response(JSON.stringify(status===200?{...initialReviews,results:initialReviews.results.map(r=>({...r,subject:'STALE LIST'}))}:{code:status===401?'authentication_required':'request_failed'}),{status}));}):null;
+        await click('Application reviews');await wait(()=>!!release,'initial list held');await click('Close reviews');assert(signal.aborted,'close list abort');intercept=null;await openReviews();release();await new Promise(r=>setTimeout(r,60));
+        assert(reviewButton(reviewFixtures.reviews.multiple)&&!text().includes('STALE LIST')&&!text().includes('Your session ended')&&!button('Retry reviews'),'closed list response applied');await click('Close reviews');
+      }
+    });
+    await test('review detail reload and close reject held old generations',async()=>{
+      await openReviews();await chooseReview('multiple');
+      let release;intercept=url=>url===reviewUrl(reviewFixtures.reviews.multiple)?new Promise(resolve=>{release=()=>resolve(new win.Response(JSON.stringify({...multipleReview,subject:'STALE RELOAD'}),{status:200}));}):null;
+      await click('Reload review');await wait(()=>!!release,'held reload');await click('Back to reviews');intercept=null;await chooseReview('multiple');release();await new Promise(r=>setTimeout(r,60));assert(reviewDetail()&&!text().includes('STALE RELOAD'),'reload generation');
+      intercept=url=>url===reviewUrl(reviewFixtures.reviews.multiple)?new Promise(resolve=>{release=()=>resolve(new win.Response(JSON.stringify(multipleReview),{status:200}));}):null;
+      await click('Reload review');await wait(()=>!!release,'held close detail');await click('Close reviews');release();await new Promise(r=>setTimeout(r,60));assert(!reviewPanel(),'late detail reopened');intercept=null;
+    });
+    await test('referenced Application close and Workspace change invalidate destination lifetime',async()=>{
+      const candidate=multipleReview.candidates.find(c=>c.application_id===appFixtures.first);
+      for(const action of ['close','workspace']){
+        await openReviews();await chooseReview('multiple');let release,signal;
+        intercept=(url,options)=>url===appUrl(appFixtures.first)?new Promise(resolve=>{signal=options.signal;release=()=>resolve(new win.Response(JSON.stringify({...realDetail,company:'STALE CLOSED APP'}),{status:200}));}):null;
+        doc.querySelector('[data-review-candidate="'+candidate.id+'"]').click();await wait(()=>!!release,'held closing destination');
+        if(action==='close')button('Close reviews').click();else {const select=doc.querySelector('select[aria-label="Workspace"]');select.value='2';select.dispatchEvent(new win.Event('change',{bubbles:true}));await wait(()=>text().includes('Connected to B.'),'destination B');}
+        assert(signal.aborted,'destination not aborted');release();await new Promise(r=>setTimeout(r,60));assert(!reviewPanel()&&!text().includes('STALE CLOSED APP'),'closed destination leaked');intercept=null;if(action==='workspace')await returnA();
+      }
+    });
+    await test('review destination current expiry and actor change clear context without old auth taking over',async()=>{
+      const candidate=multipleReview.candidates.find(c=>c.application_id===appFixtures.first);
+      await openReviews();await chooseReview('multiple');intercept=url=>url===appUrl(appFixtures.first)?response(401,{code:'authentication_required'}):null;
+      doc.querySelector('[data-review-candidate="'+candidate.id+'"]').click();await wait(()=>text().includes('Your session ended.'),'destination expiry');assert(!reviewPanel(),'expiry detail retained');
+      intercept=null;win.dispatchEvent(new win.Event('focus'));await wait(()=>text().includes('Signed in as alice'),'destination session recheck');await returnA();
+      await openReviews();await chooseReview('multiple');let release;
+      intercept=url=>url===appUrl(appFixtures.first)?new Promise(resolve=>{release=()=>resolve(new win.Response(JSON.stringify({code:'authentication_required'}),{status:401}));}):null;
+      doc.querySelector('[data-review-candidate="'+candidate.id+'"]').click();await wait(()=>!!release,'actor held destination');
+      await client.bootstrap();const bob=await client.request('/api/auth/login',{method:'POST',body:{username:'bob',password:'browser-fixture-only'}});context.setActor(bob.id);context.select(3);await client.bootstrap();
+      win.dispatchEvent(new win.Event('focus'));await wait(()=>text().includes('Signed in as bob'),'review actor change');release();await new Promise(r=>setTimeout(r,60));assert(!reviewPanel()&&text().includes('Signed in as bob')&&!text().includes('Your session ended'),'obsolete actor auth');
+      intercept=null;await client.bootstrap();const alice=await client.request('/api/auth/login',{method:'POST',body:{username:'alice',password:'browser-fixture-only'}});context.setActor(alice.id);context.select(1);await client.bootstrap();win.dispatchEvent(new win.Event('focus'));await wait(()=>text().includes('Signed in as alice'),'restore Alice');await returnA();
+    });
+    await test('review panel coexistence and refresh preserve only Workspace route',async()=>{
+      await openReviews();await chooseReview('multiple');await click('Applications');await wait(()=>appButton(appFixtures.first),'switch Applications');assert(!reviewPanel(),'reviews not closed');
+      await click('Application reviews');await wait(()=>reviewButton(reviewFixtures.reviews.multiple),'switch reviews');assert(!appPanel(),'Applications not closed');await chooseReview('multiple');
+      frame.contentWindow.location.reload();await wait(()=>frame.contentDocument!==doc&&frame.contentDocument.querySelector('#root')?.textContent.includes('Connected to A.'),'review refresh');win=frame.contentWindow;doc=frame.contentDocument;
+      win.__fixtureIntercept=(url,options)=>intercept?.(url,options);assert(!reviewPanel()&&win.location.hash==='#/workspaces/1','review selection persisted');
+    });
     await test('panel open fetches once; real source labels exclude private content', async()=>{
       await click('Extraction evidence');await wait(()=>sourceButton(fixtures.sources.history),'sources');
       assert(traffic.filter(c=>c.url==='/api/workspaces/1/retained-messages/').length===1,'duplicate list request');
@@ -206,7 +379,8 @@ document.querySelector('#run').onclick = async function () {
       const before=doc.querySelectorAll('article').length;await click('Load more history');
       await wait(()=>doc.querySelectorAll('article').length===before+1,'history append');assert(!button('Load more history'),'exhausted cursor');
       const sources=Array.from(doc.querySelectorAll('button')).filter(b=>b.textContent.startsWith('Source ')).length;
-      await click('Load more sources');await wait(()=>Array.from(doc.querySelectorAll('button')).filter(b=>b.textContent.startsWith('Source ')).length>sources,'source append');
+      let sourceCount=sources;
+      while(button('Load more sources')){await click('Load more sources');await wait(()=>Array.from(doc.querySelectorAll('button')).filter(b=>b.textContent.startsWith('Source ')).length>sourceCount,'source append');sourceCount=Array.from(doc.querySelectorAll('button')).filter(b=>b.textContent.startsWith('Source ')).length;}
       assert(!button('Load more sources'),'summary exhaustion');
     });
     await test('real conflicted source remains inspectable',async()=>{
@@ -322,7 +496,11 @@ document.querySelector('#run').onclick = async function () {
                     {url:'/api/email/sync',method:'GET'},{url:'/api/email/sync',method:'POST'},
                     {url:'/api/workspaces/1/retained-messages/1/',method:'GET'},
                     {url:'/api/workspaces/1/retained-messages/',method:'PATCH'},
-                    {url:'/api/job-postings',method:'GET'}];
+                    {url:'/api/job-postings',method:'GET'},
+                    {url:'/api/workspaces/1/application-reviews/1/attach/',method:'POST'},
+                    {url:'/api/workspaces/1/application-reviews/1/?creation_results_after=1',method:'GET'},
+                    {url:'/api/workspaces/1/applications/1/messages/',method:'GET'},
+                    {url:'/api/workspaces/1/categories/',method:'GET'}];
       const prior=win.__fixtureIntercept;
       try {
         for(const probe of probes){
@@ -340,7 +518,7 @@ document.querySelector('#run').onclick = async function () {
     });
     await test('entire product traffic allowlist covers all document lifetimes',async()=>{
       assert(traffic.length>0,'no product traffic collected');
-      assert(rejectedProbes.size===6,'negative probes incomplete');
+      assert(rejectedProbes.size===10,'negative probes incomplete');
       for(const call of traffic){
         if(rejectedProbes.has(call))assert(!allowedTraffic(call),'forbidden probe became allowed');
         else assertTraffic([call]);
