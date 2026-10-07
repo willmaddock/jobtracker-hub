@@ -101,6 +101,21 @@
         if (!captured.actor) throw new ApiError("workspace_required", "Select a workspace first.");
         return request(`/api/workspaces/${safeId(captured.workspace)}/application-reviews/${safeId(reviewId)}/`, {captured, signal});
       },
+      readCategories({captured = context.capture(), signal} = {}) {
+        check(captured);
+        if (!captured.actor) throw new ApiError("workspace_required", "Select a workspace first.");
+        return request(`/api/workspaces/${safeId(captured.workspace)}/categories/?show_archived=true`, {captured, signal});
+      },
+      readCategory(categoryId, {captured = context.capture(), signal} = {}) {
+        check(captured);
+        if (!captured.actor) throw new ApiError("workspace_required", "Select a workspace first.");
+        return request(`/api/workspaces/${safeId(captured.workspace)}/categories/${safeId(categoryId)}/`, {captured, signal});
+      },
+      readCategoryApplications(categoryId, {captured = context.capture(), signal} = {}) {
+        check(captured);
+        if (!captured.actor) throw new ApiError("workspace_required", "Select a workspace first.");
+        return request(`/api/workspaces/${safeId(captured.workspace)}/categories/${safeId(categoryId)}/applications/?show_archived=true`, {captured, signal});
+      },
       clearCsrf() { csrf = null; },
       async bootstrap() {
         const result = await request("/api/auth/csrf");

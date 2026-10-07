@@ -273,3 +273,64 @@ test('review errors never expose raw server messages; restart preserves explicit
   assert.equal(h.reviewFailure({status:400},true).restart,true);assert.equal(h.reviewFailure({status:500},true).retry,true);
   assert.equal(h.reviewFailure({code:'stale_response'}),null);assert.equal(h.reviewFailure({status:401,code:'authentication_required'}).auth,true);
 });
+
+const categoryHelpers=(()=>{
+  const scope={JTHApi:{ApiError},Number,Date,Set};vm.createContext(scope);
+  const app=html.split('// BEGIN DJANGO APPLICATION STATE')[1].split('// END DJANGO APPLICATION STATE')[0];
+  const categories=html.split('// BEGIN DJANGO CATEGORY STATE')[1].split('// END DJANGO CATEGORY STATE')[0];
+  vm.runInContext(app+'\n'+categories,scope);return scope;
+})();
+const categoryFixture=(id=5)=>({id,workspace:2,portable_id:uuid(id),name:'  Same <img src=x>  ',section:'misc',archived:false,is_trashed:false,effective_trashed:false,trashed_at:null});
+const memberFixture=(id=7)=>({...applicationFixture(id),category_id:5,override:{archived:true,notes:'private'}});
+test('Category helpers issue exactly archived-inclusive scoped GETs and reject unsafe IDs before fetch',async()=>{
+  const calls=[];const {client,context}=setup(async(p,o)=>{calls.push({p,o});return response(200,[]);});
+  await client.readCategories();await client.readCategory(5);await client.readCategoryApplications(5);
+  assert.deepEqual(calls.map(c=>c.p),['/api/workspaces/2/categories/?show_archived=true','/api/workspaces/2/categories/5/','/api/workspaces/2/categories/5/applications/?show_archived=true']);
+  for(const c of calls){assert.equal(c.o.method,'GET');assert.equal(c.o.credentials,'same-origin');assert.equal(c.o.cache,'no-store');assert.equal(c.o.body,undefined);}
+  for(const id of [0,true,'5',1.2,9007199254740992])for(const method of ['readCategory','readCategoryApplications'])assert.throws(()=>client[method](id),{code:'unsafe_identifier'});
+  assert.equal(calls.length,3);context.select(9007199254740992);assert.throws(()=>client.readCategories(),{code:'unsafe_identifier'});
+});
+test('Category helpers preserve captured context and active/preaborted cancellation',async()=>{
+  const {client,context}=setup();const old=context.capture();context.select(3);
+  assert.throws(()=>client.readCategory(5,{captured:old}),{code:'stale_response'});
+  assert.throws(()=>client.readCategories({captured:old}),{code:'stale_response'});
+  assert.throws(()=>client.readCategoryApplications(5,{captured:old}),{code:'stale_response'});
+  for(const method of ['readCategories','readCategory','readCategoryApplications']){
+    let signal,release;const pending=setup(async(p,o)=>{signal=o.signal;return new Promise(r=>release=r);});
+    const abort=new AbortController(),options={signal:abort.signal};
+    const task=method==='readCategories'?pending.client[method](options):pending.client[method](5,options);
+    abort.abort();assert(signal.aborted);release(response(200,[]));await task;
+    await assert.rejects(method==='readCategories'?pending.client[method](options):pending.client[method](5,options),{code:'aborted'});
+  }
+});
+test('Category projections preserve order, spelling and duplicate names but exclude write/provenance data',()=>{
+  const h=categoryHelpers,row={...categoryFixture(),revision:9007199254740992,lifecycle_revision:3,provenance:{private:'secret'},extra:{private:'secret'}};
+  const projected=h.categoryRow(row,2,row);assert.deepEqual(Object.keys(projected).sort(),['id','workspace','portable_id','name','section','archived','is_trashed','effective_trashed','trashed_at'].sort());
+  assert.equal(projected.name,row.name);assert.equal(JSON.stringify(projected).includes('secret'),false);
+  const rows=h.categoryList([categoryFixture(6),categoryFixture(5)],2);assert.equal(rows[0].id,6);assert.equal(rows.length,2);
+  assert.equal(h.categoryRow({...row,portable_id:row.portable_id.toUpperCase()},2,row).id,5);
+  assert.throws(()=>h.categoryRow({...row,portable_id:uuid(20)},2,row));
+  for(const change of [{workspace:3},{id:9007199254740992},{portable_id:'bad'},{section:'applications'},{name:null},{archived:null},{effective_trashed:true},{trashed_at:'bad'}])assert.throws(()=>h.categoryRow({...row,...change},2,row));
+  const trashed={...row,is_trashed:true,effective_trashed:true,trashed_at:'2026-10-06T12:00:00Z'};assert(h.categoryRow(trashed,2).is_trashed);assert.throws(()=>h.categoryList([trashed],2));
+  assert.throws(()=>h.categoryList([row,row],2));assert.throws(()=>h.categoryList([row,{...row,id:8}],2));assert.throws(()=>h.categoryList({results:[row]},2));
+});
+test('Category member projection validates parent, scope, portable identity and complete live membership',()=>{
+  const h=categoryHelpers,row=memberFixture();const result=h.categoryMembers([row,memberFixture(8)],2,5);
+  assert.equal(result[0].override.archived,true);assert.equal(result[0].section,'applications');
+  assert.equal(JSON.stringify(result).includes('private'),false);assert.equal(result[0].effective_status,undefined);assert.equal(result[0].category_revision,undefined);
+  assert.equal(Object.keys(result[0].override).join(','),'archived');assert.equal(h.categoryMembers([{...row,override:null}],2,5)[0].override,null);
+  for(const change of [{id:9007199254740992},{workspace:3},{category_id:6},{category_id:null},{portable_id:'bad'},{section:'unknown'},{company:null},{role_label:null},{override:{}},{is_trashed:true,effective_trashed:true,trashed_at:'2026-10-06T12:00:00Z'}])assert.throws(()=>h.categoryMembers([{...row,...change}],2,5));
+  assert.throws(()=>h.categoryMembers([row,row],2,5));assert.throws(()=>h.categoryMembers([row,{...row,id:8}],2,5));
+  const many=Array.from({length:61},(_,n)=>memberFixture(n+10));assert.equal(h.categoryMembers(many,2,5).length,61);
+});
+test('Category errors distinguish unavailable membership from empty and hide raw backend details',()=>{
+  const h=categoryHelpers;
+  assert.equal(h.categoryFailure(new ApiError('resource_trashed','private SQL',409),'members').retry,true);
+  assert.match(h.categoryFailure(new ApiError('resource_trashed','private SQL',409),'members').message,/now trashed/);
+  for(const phase of ['list','detail','members'])assert.equal(h.categoryFailure(new ApiError('network_error','private SQL'),phase).message.includes('private'),false);
+  assert.equal(h.categoryFailure(new ApiError('authentication_required','private',401),'detail').auth,true);
+  assert.equal(h.categoryFailure(new ApiError('unexpected_category','private'),'members').retry,true);
+  assert.equal(h.categoryFailure(new ApiError('unsafe_identifier','private'),'members').retry,true);
+  assert.equal(h.categoryFailure(new ApiError('aborted','private'),'members'),null);
+  assert.equal(h.categoryFailure(new ApiError('stale_response','private'),'detail'),null);
+});

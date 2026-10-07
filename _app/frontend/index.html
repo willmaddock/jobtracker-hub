@@ -7626,6 +7626,130 @@ function ApplicationReviewPanel({client, context, workspaceId, onClose, onAuthFa
 }
 
 // The Django entry never mounts App: its effects and caches belong to FastAPI.
+// BEGIN DJANGO CATEGORY STATE
+function categoryUnexpected() {throw new JTHApi.ApiError("unexpected_category", "Category data could not be displayed safely.");}
+function categoryObject(value) {if(!value || typeof value !== "object" || Array.isArray(value)) categoryUnexpected();return value;}
+function categoryUuid(value) {if(typeof value !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) categoryUnexpected();return value;}
+const categorySections=["credentials","network","resume_library","leads","compliance","personal","misc"];
+function categoryLifecycle(row) {
+  if(typeof row.is_trashed !== "boolean" || typeof row.effective_trashed !== "boolean") categoryUnexpected();
+  const trashed_at=applicationStamp(row.trashed_at);
+  if(row.is_trashed !== (trashed_at !== null) || row.effective_trashed !== row.is_trashed) categoryUnexpected();
+  return {is_trashed:row.is_trashed,effective_trashed:row.effective_trashed,trashed_at};
+}
+function categoryRow(value, workspace, expected = null) {
+  const row=categoryObject(value), id=applicationId(row.id), scope=applicationId(row.workspace), portable_id=categoryUuid(row.portable_id);
+  if(scope !== applicationId(workspace) || (expected && (id !== expected.id || portable_id.toLowerCase() !== expected.portable_id.toLowerCase()))) categoryUnexpected();
+  if(typeof row.name !== "string" || !row.name.trim() || !categorySections.includes(row.section) || typeof row.archived !== "boolean") categoryUnexpected();
+  return {id,workspace:scope,portable_id,name:row.name,section:row.section,archived:row.archived,...categoryLifecycle(row)};
+}
+function categoryList(data, workspace) {
+  if(!Array.isArray(data)) categoryUnexpected();
+  const rows=data.map(row=>categoryRow(row,workspace));
+  if(rows.some(row=>row.is_trashed) || new Set(rows.map(row=>row.id)).size !== rows.length || new Set(rows.map(row=>row.portable_id.toLowerCase())).size !== rows.length) categoryUnexpected();
+  return rows;
+}
+function categoryMembers(data, workspace, categoryId) {
+  if(!Array.isArray(data)) categoryUnexpected();
+  const rows=data.map(value=>{
+    const row=categoryObject(value), id=applicationId(row.id), scope=applicationId(row.workspace), category_id=applicationId(row.category_id);
+    if(scope !== applicationId(workspace) || category_id !== applicationId(categoryId) || !["applications",...categorySections].includes(row.section)) categoryUnexpected();
+    const lifecycle=categoryLifecycle(row);
+    if(lifecycle.is_trashed || typeof row.company !== "string" || typeof row.role_label !== "string") categoryUnexpected();
+    let override=null;
+    if(row.override !== null) {const source=categoryObject(row.override);if(typeof source.archived !== "boolean") categoryUnexpected();override={archived:source.archived};}
+    return {id,workspace:scope,portable_id:categoryUuid(row.portable_id),company:row.company,role_label:row.role_label,section:row.section,category_id,...lifecycle,override};
+  });
+  if(new Set(rows.map(row=>row.id)).size !== rows.length || new Set(rows.map(row=>row.portable_id.toLowerCase())).size !== rows.length) categoryUnexpected();
+  return rows;
+}
+function categoryFailure(error, phase) {
+  if(["stale_response","aborted"].includes(error.code) || error.name === "AbortError") return null;
+  if(error.code === "unsafe_identifier") return {message:"This identifier cannot be represented safely in this browser workflow.",retry:phase === "members"};
+  if(error.status === 401 && error.code === "authentication_required") return {auth:true};
+  if(phase === "members" && error.status === 409 && error.code === "resource_trashed") return {message:"Membership unavailable because this Category is now trashed. Category detail is an earlier observation.",retry:true};
+  if(error.status === 404) return {message:phase === "members" ? "Category membership is unavailable. Category detail is an earlier observation." : "Category or Workspace unavailable.",retry:phase === "members"};
+  if(error.status >= 500 || error.code === "network_error") return {message:phase === "members" ? "Category members could not be loaded. Try again." : "Categories could not be loaded. Try again.",retry:true};
+  return {message:"Category data could not be displayed safely.",retry:phase === "members"};
+}
+function categoryInitial() {return {rows:[],ready:false,listBusy:false,listError:null,selected:null,detail:null,phase:null,inspectionError:null,members:[],membersReady:false,application:null};}
+// END DJANGO CATEGORY STATE
+
+function CategoryPanel({client, context, workspaceId, onClose, onAuthFailure}) {
+  const [state,setState]=useState(categoryInitial);
+  const listLane=useMemo(()=>createEvidenceLane(context),[context]), inspectionLane=useMemo(()=>createEvidenceLane(context),[context]);
+  const selected=useRef(null), inspectionControl=useRef(null), auth=useRef(onAuthFailure);auth.current=onAuthFailure;
+  function patch(values) {setState(old=>({...old,...values}));}
+  function cancelInspection() {inspectionLane.invalidate();inspectionControl.current?.();}
+  function reset() {listLane.invalidate();cancelInspection();selected.current=null;setState(categoryInitial());}
+  function authFailure(error) {reset();auth.current(error);}
+  async function loadList() {
+    cancelInspection();selected.current=null;setState({...categoryInitial(),listBusy:true});
+    const token=listLane.start();
+    try {const rows=categoryList(await client.readCategories({captured:token.captured,signal:token.signal}),workspaceId);if(listLane.current(token)) patch({rows,ready:true});}
+    catch(error) {if(listLane.current(token)) {const safe=categoryFailure(error,"list");if(safe?.auth) authFailure(error);else if(safe) patch({listError:safe});}}
+    finally {if(listLane.current(token)) patch({listBusy:false});}
+  }
+  async function inspect(row) {
+    applicationId(row.id);listLane.invalidate();cancelInspection();selected.current=row.id;
+    patch({selected:row,detail:null,members:[],membersReady:false,application:null,inspectionError:null,phase:"detail",listBusy:false});
+    const token=inspectionLane.start(row.id);let phase="detail";
+    try {
+      const detail=categoryRow(await client.readCategory(row.id,{captured:token.captured,signal:token.signal}),workspaceId,row);
+      if(!inspectionLane.current(token,selected.current)) return;
+      patch({detail});
+      if(detail.is_trashed) return;
+      phase="members";patch({phase});
+      const members=categoryMembers(await client.readCategoryApplications(row.id,{captured:token.captured,signal:token.signal}),workspaceId,row.id);
+      if(inspectionLane.current(token,selected.current)) patch({members,membersReady:true});
+    } catch(error) {
+      if(inspectionLane.current(token,selected.current)) {
+        const safe=categoryFailure(error,phase);
+        if(safe?.auth) authFailure(error);
+        else if(safe) patch({inspectionError:{...safe,phase},members:[],membersReady:false,...(phase === "detail" ? {detail:null} : {})});
+      }
+    } finally {if(inspectionLane.current(token,selected.current)) patch({phase:null});}
+  }
+  function back() {cancelInspection();selected.current=null;patch({selected:null,detail:null,members:[],membersReady:false,application:null,inspectionError:null,phase:null});}
+  function open(row) {applicationId(row.id);cancelInspection();patch({application:{id:row.id,portable_id:row.portable_id},phase:null});}
+  useEffect(()=>{loadList();return ()=>{listLane.dispose();inspectionLane.dispose();inspectionControl.current?.();selected.current=null;};},[listLane,inspectionLane]);
+  const sectionLabels={applications:"Applications",credentials:"Credentials",network:"Network",resume_library:"Resume library",leads:"Leads",personal:"Personal",compliance:"Compliance",misc:"Misc"};
+  const section=value=>sectionLabels[value];
+  const errorView=(error,retry,label)=>error && <div role="alert"><p>{error.message}</p>{error.retry && <button className="btn" onClick={retry}>{label}</button>}</div>;
+  const detail=state.detail;
+  return <section data-testid="category-panel" aria-label="Categories" style={{marginTop:20,textAlign:"left",overflowWrap:"anywhere"}}>
+    <h2>Categories</h2><button className="btn" onClick={()=>{reset();onClose();}}>Close Categories</button>
+    {state.application ? <>
+      <button className="btn" onClick={()=>{cancelInspection();patch({application:null,phase:null});}}>Back to Category</button>
+      <p>Application detail is current information; Category membership is an earlier observation.</p>
+      <ApplicationDetailInspection key={state.application.id+":"+state.application.portable_id} client={client} context={context} workspaceId={workspaceId}
+        applicationId={state.application.id} expectedPortable={state.application.portable_id} inspectionControl={inspectionControl} onAuthFailure={authFailure} />
+    </> : state.selected === null ? <>
+      <p>Archived Categories are included. All returned Categories load together; large Workspaces may take longer.</p>
+      {state.listBusy && <p role="status">Loading Categories…</p>}{errorView(state.listError,loadList,"Retry Categories")}
+      {state.ready && !state.rows.length && <p>No named Categories in this Workspace.</p>}
+      {state.ready && <><p>{state.rows.length} Categories</p><button className="btn" disabled={state.listBusy} onClick={loadList}>Refresh Categories</button></>}
+      {state.rows.map(row=><article key={row.id}><button className="btn" data-category-id={row.id} onClick={()=>inspect(row)}>{row.name} — Category {row.id}</button>
+        <p>Category organization section: {section(row.section)}{row.archived ? " · Archived" : ""}</p></article>)}
+    </> : <>
+      <button className="btn" onClick={back}>Back to Categories</button>
+      {state.phase && <p role="status">{state.phase === "detail" ? "Loading Category detail…" : "Loading Category members…"}</p>}
+      {errorView(state.inspectionError,()=>inspect(state.selected),"Retry Category inspection")}
+      {detail && <article data-testid="category-detail"><h3>{detail.name}</h3><p>Category {detail.id} · Portable identity: {detail.portable_id}</p>
+        <p>Category organization section: {section(detail.section)}{detail.archived ? " · Archived" : ""}</p>
+        {!state.phase && <button className="btn" onClick={()=>inspect(state.selected)}>Refresh Category inspection</button>}
+        {detail.is_trashed ? <p role="status">Trashed Category — read-only detail. Membership is unavailable.</p> : <>
+          <p>Current membership observation includes archived live Applications. Trash is excluded. Reads are advisory, not a snapshot.</p>
+          <p>All returned members load together; large Categories may take longer.</p>
+          {state.membersReady && <p>{state.members.length ? state.members.length+" returned members" : "No current members in this Category."}</p>}
+          {state.members.map(row=><article key={row.id}><button className="btn" data-category-member={row.id} onClick={()=>open(row)}>{row.company} — {row.role_label} — Record {row.id}</button>
+            <p>Application section: {section(row.section)}{row.override?.archived ? " · Archived" : ""}</p></article>)}
+        </>}
+      </article>}
+    </>}
+  </section>;
+}
+
 function DjangoFoundation() {
   const theme = useTheme();
   const context = useMemo(() => JTHWorkspace.createContext(), []);
@@ -7643,12 +7767,13 @@ function DjangoFoundation() {
   const [evidenceOpen, setEvidenceOpen] = useState(false);
   const [applicationsOpen, setApplicationsOpen] = useState(false);
   const [reviewsOpen, setReviewsOpen] = useState(false);
+  const [categoriesOpen, setCategoriesOpen] = useState(false);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
 
   function clearIdentity() {
-    setEvidenceOpen(false); setApplicationsOpen(false); setReviewsOpen(false);
+    setEvidenceOpen(false); setApplicationsOpen(false); setReviewsOpen(false);setCategoriesOpen(false);
     if (identity.current !== null) history.replaceState(null, "", location.pathname + location.search);
     context.invalidate(); context.setActor(null); client.clearCsrf();
     identity.current = null; setUser(null); setWorkspaces([]);
@@ -7663,7 +7788,7 @@ function DjangoFoundation() {
     } else setError(e.message);
   }
   async function selectRoute(list) {
-    setEvidenceOpen(false); setApplicationsOpen(false); setReviewsOpen(false);
+    setEvidenceOpen(false); setApplicationsOpen(false); setReviewsOpen(false);setCategoriesOpen(false);
     const id = JTHWorkspace.parseRoute(window.location.hash);
     context.invalidate(); context.select(null); setConnected(false); setSelected(null);
     if (!id) {
@@ -7686,7 +7811,7 @@ function DjangoFoundation() {
     await selectRoute(list);
   }
   async function checkSession() {
-    setEvidenceOpen(false); setApplicationsOpen(false); setReviewsOpen(false);
+    setEvidenceOpen(false); setApplicationsOpen(false); setReviewsOpen(false);setCategoriesOpen(false);
     context.invalidate(); setPhase("loading"); setConnected(false); setError("");
     try {
       await client.bootstrap();
@@ -7717,7 +7842,7 @@ function DjangoFoundation() {
     } catch (e) { report(e); } finally { setPassword(""); setBusy(false); }
   }
   async function signOut() {
-    setEvidenceOpen(false); setApplicationsOpen(false); setReviewsOpen(false);
+    setEvidenceOpen(false); setApplicationsOpen(false); setReviewsOpen(false);setCategoriesOpen(false);
     setBusy(true); setError("");
     try {
       await client.request("/api/auth/logout", {method:"POST"});
@@ -7758,15 +7883,18 @@ function DjangoFoundation() {
             <button className="btn" disabled={busy || !name.trim()}>Create workspace</button>
           </form>
           {selected && <p role="status">{connected ? "Connected to " + selected.name + "." : "Checking workspace connection…"}</p>}
-          {selected && connected && <button className="btn" disabled={evidenceOpen} onClick={() => {context.invalidate();setApplicationsOpen(false);setReviewsOpen(false);setEvidenceOpen(true);}}>Extraction evidence</button>}
+          {selected && connected && <button className="btn" disabled={evidenceOpen} onClick={() => {context.invalidate();setApplicationsOpen(false);setReviewsOpen(false);setCategoriesOpen(false);setEvidenceOpen(true);}}>Extraction evidence</button>}
           {selected && connected && evidenceOpen && <RetainedExtractionEvidencePanel key={user.id + ":" + selected.id}
             client={client} context={context} workspaceId={selected.id} onClose={() => setEvidenceOpen(false)} onAuthFailure={report} />}
-          {selected && connected && <button className="btn" disabled={applicationsOpen} onClick={()=>{context.invalidate();setEvidenceOpen(false);setReviewsOpen(false);setApplicationsOpen(true);}}>Applications</button>}
+          {selected && connected && <button className="btn" disabled={applicationsOpen} onClick={()=>{context.invalidate();setEvidenceOpen(false);setReviewsOpen(false);setCategoriesOpen(false);setApplicationsOpen(true);}}>Applications</button>}
           {selected && connected && applicationsOpen && <ApplicationPanel key={user.id + ":" + selected.id}
             client={client} context={context} workspaceId={selected.id} onClose={()=>setApplicationsOpen(false)} onAuthFailure={report} />}
-          {selected && connected && <button className="btn" disabled={reviewsOpen} onClick={()=>{context.invalidate();setEvidenceOpen(false);setApplicationsOpen(false);setReviewsOpen(true);}}>Application reviews</button>}
+          {selected && connected && <button className="btn" disabled={reviewsOpen} onClick={()=>{context.invalidate();setEvidenceOpen(false);setApplicationsOpen(false);setCategoriesOpen(false);setReviewsOpen(true);}}>Application reviews</button>}
           {selected && connected && reviewsOpen && <ApplicationReviewPanel key={user.id+":"+selected.id} client={client} context={context} workspaceId={selected.id}
             onClose={()=>setReviewsOpen(false)} onAuthFailure={report} />}
+          {selected && connected && <button className="btn" disabled={categoriesOpen} onClick={()=>{context.invalidate();setEvidenceOpen(false);setApplicationsOpen(false);setReviewsOpen(false);setCategoriesOpen(true);}}>Categories</button>}
+          {selected && connected && categoriesOpen && <CategoryPanel key={user.id+":"+selected.id} client={client} context={context} workspaceId={selected.id}
+            onClose={()=>setCategoriesOpen(false)} onAuthFailure={report} />}
           <button className="btn" disabled={busy} onClick={signOut}>Sign out</button>
         </>}
       {error && <button className="btn" disabled={busy} onClick={checkSession}>Refresh session and workspaces</button>}

@@ -201,3 +201,100 @@ class CreationMembershipTests(APITestCase):
                     self.send(posting, self.body(posting, category_id=self.category.pk, status='applied'), uuid.uuid4().hex)
             for model in (Application, CategoryMembership, Override, StatusHistory, ApplicationRequestIntent, PostingApplicationConversion):
                 self.assertFalse(model.objects.exists(), model.__name__)
+
+
+class CategoryReadContractTests(APITestCase):
+    """Browser reads retain server membership and never cause product effects."""
+    def setUp(self):
+        self.user = User.objects.create_user(username="category_reader")
+        self.ws = Workspace.objects.create(owner=self.user, name="Read A")
+        self.other = Workspace.objects.create(owner=self.user, name="Read B")
+        self.foreign = Workspace.objects.create(owner=User.objects.create_user(username="outside_reader"), name="Foreign")
+        self.client.force_authenticate(self.user)
+        self.category = Category.objects.create(workspace=self.ws, name="Same", section="network", archived=True)
+        self.empty = Category.objects.create(workspace=self.ws, name="Same", section="misc")
+        self.app = Application.objects.create(workspace=self.ws, company="Member", role_label="Role", section="applications")
+        self.archived = Application.objects.create(workspace=self.ws, company="Archived", section="credentials")
+        self.trashed = Application.objects.create(workspace=self.ws, company="Trash", trashed_at=timezone.now())
+        Override.objects.create(application=self.archived, archived=True)
+        for app in (self.app, self.archived, self.trashed):
+            CategoryMembership.objects.create(application=app, category=self.category)
+
+    def url(self, suffix="", workspace=None):
+        return f"/api/workspaces/{(workspace or self.ws).pk}/categories/{suffix}"
+
+    def test_archive_empty_order_identity_and_current_member_contract(self):
+        self.assertEqual([r["id"] for r in self.client.get(self.url()).data], [self.empty.pk])
+        listed = self.client.get(self.url(), {"show_archived": "true"}).data
+        self.assertEqual([r["id"] for r in listed], [self.category.pk, self.empty.pk])
+        self.assertEqual([r["name"] for r in listed], ["Same", "Same"])
+        detail = self.client.get(self.url(f"{self.category.pk}/")).data
+        self.assertEqual(detail["portable_id"], str(self.category.portable_id))
+        self.assertEqual(detail["workspace"], self.ws.pk)
+        self.assertTrue(detail["archived"])
+        self.assertEqual(self.client.get(self.url(f"{self.category.pk}/applications/")).data, [])
+        rows = self.client.get(self.url(f"{self.category.pk}/applications/"), {"show_archived": "true"}).data
+        self.assertEqual([r["id"] for r in rows], [self.app.pk, self.archived.pk])
+        self.assertEqual(rows[0]["section"], "applications")
+        self.assertEqual(detail["section"], "network")
+        self.assertEqual(rows[0]["category_id"], self.category.pk)
+        self.assertEqual(rows[0]["portable_id"], str(self.app.portable_id))
+        self.assertTrue(rows[1]["override"]["archived"])
+        self.assertEqual(self.client.get(self.url(f"{self.empty.pk}/applications/"), {"show_archived": "true"}).data, [])
+        self.category.archived = False
+        self.category.save(update_fields=["archived"])
+        self.assertEqual([r["id"] for r in self.client.get(self.url(f"{self.category.pk}/applications/")).data], [self.app.pk])
+
+    def test_trashed_category_detail_is_readable_but_members_are_unavailable(self):
+        self.category.trashed_at = timezone.now()
+        self.category.save(update_fields=["trashed_at"])
+        self.assertEqual([r["id"] for r in self.client.get(self.url(), {"show_archived": "true"}).data], [self.empty.pk])
+        detail = self.client.get(self.url(f"{self.category.pk}/"))
+        self.assertEqual(detail.status_code, 200)
+        self.assertTrue(detail.data["is_trashed"])
+        result = self.client.get(self.url(f"{self.category.pk}/applications/"), {"show_archived": "true"})
+        self.assertEqual(result.status_code, 409)
+        self.assertEqual(result.data["code"], "resource_trashed")
+        self.assertEqual(CategoryMembership.objects.filter(category=self.category).count(), 3)
+
+    def test_auth_workspace_scope_and_privileged_malformed_foreign_membership(self):
+        from rest_framework.test import APIClient
+        suffixes = ("", f"{self.category.pk}/", f"{self.category.pk}/applications/")
+        for suffix in suffixes:
+            self.assertEqual(APIClient().get(self.url(suffix)).status_code, 401)
+            self.assertEqual(self.client.get(self.url(suffix, self.foreign)).status_code, 404)
+        for suffix in suffixes[1:]:
+            self.assertEqual(self.client.get(self.url(suffix, self.other)).status_code, 404)
+        self.assertEqual(self.client.get(self.url(workspace=self.other)).data, [])
+        outside = Application.objects.create(workspace=self.other, company="Outside")
+        # Privileged bypass exercises read containment; normal model saves prohibit this.
+        CategoryMembership.objects.bulk_create([CategoryMembership(application=outside, category=self.category)])
+        rows = self.client.get(self.url(f"{self.category.pk}/applications/"), {"show_archived": "true"}).data
+        self.assertEqual([r["id"] for r in rows], [self.app.pk, self.archived.pk])
+        self.assertTrue(all(r["workspace"] == self.ws.pk for r in rows))
+
+    def test_complete_arrays_and_get_purity(self):
+        from contextlib import ExitStack
+        import re
+        from django.apps import apps
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+        for index in range(61):
+            Category.objects.create(workspace=self.ws, name=f"Extra {index}", section="misc")
+            app = Application.objects.create(workspace=self.ws, company=f"Extra {index}")
+            CategoryMembership.objects.create(application=app, category=self.category)
+        models = [model for model in apps.get_models() if model._meta.app_label in {"accounts", "applications", "documents", "email_sync", "postings", "core"}]
+        def snapshot():
+            return {model._meta.label: list(model.objects.order_by("pk").values()) for model in models}
+        before = snapshot()
+        with ExitStack() as blocked, CaptureQueriesContext(connection) as queries:
+            for target in ("documents.category_views.mutate_category", "documents.category_views.assign_category", "applications.derivation.derive_application", "core.lifecycle.set_trash", "email_sync.tasks.sync_account_task.delay", "email_sync.tasks.sync_all_accounts_task.delay"):
+                blocked.enter_context(patch(target, side_effect=AssertionError("GET caused an effect")))
+            listed = self.client.get(self.url(), {"show_archived": "true"})
+            detail = self.client.get(self.url(f"{self.category.pk}/"))
+            members = self.client.get(self.url(f"{self.category.pk}/applications/"), {"show_archived": "true"})
+        self.assertEqual([listed.status_code, detail.status_code, members.status_code], [200, 200, 200])
+        self.assertEqual(len(listed.data), 63)
+        self.assertEqual(len(members.data), 63)
+        self.assertFalse(any(re.match(r"\s*(INSERT|UPDATE|DELETE|REPLACE|CREATE|ALTER|DROP)\b", item["sql"], re.I) for item in queries.captured_queries))
+        self.assertEqual(snapshot(), before)

@@ -148,6 +148,41 @@ with tempfile.TemporaryDirectory(prefix="jth-foundation-") as directory:
         message=retained("review-page-"+str(index))
         ensure_application_review(actor=alice, workspace=workspace, retained_message_id=message.pk,
             observation_id=message.observations.get().pk, classification="application",candidate_ids=[])
+    # Category fixtures remain disposable and independent of older workflow fixtures.
+    categories = {}
+    category_members = {}
+    for label, name, archived, section in (
+        ("live", "<img src=x onerror=window.categoryInjected=true> Category", False, "network"),
+        ("archived", "Same name", True, "credentials"),
+        ("duplicate", "Same name", False, "misc"),
+        ("empty", "Empty", False, "personal"),
+        ("archived-empty", "Archived empty", True, "misc"),
+        ("large", "Large", False, "misc"),
+        ("trashed", "Trashed fixture", False, "misc")):
+        item = Category.objects.create(workspace=workspace, name=name, section=section, archived=archived)
+        categories[label] = item.pk
+    for label, archived in (("live", False), ("archived", True), ("moved", False), ("unavailable", False), ("later-trash", False)):
+        app = Application.objects.create(workspace=workspace, company="<script>window.categoryInjected=true</script> Member " + label,
+                                         role_label="Role " + label, section="applications")
+        if archived:
+            Override.objects.create(application=app, archived=True)
+        CategoryMembership.objects.create(application=app, category_id=categories["live"])
+        category_members[label] = app.pk
+    app = Application.objects.create(workspace=workspace, company="Archived category member", role_label="Visible", section="misc")
+    CategoryMembership.objects.create(application=app, category_id=categories["archived"])
+    Override.objects.create(application=app, archived=True)
+    hidden = Application.objects.create(workspace=workspace, company="Trashed membership excluded", role_label="Hidden", section="applications")
+    CategoryMembership.objects.create(application=hidden, category_id=categories["live"])
+    set_trash(actor=alice, workspace=workspace, kind="applications", pk=hidden.pk, trashed=True, expected_revision=0)
+    set_trash(actor=alice, workspace=workspace, kind="categories", pk=categories["trashed"], trashed=True, expected_revision=0)
+    for index in range(61):
+        Category.objects.create(workspace=workspace, name="Extra category " + str(index), section="misc")
+        app = Application.objects.create(workspace=workspace, company="Large member", role_label=str(index), section="credentials")
+        CategoryMembership.objects.create(application=app, category_id=categories["large"])
+    Category.objects.create(workspace=Workspace.objects.get(pk=3), name="Foreign Category", section="misc")
+    def category_fixtures(request):
+        return JsonResponse({"categories":categories,"members":category_members})
+
     def review_fixtures(request):
         return JsonResponse({"reviews":reviews,"renamed":renamed.pk,"trashed":trashed.pk})
 
@@ -204,6 +239,7 @@ with tempfile.TemporaryDirectory(prefix="jth-foundation-") as directory:
                    path("api/test-only/evidence-fixtures", evidence_fixtures),
                    path("api/test-only/application-fixtures", application_fixtures),
                    path("api/test-only/review-fixtures", review_fixtures),
+                   path("api/test-only/category-fixtures", category_fixtures),
                    path("api/test-only/upload", UploadProbe.as_view()),
                    path("api/test-only/slow", SlowProbe.as_view())] + product_urls
     print("Disposable fixtures: alice / bob; password browser-fixture-only; workspaces A=1 B=2 C=3", flush=True)

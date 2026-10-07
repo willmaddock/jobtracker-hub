@@ -87,6 +87,8 @@ document.querySelector('#run').onclick = async function () {
       if(match)return positive(match[1])&&!query.length;
       match=/^\/api\/workspaces\/([1-9]\d*)\/applications\/(?:([1-9]\d*)\/)?$/.exec(path);
       if(match)return positive(match[1])&&(!match[2]||positive(match[2]))&&!query.length;
+      match=/^\/api\/workspaces\/([1-9]\d*)\/categories\/(?:([1-9]\d*)\/(applications\/)?)?$/.exec(path);
+      if(match)return positive(match[1])&&(!match[2]||positive(match[2]))&&(match[2]&&!match[3] ? !query.length : query.length===1&&query[0][0]==='show_archived'&&query[0][1]==='true');
       match=/^\/api\/workspaces\/([1-9]\d*)\/application-reviews\/(?:([1-9]\d*)\/)?$/.exec(path);
       if(match)return positive(match[1])&&(!match[2]||positive(match[2]))&&(match[2] ? !query.length : !query.length||query.length===1&&query[0][0]==='after'&&positive(query[0][1]));
       match=/^\/api\/workspaces\/([1-9]\d*)\/retained-messages\/$/.exec(path);
@@ -350,9 +352,172 @@ document.querySelector('#run').onclick = async function () {
       frame.contentWindow.location.reload();await wait(()=>frame.contentDocument!==doc&&frame.contentDocument.querySelector('#root')?.textContent.includes('Connected to A.'),'review refresh');win=frame.contentWindow;doc=frame.contentDocument;
       win.__fixtureIntercept=(url,options)=>intercept?.(url,options);assert(!reviewPanel()&&win.location.hash==='#/workspaces/1','review selection persisted');
     });
+    const categoryFixtures=await client.request('/api/test-only/category-fixtures');
+    const categoryRoot='/api/workspaces/1/categories/',categoryListUrl=categoryRoot+'?show_archived=true';
+    const categoryUrl=id=>categoryRoot+id+'/',memberUrl=id=>categoryUrl(id)+'applications/?show_archived=true';
+    const categoryPanel=()=>doc.querySelector('[data-testid="category-panel"]');
+    const categoryButton=id=>doc.querySelector('[data-category-id="'+id+'"]');
+    const memberButton=id=>doc.querySelector('[data-category-member="'+id+'"]');
+    const realCategories=await (await nativeFetch(categoryListUrl)).json();
+    const categoryDetails={},categoryMemberRows={},categoryAppDetails={};
+    for(const [label,id] of Object.entries(categoryFixtures.categories)) {
+      categoryDetails[label]=await (await nativeFetch(categoryUrl(id))).json();
+      if(label!=='trashed')categoryMemberRows[label]=await (await nativeFetch(memberUrl(id))).json();
+    }
+    for(const [label,id] of Object.entries(categoryFixtures.members))categoryAppDetails[label]=await (await nativeFetch(appUrl(id))).json();
+    async function openCategories() {
+      if(categoryPanel())await click('Close Categories');
+      await click('Categories');await wait(()=>categoryButton(categoryFixtures.categories.live),'Category list');
+    }
+    async function chooseCategory(label) {
+      categoryButton(categoryFixtures.categories[label]).click();await new Promise(r=>setTimeout(r,0));
+      await wait(()=>!text().includes('Loading Category detail…')&&!text().includes('Loading Category members…'),'Category inspection '+label);
+    }
+    function allowedCategoryTraffic(call) {
+      const url=new URL(call.url,location.origin),path=url.pathname,query=url.search;
+      if(url.origin!==location.origin||call.method!=='GET'||url.hash||url.username||url.password)return false;
+      if(['/api/auth/csrf','/api/auth/me','/api/workspaces/'].includes(path))return !query;
+      const safe=value=>/^[1-9]\d*$/.test(value)&&Number.isSafeInteger(Number(value));
+      let match=/^\/api\/workspaces\/([1-9]\d*)\/insights\/$/.exec(path);
+      if(match)return safe(match[1])&&!query;
+      match=/^\/api\/workspaces\/([1-9]\d*)\/categories\/(?:([1-9]\d*)\/(applications\/)?)?$/.exec(path);
+      if(match)return safe(match[1])&&(!match[2]||safe(match[2]))&&query===(!match[2]||match[3]?'?show_archived=true':'');
+      match=/^\/api\/workspaces\/([1-9]\d*)\/applications\/([1-9]\d*)\/$/.exec(path);
+      return !!match&&safe(match[1])&&safe(match[2])&&!query;
+    }
+    const categoryTrafficStart=traffic.length;
+    await test('Category workflow preserves server order, duplicate names, Archive, sections and all arrays',async()=>{
+      await openCategories();assert(doc.querySelectorAll('[data-category-id]').length===realCategories.length&&realCategories.length>50,'Category truncation');
+      assert(Array.from(doc.querySelectorAll('[data-category-id]')).map(b=>Number(b.dataset.categoryId)).join(',')===realCategories.map(r=>r.id).join(','),'Category order');
+      assert(categoryButton(categoryFixtures.categories.archived)&&categoryButton(categoryFixtures.categories.duplicate),'duplicate names merged');
+      assert(!categoryButton(categoryFixtures.categories.trashed),'trashed Category listed');
+      await chooseCategory('live');assert(text().includes('Category organization section: Network')&&text().includes('Application section: Applications'),'section conflation');
+      assert(memberButton(categoryFixtures.members.archived)&&text().includes('Archived'),'archived member omitted');
+      assert(!text().includes('Trashed membership excluded'),'Trash member fabricated');
+      assert(text().includes('<img src=x onerror=window.categoryInjected=true>')&&text().includes('<script>window.categoryInjected=true<\/script>'),'text changed');
+      assert(!win.categoryInjected&&!categoryPanel().querySelector('img')&&!categoryPanel().querySelector('script'),'HTML insertion');
+      await click('Back to Categories');await chooseCategory('archived');assert(text().includes('Archived category member'),'archived Category falsely empty');
+      await click('Back to Categories');await chooseCategory('empty');assert(text().includes('No current members in this Category.'),'empty state');
+      await click('Back to Categories');await chooseCategory('archived-empty');assert(text().includes('Archived')&&text().includes('No current members in this Category.'),'archived empty state');
+      await click('Back to Categories');await chooseCategory('large');assert(doc.querySelectorAll('[data-category-member]').length===61,'member truncation');
+      await click('Back to Categories');await click('Close Categories');
+    });
+    await test('Category member destinations reuse direct Application detail for live Archive moved Trash and unavailable',async()=>{
+      await openCategories();await chooseCategory('live');
+      for(const label of ['live','archived','moved','later-trash','unavailable']) {
+        const id=categoryFixtures.members[label],dto=structuredClone(categoryAppDetails[label]);
+        if(label==='moved')dto.category_id=categoryFixtures.categories.duplicate;
+        if(label==='later-trash')Object.assign(dto,{is_trashed:true,effective_trashed:true,trashed_at:'2026-10-06T12:00:00Z'});
+        intercept=url=>url===appUrl(id)?response(label==='unavailable'?404:200,label==='unavailable'?{code:'not_found',detail:'private'}:dto):null;
+        const before=traffic.length;memberButton(id).click();await wait(()=>!text().includes('Loading Application detail…')&&(doc.querySelector('[data-testid="application-detail"]')||text().includes('Application or Workspace unavailable.')),'Category destination');
+        assert(traffic.slice(before).every(c=>c.method==='GET'&&c.url===appUrl(id)),'destination fetched list/excluded authority');
+        if(label==='archived')assert(text().includes('Archived'),'Archive detail');
+        if(label==='later-trash')assert(text().includes('Trashed — read-only inspection')&&!button('Restore'),'Trash detail');
+        if(label==='moved')assert(text().includes('Category reference')&&text().includes('earlier observation'),'moved member invalidated identity');
+        if(label==='unavailable')assert(!doc.querySelector('[data-testid="application-detail"]'),'unavailable stale detail');
+        await click('Back to Category');assert(memberButton(categoryFixtures.members.live),'parent observation lost');
+      }
+      intercept=null;await click('Back to Categories');await click('Close Categories');assert(win.location.hash==='#/workspaces/1','resource route introduced');
+    });
+    await test('Category identity mismatch prevents destination rendering',async()=>{
+      await openCategories();await chooseCategory('live');const id=categoryFixtures.members.live;
+      intercept=url=>url===appUrl(id)?response(200,{...categoryAppDetails.live,portable_id:categoryAppDetails.archived.portable_id}):null;
+      memberButton(id).click();await wait(()=>text().includes('Application data could not be displayed safely.'),'UUID mismatch');assert(!doc.querySelector('[data-testid="application-detail"]'),'mismatched destination rendered');
+      intercept=null;await click('Back to Category');await click('Close Categories');
+    });
+    await test('Category Trash before members and between reads remains unavailable rather than empty',async()=>{
+      await openCategories();const id=categoryFixtures.categories.live;let memberCalls=0;
+      intercept=url=>{if(url===categoryUrl(id))return response(200,{...categoryDetails.live,is_trashed:true,effective_trashed:true,trashed_at:'2026-10-06T12:00:00Z'});if(url===memberUrl(id))memberCalls++;return null;};
+      await chooseCategory('live');assert(text().includes('Trashed Category — read-only detail')&&memberCalls===0,'trashed detail requested members');assert(!text().includes('No current members'),'Trash called empty');
+      await click('Back to Categories');intercept=url=>url===memberUrl(id)?response(409,{code:'resource_trashed',detail:'private'}):null;
+      await chooseCategory('live');assert(doc.querySelector('[data-testid="category-detail"]')&&text().includes('now trashed')&&!memberButton(categoryFixtures.members.live),'partial Trash state hidden');assert(!text().includes('No current members'),'conflict called empty');
+      intercept=null;await click('Retry Category inspection');await wait(()=>memberButton(categoryFixtures.members.live),'Trash retry');await click('Close Categories');
+    });
+    await test('Category list detail and membership failures have safe explicit retry and unavailable states',async()=>{
+      intercept=url=>url===categoryListUrl?response(500,{detail:'private SQL'}):null;await click('Categories');await wait(()=>text().includes('Categories could not be loaded.'),'list error');assert(!text().includes('private SQL'),'raw list error');
+      intercept=null;await click('Retry Categories');await wait(()=>categoryButton(categoryFixtures.categories.live),'list retry');
+      const id=categoryFixtures.categories.live;
+      intercept=url=>url===categoryUrl(id)?response(500,{detail:'private SQL'}):null;await chooseCategory('live');assert(!doc.querySelector('[data-testid="category-detail"]'),'old detail retained');
+      intercept=null;await click('Retry Category inspection');await wait(()=>memberButton(categoryFixtures.members.live),'detail retry');await click('Back to Categories');
+      intercept=url=>url===memberUrl(id)?Promise.reject(new TypeError('private network')):null;await chooseCategory('live');assert(text().includes('Category members could not be loaded.')&&doc.querySelector('[data-testid="category-detail"]')&&!text().includes('No current members'),'member error conflated');
+      const before=traffic.length;intercept=null;await click('Retry Category inspection');await wait(()=>memberButton(categoryFixtures.members.live),'member retry');assert(traffic.slice(before).map(c=>c.url).join('|')===categoryUrl(id)+'|'+memberUrl(id),'retry did not repeat detail first');
+      await click('Back to Categories');intercept=url=>url===categoryUrl(id)?response(404,{code:'not_found'}):null;await chooseCategory('live');assert(text().includes('Category or Workspace unavailable.')&&!doc.querySelector('[data-testid="category-detail"]'),'Category unavailable');
+      intercept=null;await click('Back to Categories');await click('Close Categories');
+    });
+    await test('Category malformed unsafe foreign and wrong-parent responses fail complete inspection visibly',async()=>{
+      for(const mutate of [r=>r.id=9007199254740992,r=>r.workspace=2,r=>r.section='applications',r=>r.portable_id='bad']) {
+        const rows=structuredClone(realCategories);mutate(rows[0]);intercept=url=>url===categoryListUrl?response(200,rows):null;
+        await click('Categories');await wait(()=>text().includes('cannot be represented safely')||text().includes('Category data could not be displayed safely.'),'invalid Category list');assert(!doc.querySelector('[data-category-id]'),'partial malformed list');await click('Close Categories');
+      }
+      intercept=null;await openCategories();const id=categoryFixtures.categories.live;
+      intercept=url=>url===categoryUrl(id)?response(200,{...categoryDetails.live,portable_id:categoryDetails.empty.portable_id}):null;await chooseCategory('live');assert(text().includes('Category data could not be displayed safely.'),'Category UUID mismatch');await click('Back to Categories');
+      for(const mutate of [r=>r.workspace=2,r=>r.category_id=categoryFixtures.categories.empty,r=>r.id=9007199254740992,r=>r.portable_id='bad',r=>r.section='unsupported']) {
+        const rows=structuredClone(categoryMemberRows.live);mutate(rows[0]);intercept=url=>url===memberUrl(id)?response(200,rows):null;
+        await chooseCategory('live');assert(!doc.querySelector('[data-category-member]')&&!text().includes('No current members')&&button('Retry Category inspection'),'partial malformed members or missing full-inspection retry');await click('Back to Categories');
+      }
+      intercept=null;await click('Close Categories');
+    });
+    for(const phase of ['list','detail','members'])await test('obsolete Category '+phase+' success error auth and finally cannot overwrite newer view',async()=>{
+      for(const status of [200,500,401]) {
+        if(phase!=='list')await openCategories();let release,signal;
+        const target=phase==='list'?categoryListUrl:phase==='detail'?categoryUrl(categoryFixtures.categories.live):memberUrl(categoryFixtures.categories.live);
+        intercept=(url,options)=>url===target?new Promise(resolve=>{signal=options.signal;release=()=>resolve(new win.Response(JSON.stringify(status===200?(phase==='list'?realCategories:phase==='detail'?categoryDetails.live:categoryMemberRows.live):{code:status===401?'authentication_required':'request_failed',detail:'private stale'}),{status}));}):null;
+        if(phase==='list')button('Categories').click();else categoryButton(categoryFixtures.categories.live).click();
+        await wait(()=>!!release,'held '+phase);
+        if(phase==='list'){button('Close Categories').click();assert(signal.aborted,'same-turn close list');intercept=null;await openCategories();}
+        else {button('Back to Categories').click();assert(signal.aborted,'same-turn back inspection');intercept=null;await wait(()=>categoryButton(categoryFixtures.categories.empty),'Back rendered list');await chooseCategory('empty');}
+        release();await new Promise(r=>setTimeout(r,40));assert(!text().includes('Your session ended')&&!text().includes('private stale')&&!text().includes('Loading Category'),'obsolete finalization/auth');
+        if(phase!=='list')assert(text().includes('No current members'),'obsolete inspection replaced newer Category');
+        await click('Close Categories');
+      }
+    });
+    await test('Category Application Back and Close cancel in same event turn and ignore stale auth',async()=>{
+      for(const action of ['Back to Category','Close Categories']) for(const status of [200,500,401]) {
+        await openCategories();await chooseCategory('live');let release,signal;
+        intercept=(url,options)=>url===appUrl(categoryFixtures.members.live)?new Promise(resolve=>{signal=options.signal;release=()=>resolve(new win.Response(JSON.stringify(status===200?categoryAppDetails.live:{code:status===401?'authentication_required':'request_failed'}),{status}));}):null;
+        memberButton(categoryFixtures.members.live).click();await wait(()=>!!release,'held Category Application');button(action).click();assert(signal.aborted,'same-turn child cancellation');release();await new Promise(r=>setTimeout(r,40));assert(!text().includes('Your session ended'),'obsolete child auth');
+        intercept=null;if(categoryPanel())await click('Close Categories');
+      }
+    });
+    await test('Category Workspace and session changes clear all transient state',async()=>{
+      await openCategories();let release,signal;intercept=(url,options)=>url===memberUrl(categoryFixtures.categories.live)?new Promise(resolve=>{signal=options.signal;release=()=>resolve(new win.Response(JSON.stringify(categoryMemberRows.live),{status:200}));}):null;
+      categoryButton(categoryFixtures.categories.live).click();await wait(()=>!!release,'held Workspace membership');
+      const select=doc.querySelector('select[aria-label="Workspace"]');select.value='2';select.dispatchEvent(new win.Event('change',{bubbles:true}));await wait(()=>text().includes('Connected to B.'),'Category Workspace B');assert(signal.aborted,'Workspace did not abort');release();intercept=null;
+      await click('Categories');await wait(()=>text().includes('No named Categories in this Workspace.'),'empty Workspace');assert(!doc.querySelector('[data-category-id]'),'foreign Category retained');await click('Close Categories');await returnA();
+      await openCategories();intercept=url=>url===categoryUrl(categoryFixtures.categories.live)?response(401,{code:'authentication_required'}):null;categoryButton(categoryFixtures.categories.live).click();await wait(()=>text().includes('Your session ended.'),'Category expiry');assert(!categoryPanel(),'expired state retained');
+      intercept=null;win.dispatchEvent(new win.Event('focus'));await wait(()=>text().includes('Signed in as alice'),'Category session recovery');await returnA();
+    });
+    await test('Category actor change ignores obsolete membership authentication and clears old state',async()=>{
+      await openCategories();let release,signal;
+      intercept=(url,options)=>url===memberUrl(categoryFixtures.categories.live)?new Promise(resolve=>{signal=options.signal;release=()=>resolve(new win.Response(JSON.stringify({code:'authentication_required'}),{status:401}));}):null;
+      categoryButton(categoryFixtures.categories.live).click();await wait(()=>!!release,'held actor Category');
+      await client.bootstrap();const bob=await client.request('/api/auth/login',{method:'POST',body:{username:'bob',password:'browser-fixture-only'}});context.setActor(bob.id);context.select(3);await client.bootstrap();
+      win.dispatchEvent(new win.Event('focus'));await wait(()=>text().includes('Signed in as bob'),'Category actor Bob');assert(signal.aborted&&!categoryPanel(),'actor did not clear/abort Category');release();await new Promise(r=>setTimeout(r,40));assert(text().includes('Signed in as bob')&&!text().includes('Your session ended'),'old Category auth cleared Bob');
+      intercept=null;await client.bootstrap();const alice=await client.request('/api/auth/login',{method:'POST',body:{username:'alice',password:'browser-fixture-only'}});context.setActor(alice.id);context.select(1);await client.bootstrap();win.dispatchEvent(new win.Event('focus'));await wait(()=>text().includes('Signed in as alice'),'restore Category actor');await returnA();
+    });
+    await test('Category workflow traffic boundary spans opening through Back Close and rejects excluded authorities',async()=>{
+      assert(traffic.slice(categoryTrafficStart).every(allowedCategoryTraffic),'Category workflow issued an excluded request');
+      const forbidden=[{url:'/api/workspaces/1/applications/',method:'GET'},{url:'/api/workspaces/1/categories/?show_trashed=true',method:'GET'},
+        ...['POST','PUT','PATCH','DELETE'].map(method=>({url:categoryUrl(1),method})),
+        ...['documents/','messages/','dossier/','trash/','restore/','category/'].map(s=>({url:appUrl(1)+s,method:'GET'})),
+        {url:'/api/workspaces/1/job-postings/',method:'GET'},{url:'/api/workspaces/1/retained-messages/',method:'GET'},{url:'/api/email/sync',method:'POST'}];
+      assert(forbidden.every(call=>!allowedCategoryTraffic(call)),'Category boundary accepts forbidden route/method');
+    });
+    await test('Categories coexist with other panels and browser refresh loses selection',async()=>{
+      await openCategories();let release,signal;
+      intercept=(url,options)=>url===memberUrl(categoryFixtures.categories.live)?new Promise(resolve=>{signal=options.signal;release=()=>resolve(new win.Response(JSON.stringify({code:'authentication_required'}),{status:401}));}):null;
+      categoryButton(categoryFixtures.categories.live).click();await wait(()=>!!release,'held panel switch');
+      await click('Applications');await wait(()=>appButton(appFixtures.first),'Category to Applications');assert(signal.aborted,'panel switch did not cancel');release();await new Promise(r=>setTimeout(r,40));assert(!text().includes('Your session ended'),'old panel auth');intercept=null;assert(!categoryPanel(),'Category retained');
+      await click('Categories');await wait(()=>categoryButton(categoryFixtures.categories.live),'Applications to Category');assert(!appPanel(),'Application retained');
+      await click('Application reviews');await wait(()=>reviewButton(reviewFixtures.reviews.multiple),'Category to reviews');assert(!categoryPanel(),'Category retained on reviews');
+      await click('Categories');await wait(()=>categoryButton(categoryFixtures.categories.live),'reviews to Categories');assert(!reviewPanel(),'review retained');
+      await click('Extraction evidence');await wait(()=>sourceButton(fixtures.sources.history),'Category to evidence');assert(!categoryPanel(),'Category retained on evidence');await click('Close extraction evidence');
+      await openCategories();await chooseCategory('live');frame.contentWindow.location.reload();await wait(()=>frame.contentDocument!==doc&&frame.contentDocument.querySelector('#root')?.textContent.includes('Connected to A.'),'Category refresh');win=frame.contentWindow;doc=frame.contentDocument;win.__fixtureIntercept=(url,options)=>intercept?.(url,options);
+      assert(!categoryPanel()&&win.location.hash==='#/workspaces/1','Category persisted after refresh');
+    });
     await test('panel open fetches once; real source labels exclude private content', async()=>{
       await click('Extraction evidence');await wait(()=>sourceButton(fixtures.sources.history),'sources');
-      assert(traffic.filter(c=>c.url==='/api/workspaces/1/retained-messages/').length===1,'duplicate list request');
+      assert(traffic.filter(c=>c.url==='/api/workspaces/1/retained-messages/').length===2,'duplicate list request');
       assert(!text().includes('private-subject-')&&!text().includes('private-body-')&&!text().includes('private-locator-'),'private content');
       assert(button('Load more sources'),'missing summary continuation');
     });
@@ -526,7 +691,7 @@ document.querySelector('#run').onclick = async function () {
     });
     frame.remove();
     output.textContent += `${passed} passed; 0 failed\n` + navigator.userAgent;
-  } catch(e) { output.textContent += 'FAIL ' + e.message + '\n' + `${passed} passed; 1 failed`; }
+  } catch(e) { output.textContent += 'FAIL ' + e.stack + '\n' + `${passed} passed; 1 failed`; }
   finally { this.disabled = false; }
 };
 </script></html>
