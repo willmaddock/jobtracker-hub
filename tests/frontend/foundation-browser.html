@@ -80,6 +80,7 @@ document.querySelector('#run').onclick = async function () {
       // The sole mutation exception is the existing, explicitly exercised logout.
       // The disposable hook marks it only around that foundation control action.
       if(call.method==='POST')return call.foundationAction==='logout'&&path==='/api/auth/logout'&&!query.length;
+      if(call.method==='PUT')return allowedAssignmentPut(call);
       if(call.method!=='GET')return false;
       if(['/api/auth/csrf','/api/auth/me','/api/workspaces/'].includes(path))return !query.length;
       const positive=value=>/^[1-9]\d*$/.test(value)&&Number.isSafeInteger(Number(value));
@@ -514,6 +515,180 @@ document.querySelector('#run').onclick = async function () {
       await click('Extraction evidence');await wait(()=>sourceButton(fixtures.sources.history),'Category to evidence');assert(!categoryPanel(),'Category retained on evidence');await click('Close extraction evidence');
       await openCategories();await chooseCategory('live');frame.contentWindow.location.reload();await wait(()=>frame.contentDocument!==doc&&frame.contentDocument.querySelector('#root')?.textContent.includes('Connected to A.'),'Category refresh');win=frame.contentWindow;doc=frame.contentDocument;win.__fixtureIntercept=(url,options)=>intercept?.(url,options);
       assert(!categoryPanel()&&win.location.hash==='#/workspaces/1','Category persisted after refresh');
+    });
+    const assignmentFixtures=await client.request('/api/test-only/assignment-fixtures');
+    const assignmentStart=traffic.length, assignmentIntents=[];
+    const assignmentApp=assignmentFixtures.applications.categorized;
+    const putUrl=id=>appUrl(id)+'category/';
+    const assignmentPanel=()=>doc.querySelector('[data-testid="assignment-workflow"]');
+    const destination=()=>doc.querySelector('[aria-label="Destination Category"]');
+    const currentApp=async(id=assignmentApp)=>await (await win.__fixtureNativeFetch(appUrl(id))).json();
+    const control=async(command,category='empty',application='categorized')=>client.request('/api/test-only/assignment-control',{method:'POST',body:{command,category,application}});
+    async function openAssignment(id=assignmentApp){
+      if(appPanel())await click('Close Applications');intercept=null;
+      if(id===assignmentFixtures.applications.trashed){const rows=await(await win.__fixtureNativeFetch(appList)).json(),row=await currentApp(id);intercept=url=>url===appList?response(200,[...rows,row]):null;}
+      await click('Applications');await wait(()=>appButton(id),'assignment list');appButton(id).click();await wait(()=>button('Change Category')||button('Refresh current Application'),'assignment eligibility');
+      if(button('Change Category')) {await click('Change Category');await wait(()=>destination(),'fresh choices');}
+    }
+    async function pick(label){const select=destination();assert(select,'no choices');select.value=label==='clear'?'clear':String(assignmentFixtures.categories[label]);select.dispatchEvent(new win.Event('change',{bubbles:true}));await wait(()=>!text().includes('Inspecting assignment state…'),'target detail');}
+    async function confirm(id=assignmentApp){
+      const row=await currentApp(id), select=destination();assert(button('Confirm Category assignment'),'no human confirmation');
+      const intent={workspace:1,id,category_id:select.value==='clear'?null:Number(select.value),expected_revision:row.category_revision,sequence:assignmentIntents.length+1};
+      assignmentIntents.push(intent);win.__fixtureAssignmentIntent=intent;await click('Confirm Category assignment');
+    }
+    async function settled(){await wait(()=>!text().includes('Assignment request pending.')&&!text().includes('Refreshing current Application after assignment…'),'assignment reconciliation');}
+    function allowedAssignmentPut(call){
+      const intent=call.assignmentIntent;if(call.method!=='PUT'||!intent||!assignmentIntents.includes(intent)||call.url!==`/api/workspaces/${intent.workspace}/applications/${intent.id}/category/`)return false;
+      let body;try{body=JSON.parse(call.body);}catch(_){return false;}
+      return Object.keys(body).sort().join(',')==='category_id,expected_revision'&&body.category_id===intent.category_id&&body.expected_revision===intent.expected_revision;
+    }
+    function allowedAssignmentTraffic(call){
+      if(call.method==='PUT')return allowedAssignmentPut(call);
+      if(call.method!=='GET')return false;
+      const url=new URL(call.url,location.origin);if(url.origin!==location.origin||url.hash)return false;
+      if(['/api/auth/csrf','/api/auth/me','/api/workspaces/'].includes(url.pathname))return !url.search;
+      if(/^\/api\/workspaces\/[1-9]\d*\/insights\/$/.test(url.pathname))return !url.search;
+      if(/^\/api\/workspaces\/[1-9]\d*\/applications\/(?:[1-9]\d*\/)?$/.test(url.pathname))return !url.search;
+      if(/^\/api\/workspaces\/[1-9]\d*\/categories\/$/.test(url.pathname))return url.search==='?show_archived=true';
+      return /^\/api\/workspaces\/[1-9]\d*\/categories\/[1-9]\d*\/$/.test(url.pathname)&&!url.search;
+    }
+    await test('assignment eligibility/open use separate fresh observations and exact ordered duplicate archived empty choices',async()=>{
+      const before=traffic.length;await openAssignment();const row=await currentApp();
+      assert(traffic.slice(before).filter(c=>c.url===appUrl(assignmentApp)).length===3,'core/eligibility/action observations');
+      assert(traffic.slice(before).some(c=>c.url==='/api/workspaces/1/categories/?show_archived=true'),'fresh choices missing');
+      const categories=await(await win.__fixtureNativeFetch('/api/workspaces/1/categories/?show_archived=true')).json();
+      assert(Array.from(destination().options).slice(2).map(o=>Number(o.value)).join(',')===categories.map(c=>c.id).join(','),'server order/identities');
+      assert(destination().querySelector(`[value="${assignmentFixtures.categories.archived}"]`).textContent.includes('Archived'),'archived disclosure');
+      assert(destination().querySelector(`[value="${row.category_id}"]`).disabled,'same target enabled');
+      assert(text().includes('Current membership: Assignment live — Category'),'source disclosure');
+      await pick('empty');assert(text().includes('Application classification is unchanged by this action.')&&text().includes('Desired: Assignment empty — Category'),'confirmation meaning');
+      assert(!traffic.slice(before).some(c=>c.method==='PUT'),'write before confirmation');
+    });
+    await test('assignment confirmed move reconciles authority once, clears token and invalidates/reloads parent list',async()=>{
+      const old=await currentApp(),before=traffic.length;await confirm();await settled();const row=await currentApp();
+      assert(row.category_id===assignmentFixtures.categories.empty&&row.category_revision===old.category_revision+1,'persisted move');
+      for(const key of ['section','effective_status','effective_date_applied','is_trashed','override','first_activity','last_activity','activity_provenance'])assert(JSON.stringify(row[key])===JSON.stringify(old[key]),'classification/evidence changed '+key);
+      assert(traffic.slice(before).filter(c=>c.method==='PUT').length===1,'duplicate write');assert(!destination()&&!button('Confirm Category assignment'),'old intent retained');
+      assert(text().includes('Current membership: Assignment empty')&&button('Change Category'),'authoritative reconciliation');
+      const listBefore=traffic.filter(c=>c.url===appList).length;await click('Back to Applications');await wait(()=>appButton(assignmentApp),'reloaded parent');assert(traffic.filter(c=>c.url===appList).length===listBefore+1,'list not reloaded');
+    });
+    await test('clear membership and archived target work; already uncategorized clear is disabled',async()=>{
+      await openAssignment();await pick('clear');assert(text().includes('Clear Category membership'),'clear confirmation');await confirm();await settled();assert((await currentApp()).category_id===null,'clear not persisted');
+      await click('Change Category');await wait(()=>destination(),'clear fresh opening');assert(destination().querySelector('[value="clear"]').disabled,'uncategorized clear enabled');
+      await pick('archived');assert(text().includes('Desired: Assignment same')&&text().includes('Archived'),'archived target');await confirm();await settled();assert((await currentApp()).category_id===assignmentFixtures.categories.archived,'archived target rejected');
+    });
+    await test('archived Application remains eligible; trashed Application withholds assignment',async()=>{
+      await openAssignment(assignmentFixtures.applications.archived);assert(destination()&&text().includes('Archived'),'archived Application unavailable');await click('Close Applications');
+      await openAssignment(assignmentFixtures.applications.trashed);assert(!button('Change Category')&&!destination()&&text().includes('Trashed Application'),'trashed write offered');await click('Close Applications');
+    });
+    await test('live Application can leave trashed source; unavailable source is not uncategorized',async()=>{
+      const id=assignmentFixtures.applications['trashed-source'];await openAssignment(id);assert(text().includes('Assignment trashed')&&text().includes('Trashed'),'trashed source hidden');await pick('clear');await confirm(id);await settled();assert((await currentApp(id)).category_id===null,'cannot leave trashed source');
+      await openAssignment();await click('Close Category action');const row=await currentApp();intercept=url=>url===categoryUrl(row.category_id)?response(404,{code:'not_found',detail:'PRIVATE'}):null;
+      await click('Change Category');await wait(()=>destination(),'unavailable source action');assert(text().includes(`Category ${row.category_id} — details unavailable`)&&!text().includes('Current membership: Uncategorized'),'unavailable source mislabeled');intercept=null;
+    });
+    await test('target recheck rejects Trash, missing, foreign, wrong portable and malformed targets without PUT',async()=>{
+      const id=assignmentFixtures.categories.empty,url=categoryUrl(id),dto=await(await win.__fixtureNativeFetch(url)).json(),before=traffic.length;
+      for(const change of [null,{...dto,is_trashed:true,effective_trashed:true,trashed_at:'2026-10-06T12:00:00Z'},{...dto,workspace:2},{...dto,portable_id:'00000000-0000-4000-8000-000000000999'},{...dto,section:'applications'},{...dto,archived:null}]){
+        intercept=path=>path===url?response(change?200:404,change||{code:'not_found'}):null;await pick('empty');assert(!button('Confirm Category assignment'),'invalid target confirmed');
+      }
+      assert(!traffic.slice(before).some(c=>c.method==='PUT'),'invalid target wrote');intercept=null;
+    });
+    await test('target becomes trashed after confirmation: backend refusal reconciles without substitution',async()=>{
+      await pick('empty');await control('trash-target');await confirm();await settled();assert(text().includes('assignment was rejected')&&!destination(),'Trash refusal');assert((await currentApp()).category_id!==assignmentFixtures.categories.empty,'Trash target entered');await control('restore-target');
+    });
+    await test('stale membership conflict refreshes changed authority and requires new intent',async()=>{
+      await openAssignment();await pick('empty');await control('move','duplicate');
+      // Frozen revision is the action observation, not the concurrent backend revision.
+      const select=destination(),entry={workspace:1,id:assignmentApp,category_id:Number(select.value),expected_revision:(await currentApp()).category_revision-1,sequence:assignmentIntents.length+1};assignmentIntents.push(entry);win.__fixtureAssignmentIntent=entry;
+      await click('Confirm Category assignment');await settled();assert(text().includes('observed membership changed')&&text().includes('Assignment same'),'stale did not reconcile');assert(!destination()&&!button('Confirm Category assignment'),'stale replay intent');
+    });
+    await test('Application becomes trashed before PUT; reconciles read-only state',async()=>{
+      await openAssignment();await pick('empty');await control('trash-app');await confirm();await settled();assert(text().includes('current Application is trashed')&&!button('Change Category'),'trashed Application offered write');await control('restore-app');await click('Close Applications');
+    });
+    await test('busy and unavailable normalize fixed errors, reconcile and never retry PUT',async()=>{
+      for(const [status,code,phrase] of [[503,'creation_busy','database was busy'],[404,'not_found','unavailable']]){
+        await openAssignment();await pick('empty');const before=traffic.length;intercept=url=>url===putUrl(assignmentApp)?response(status,{code,detail:'PRIVATE original request key'}):null;
+        await confirm();await settled();assert(text().includes(phrase)&&!text().includes('PRIVATE')&&!text().includes('request key'),'raw busy/unavailable leaked');assert(traffic.slice(before).filter(c=>c.method==='PUT').length===1,'rejection retried');intercept=null;
+      }
+    });
+    await test('committed PUT with caller response lost performs real GET, preserves uncertainty and requires fresh intent',async()=>{
+      await openAssignment();await pick('empty');const before=traffic.length,old=await currentApp();let committed=false;
+      intercept=async(url,options)=>{if(url!==putUrl(assignmentApp))return null;const result=await win.__fixtureNativeFetch(url,options);assert(result.status===200,'real PUT failed');const receipt=await result.json();assert(receipt.category_id===assignmentFixtures.categories.empty,'server receipt');committed=true;throw new TypeError('caller response lost after commit');};
+      // An async hook must return null synchronously for nonintercepted requests.
+      const lost=intercept;intercept=(url,options)=>url===putUrl(assignmentApp)?lost(url,options):null;
+      await confirm();await settled();intercept=null;const row=await currentApp();
+      assert(committed&&row.category_id===assignmentFixtures.categories.empty&&row.category_revision===old.category_revision+1,'committed loss not real');
+      assert(traffic.slice(before).filter(c=>c.method==='PUT').length===1&&traffic.slice(before).some(c=>c.url===appUrl(assignmentApp)&&c.method==='GET'),'one PUT plus reconciliation');
+      assert(text().includes('request may have completed')&&text().includes('Current membership: Assignment empty'),'uncertainty absent');assert(!destination()&&!button('Confirm Category assignment'),'old intent replay');
+    });
+    await test('malformed success and generic failure are uncertain; failed reconciliation withholds writes and GET-only refresh restores capability',async()=>{
+      for(const status of [200,500]){
+        await openAssignment();await pick('live');let attempted=false;intercept=url=>{if(url===putUrl(assignmentApp)){attempted=true;return response(status,status===200?{id:assignmentApp,category_id:assignmentFixtures.categories.live,category_revision:Number.MAX_SAFE_INTEGER+1}:{detail:'PRIVATE'});}if(attempted&&url===appUrl(assignmentApp))return response(500,{});return null;};
+        await confirm();await settled();assert(text().includes('may have completed')&&text().includes('refresh failed')&&!button('Change Category')&&button('Refresh current Application'),'writes not withheld');
+        const count=traffic.filter(c=>c.method==='PUT').length;intercept=null;await click('Refresh current Application');await wait(()=>button('Change Category'),'fresh recovery');assert(traffic.filter(c=>c.method==='PUT').length===count,'refresh resent PUT');
+      }
+    });
+    await test('target change/Back invalidate held recheck synchronously',async()=>{
+      await openAssignment();let release,signal;intercept=(url,o)=>url===categoryUrl(assignmentFixtures.categories.live)?new Promise(r=>{signal=o.signal;release=()=>r(new win.Response(JSON.stringify({code:'authentication_required'}),{status:401}));}):null;
+      destination().value=String(assignmentFixtures.categories.live);destination().dispatchEvent(new win.Event('change',{bubbles:true}));await wait(()=>release,'held target');await click('Back to Applications');assert(signal.aborted,'target not aborted');release();await new Promise(r=>setTimeout(r,40));assert(!text().includes('Your session ended'),'obsolete target error');intercept=null;
+    });
+    await test('pending PUT disables duplicate writes; Close ignores obsolete success and error',async()=>{
+      for(const status of [200,401]){
+        await openAssignment();await pick('live');let release,signal;intercept=(url,o)=>url===putUrl(assignmentApp)?new Promise(r=>{signal=o.signal;release=()=>r(new win.Response(JSON.stringify(status===200?{id:assignmentApp,category_id:assignmentFixtures.categories.live,category_revision:0}:{code:'authentication_required'}),{status}));}):null;
+        const node=button('Confirm Category assignment'),before=traffic.length;await confirm();node.click();await wait(()=>release,'held mutation');assert(!destination()&&!button('Confirm Category assignment')&&text().includes('does not prove server rollback'),'pending controls');
+        await click('Close Applications');assert(signal.aborted,'mutation not aborted');release();await new Promise(r=>setTimeout(r,40));assert(!appPanel()&&!text().includes('Your session ended'),'obsolete mutation callback');assert(traffic.slice(before).filter(c=>c.method==='PUT').length===1,'duplicate pending PUT');intercept=null;
+      }
+    });
+    await test('Workspace change and Application change invalidate pending intent and obsolete mutation errors',async()=>{
+      for(const change of ['workspace','application']){
+        await openAssignment();await pick('live');let release,signal;intercept=(url,o)=>url===putUrl(assignmentApp)?new Promise(r=>{signal=o.signal;release=()=>r(new win.Response(JSON.stringify({code:'authentication_required'}),{status:401}));}):null;
+        await confirm();await wait(()=>release,'held context mutation');if(change==='workspace'){const select=doc.querySelector('[aria-label="Workspace"]');select.value='2';select.dispatchEvent(new win.Event('change',{bubbles:true}));await wait(()=>text().includes('Connected to B.'),'assignment B');}
+        else {await click('Back to Applications');await wait(()=>appButton(assignmentFixtures.applications.uncategorized),'assignment reload');appButton(assignmentFixtures.applications.uncategorized).click();await wait(()=>button('Change Category'),'another Application');}
+        assert(signal.aborted,'changed context not aborted');release();await new Promise(r=>setTimeout(r,40));assert(!text().includes('Your session ended'),'obsolete auth');intercept=null;if(change==='workspace')await returnA();else await click('Close Applications');
+      }
+    });
+    await test('current mutation session expiry clears sensitive action state',async()=>{
+      await openAssignment();await pick('live');intercept=url=>url===putUrl(assignmentApp)?response(401,{code:'authentication_required',detail:'PRIVATE'}):null;await confirm();await wait(()=>text().includes('Your session ended'),'assignment expiry');assert(!appPanel(),'expired assignment retained');intercept=null;win.dispatchEvent(new win.Event('focus'));await wait(()=>text().includes('Signed in as alice'),'assignment recovery');await returnA();
+    });
+    await test('selecting a new target cancels previous detail and confirmation before a new confirmation',async()=>{
+      await openAssignment();let release,signal;const dto=await(await win.__fixtureNativeFetch(categoryUrl(assignmentFixtures.categories.live))).json();
+      intercept=(url,o)=>url===categoryUrl(assignmentFixtures.categories.live)?new Promise(r=>{signal=o.signal;release=()=>r(new win.Response(JSON.stringify(dto),{status:200}));}):null;
+      destination().value=String(assignmentFixtures.categories.live);destination().dispatchEvent(new win.Event('change',{bubbles:true}));await wait(()=>release,'held replaceable target');
+      await pick('clear');assert(signal.aborted&&text().includes('Desired: Clear Category membership'),'prior target not replaced');release();await new Promise(r=>setTimeout(r,40));assert(text().includes('Desired: Clear Category membership')&&!text().includes('Desired: Assignment live'),'obsolete target overwrote clear');intercept=null;await click('Close Applications');
+    });
+    await test('actor change during PUT disposes mutation context without obsolete authentication replacing the new actor',async()=>{
+      await openAssignment();await pick('live');let release,signal;intercept=(url,o)=>url===putUrl(assignmentApp)?new Promise(r=>{signal=o.signal;release=()=>r(new win.Response(JSON.stringify({code:'authentication_required'}),{status:401}));}):null;
+      await confirm();await wait(()=>release,'held actor mutation');await client.bootstrap();const bob=await client.request('/api/auth/login',{method:'POST',body:{username:'bob',password:'browser-fixture-only'}});context.setActor(bob.id);context.select(3);await client.bootstrap();win.dispatchEvent(new win.Event('focus'));await wait(()=>text().includes('Signed in as bob'),'assignment actor Bob');assert(signal.aborted&&!appPanel(),'actor did not dispose action');release();await new Promise(r=>setTimeout(r,40));assert(text().includes('Signed in as bob')&&!text().includes('Your session ended'),'obsolete assignment auth replaced Bob');
+      intercept=null;await client.bootstrap();const alice=await client.request('/api/auth/login',{method:'POST',body:{username:'alice',password:'browser-fixture-only'}});context.setActor(alice.id);context.select(1);await client.bootstrap();win.dispatchEvent(new win.Event('focus'));await wait(()=>text().includes('Signed in as alice'),'assignment restore Alice');await returnA();
+    });
+    await test('assignment of a retained-review candidate preserves complete review history and existing relationships',async()=>{
+      const oldReview=await(await win.__fixtureNativeFetch(reviewUrl(reviewFixtures.reviews.multiple))).json();const oldApp=await currentApp(appFixtures.first);
+      await openAssignment(appFixtures.first);await pick('empty');await confirm(appFixtures.first);await settled();const after=await currentApp(appFixtures.first),newReview=await(await win.__fixtureNativeFetch(reviewUrl(reviewFixtures.reviews.multiple))).json();
+      assert(after.category_id===assignmentFixtures.categories.empty&&after.section===oldApp.section,'review candidate assignment missing/classification changed');
+      assert(JSON.stringify(newReview)===JSON.stringify(oldReview),'historical review, current classification, source or relationship changed');await click('Close Applications');
+    });
+    await test('case-equivalent portable identities remain valid through target checks and mutation reconciliation',async()=>{
+      await openAssignment();let dispatched=false;
+      intercept=(url,options)=>{
+        if(url===putUrl(assignmentApp)){dispatched=true;return null;}
+        if(url===categoryUrl(assignmentFixtures.categories.live)||dispatched&&url===appUrl(assignmentApp))return win.__fixtureNativeFetch(url,options).then(async r=>{const data=await r.json();data.portable_id=data.portable_id.toUpperCase();return new win.Response(JSON.stringify(data),{status:r.status});});
+        return null;
+      };
+      await pick('live');await confirm();await settled();assert(button('Change Category')&&text().includes('Current membership: Assignment live'),'case-equivalent UUID blocked reconciliation');intercept=null;
+      // Keep the final Category reopen fixture populated using another fresh, explicit intent.
+      await click('Change Category');await wait(()=>destination(),'new UUID action');await pick('empty');await confirm();await settled();await click('Close Applications');
+    });
+    await test('assignment narrow traffic policy covers detail action PUT reconciliation list reload and close',async()=>{
+      const calls=traffic.slice(assignmentStart);assert(calls.every(allowedAssignmentTraffic),'excluded assignment traffic');
+      const puts=calls.filter(c=>c.method==='PUT');assert(puts.length===assignmentIntents.length,'intent count differs');assert(new Set(puts.map(c=>c.assignmentIntent.sequence)).size===puts.length,'confirmation replay');
+      for(const forbidden of [{url:putUrl(assignmentApp),method:'PUT',body:'{}'},...['trash/','restore/','override/','messages/','documents/'].map(t=>({url:appUrl(assignmentApp)+t,method:'POST'})),{url:categoryUrl(1),method:'PATCH'},{url:'/api/workspaces/1/application-reviews/1/attach/',method:'POST'},{url:'/api/email/sync',method:'POST'}])assert(!allowedAssignmentTraffic(forbidden),'excluded authority accepted');
+    });
+    await test('Category reopen sees server membership; Category/review/evidence parents stay read-only and review history unchanged',async()=>{
+      if(appPanel())await click('Close Applications');const before=traffic.length;
+      await openCategories();categoryButton(assignmentFixtures.categories.empty).click();await wait(()=>doc.querySelector('[data-testid="category-detail"]'),'reopened Category');await wait(()=>memberButton(assignmentApp),'persisted membership in Category');memberButton(assignmentApp).click();await wait(()=>doc.querySelector('[data-testid="application-detail"]'),'Category read-only child');assert(!button('Change Category')&&!assignmentPanel(),'Category mutation surface');await click('Close Categories');
+      await openReviews();await chooseReview('multiple');const candidate=multipleReview.candidates.find(c=>c.application_id===appFixtures.first);doc.querySelector('[data-review-candidate="'+candidate.id+'"]').click();await wait(()=>doc.querySelector('[data-testid="application-detail"]'),'review readonly child');assert(!button('Change Category')&&!assignmentPanel(),'review mutation surface');await click('Close reviews');
+      const after=await(await win.__fixtureNativeFetch('/api/workspaces/1/application-reviews/'+reviewFixtures.reviews.multiple+'/')).json();assert(JSON.stringify(after)===JSON.stringify(multipleReview),'historical review/source/relationships changed');
+      assert(traffic.slice(before).every(c=>c.method==='GET'),'readonly parent write');
     });
     await test('panel open fetches once; real source labels exclude private content', async()=>{
       await click('Extraction evidence');await wait(()=>sourceButton(fixtures.sources.history),'sources');

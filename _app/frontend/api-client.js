@@ -116,6 +116,16 @@
         if (!captured.actor) throw new ApiError("workspace_required", "Select a workspace first.");
         return request(`/api/workspaces/${safeId(captured.workspace)}/categories/${safeId(categoryId)}/applications/?show_archived=true`, {captured, signal});
       },
+      assignApplicationCategory(applicationId, {categoryId, expectedRevision, captured = context.capture(), signal} = {}) {
+        check(captured);
+        if (!captured.actor) throw new ApiError("workspace_required", "Select a workspace first.");
+        const workspace = safeId(captured.workspace), id = safeId(applicationId);
+        if (categoryId !== null) safeId(categoryId);
+        if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) throw new ApiError("unsafe_revision", "The membership revision cannot be represented safely.");
+        return request(`/api/workspaces/${workspace}/applications/${id}/category/`, {
+          method:"PUT", body:{category_id:categoryId, expected_revision:expectedRevision}, captured, signal
+        });
+      },
       clearCsrf() { csrf = null; },
       async bootstrap() {
         const result = await request("/api/auth/csrf");

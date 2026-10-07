@@ -180,6 +180,50 @@ with tempfile.TemporaryDirectory(prefix="jth-foundation-") as directory:
         app = Application.objects.create(workspace=workspace, company="Large member", role_label=str(index), section="credentials")
         CategoryMembership.objects.create(application=app, category_id=categories["large"])
     Category.objects.create(workspace=Workspace.objects.get(pk=3), name="Foreign Category", section="misc")
+    # Assignment-only synthetic resources; faults never touch production contracts.
+    assignment_apps = {}
+    assignment_categories = {}
+    for label, archived, trashed_flag in (("live", False, False), ("archived", True, False), ("empty", False, False), ("duplicate", False, False), ("trashed", False, True)):
+        item = Category.objects.create(workspace=workspace, name="Assignment same" if label in {"archived", "duplicate"} else "Assignment " + label, section="network" if label == "archived" else "misc", archived=archived)
+        assignment_categories[label] = item.pk
+        if trashed_flag:
+            set_trash(actor=alice, workspace=workspace, kind="categories", pk=item.pk, trashed=True, expected_revision=0)
+    for label in ("categorized", "uncategorized", "archived", "trashed", "trashed-source"):
+        app = Application.objects.create(workspace=workspace, company="Assignment " + label, role_label="Assignment role", section="applications")
+        assignment_apps[label] = app.pk
+        if label != "uncategorized":
+            CategoryMembership.objects.create(application=app, category_id=assignment_categories["trashed" if label == "trashed-source" else "live"])
+        if label == "archived":
+            Override.objects.create(application=app, archived=True)
+        if label == "trashed":
+            set_trash(actor=alice, workspace=workspace, kind="applications", pk=app.pk, trashed=True, expected_revision=0)
+
+    def assignment_fixtures(request):
+        return JsonResponse({"applications":assignment_apps,"categories":assignment_categories})
+
+    class AssignmentFixtureControl(APIView):
+        def post(self, request):
+            # Test-controller traffic is outside product-frame traffic. Only fixed fixture IDs admitted.
+            from documents.category_services import assign_category
+            command = request.data.get("command")
+            if request.user.pk != alice.pk:
+                return Response(status=404)
+            app = Application.objects.get(pk=assignment_apps[request.data.get("application", "categorized")])
+            target = Category.objects.get(pk=assignment_categories[request.data.get("category", "empty")])
+            if command == "move":
+                return assign_category(actor=alice, workspace=workspace, application_id=app.pk, category_id=target.pk, expected_revision=app.category_revision)
+            if command == "trash-target":
+                set_trash(actor=alice, workspace=workspace, kind="categories", pk=target.pk, trashed=True, expected_revision=target.lifecycle_revision)
+            elif command == "restore-target":
+                set_trash(actor=alice, workspace=workspace, kind="categories", pk=target.pk, trashed=False, expected_revision=target.lifecycle_revision)
+            elif command == "trash-app":
+                set_trash(actor=alice, workspace=workspace, kind="applications", pk=app.pk, trashed=True, expected_revision=app.lifecycle_revision)
+            elif command == "restore-app":
+                set_trash(actor=alice, workspace=workspace, kind="applications", pk=app.pk, trashed=False, expected_revision=app.lifecycle_revision)
+            else:
+                return Response(status=400)
+            return Response({"ok": True})
+
     def category_fixtures(request):
         return JsonResponse({"categories":categories,"members":category_members})
 
@@ -210,7 +254,8 @@ with tempfile.TemporaryDirectory(prefix="jth-foundation-") as directory:
           const nativeFetch=window.fetch.bind(window);
           window.__fixtureNativeFetch=nativeFetch; window.__fixtureTraffic=[];
           window.fetch=function(url,options){
-            const entry={url:String(url),method:options&&options.method||'GET'};
+            const entry={url:String(url),method:options&&options.method||'GET',body:options&&options.body};
+            if(entry.method==='PUT'&&window.__fixtureAssignmentIntent){entry.assignmentIntent=window.__fixtureAssignmentIntent;window.__fixtureAssignmentIntent=null;}
             if(window.__fixtureFoundationAction==='logout'&&entry.url==='/api/auth/logout'&&entry.method==='POST'){
               entry.foundationAction='logout'; window.__fixtureFoundationAction=null;
             }
@@ -240,6 +285,8 @@ with tempfile.TemporaryDirectory(prefix="jth-foundation-") as directory:
                    path("api/test-only/application-fixtures", application_fixtures),
                    path("api/test-only/review-fixtures", review_fixtures),
                    path("api/test-only/category-fixtures", category_fixtures),
+                   path("api/test-only/assignment-fixtures", assignment_fixtures),
+                   path("api/test-only/assignment-control", AssignmentFixtureControl.as_view()),
                    path("api/test-only/upload", UploadProbe.as_view()),
                    path("api/test-only/slow", SlowProbe.as_view())] + product_urls
     print("Disposable fixtures: alice / bob; password browser-fixture-only; workspaces A=1 B=2 C=3", flush=True)

@@ -298,3 +298,74 @@ class CategoryReadContractTests(APITestCase):
         self.assertEqual(len(members.data), 63)
         self.assertFalse(any(re.match(r"\s*(INSERT|UPDATE|DELETE|REPLACE|CREATE|ALTER|DROP)\b", item["sql"], re.I) for item in queries.captured_queries))
         self.assertEqual(snapshot(), before)
+
+
+class AssignmentBrowserContractTests(MembershipTests):
+    """Exact existing assignment authority used by the first browser write surface."""
+    def test_assignment_auth_csrf_method_and_exact_input_contract(self):
+        from rest_framework.test import APIClient
+        url = self.url(f'applications/{self.app.pk}/category/')
+        self.assertEqual(APIClient().put(url, {'category_id': None, 'expected_revision': 0}, format='json').status_code, 401)
+        for method in ('post', 'patch', 'delete'):
+            self.assertEqual(getattr(self.client, method)(url, {}, format='json').status_code, 405)
+        for body in ({}, {'category_id': None}, {'expected_revision': 0}, {'category_id': 0, 'expected_revision': 0},
+                     {'category_id': None, 'expected_revision': -1}, {'category_id': None, 'expected_revision': 0, 'request_key': 'forbidden'}):
+            result = self.client.put(url, body, format='json')
+            self.assertEqual(result.status_code, 400, body)
+            self.assertEqual(result.data['code'], 'validation_error')
+        protected = APIClient(enforce_csrf_checks=True)
+        protected.force_login(self.user)
+        self.assertEqual(protected.put(url, {'category_id': None, 'expected_revision': 0}, format='json').status_code, 403)
+        token = protected.get('/api/auth/csrf').data['csrfToken']
+        result = protected.put(url, {'category_id': None, 'expected_revision': 0}, format='json', HTTP_X_CSRFTOKEN=token)
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.data, {'id': self.app.pk, 'category_id': None, 'category_revision': 0})
+        self.assertFalse(CategoryMembership.objects.exists())
+
+    def test_assignment_lifecycle_admission_leaving_source_and_revision_independence(self):
+        self.move(self.one, 0)
+        self.one.trashed_at = timezone.now()
+        self.one.save(update_fields=['trashed_at'])
+        self.override.archived = True
+        self.override.save(update_fields=['archived'])
+        self.app.role_label = 'Changed label'
+        self.app.save(update_fields=['role_label'])
+        self.app.refresh_from_db()
+        self.assertEqual(self.app.category_revision, 1)
+        before = self.snapshot()
+        result = self.move(self.two, 1)
+        self.assertEqual(result.data, {'id': self.app.pk, 'category_id': self.two.pk, 'category_revision': 2})
+        self.assertEqual(self.snapshot(), before)
+        self.two.trashed_at = timezone.now()
+        self.two.save(update_fields=['trashed_at'])
+        result = self.move(self.two, 2)
+        self.assertEqual((result.status_code, result.data['code']), (409, 'resource_trashed'))
+        self.assertEqual(self.move(None, 2).data['category_revision'], 3)
+        self.app.trashed_at = timezone.now()
+        self.app.save(update_fields=['trashed_at'])
+        self.assertEqual(self.move(None, 3).data['code'], 'resource_trashed')
+        self.app.refresh_from_db()
+        self.assertEqual(self.app.category_revision, 3)
+
+    def test_assignment_failure_rolls_back_membership_revision_and_all_domain_effects(self):
+        from django.apps import apps
+        from contextlib import ExitStack
+        models = [m for m in apps.get_models() if m._meta.app_label in {'accounts', 'applications', 'documents', 'email_sync', 'postings', 'core'}]
+        def snapshot():
+            return {m._meta.label: list(m.objects.order_by('pk').values()) for m in models}
+        before = snapshot()
+        with patch('documents.category_services.Application.save', side_effect=RuntimeError('after membership write')):
+            with self.assertRaises(RuntimeError):
+                self.move(self.one, 0)
+        self.assertEqual(snapshot(), before)
+        with ExitStack() as blocked:
+            for target in ('applications.derivation.derive_application', 'core.lifecycle.set_trash', 'email_sync.tasks.sync_account_task.delay', 'email_sync.tasks.sync_all_accounts_task.delay'):
+                blocked.enter_context(patch(target, side_effect=AssertionError('assignment invoked excluded effect')))
+            self.assertEqual(self.move(self.two, 0).status_code, 200)
+        after = snapshot()
+        before_app = before['applications.Application'][0].copy()
+        before_app['category_revision'] = 1
+        self.assertEqual(after['applications.Application'], [before_app])
+        for label, rows in before.items():
+            if label not in {'applications.Application', 'documents.CategoryMembership'}:
+                self.assertEqual(after[label], rows, label)

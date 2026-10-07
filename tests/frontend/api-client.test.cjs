@@ -334,3 +334,48 @@ test('Category errors distinguish unavailable membership from empty and hide raw
   assert.equal(h.categoryFailure(new ApiError('aborted','private'),'members'),null);
   assert.equal(h.categoryFailure(new ApiError('stale_response','private'),'detail'),null);
 });
+
+const assignmentHelpers=(()=>{
+  const scope={JTHApi:{ApiError},Number,Date,Set};vm.createContext(scope);
+  const parts=['APPLICATION','CATEGORY','ASSIGNMENT'].map(name=>html.split('// BEGIN DJANGO '+name+' STATE')[1].split('// END DJANGO '+name+' STATE')[0]);
+  vm.runInContext(parts.join('\n'),scope);return scope;
+})();
+test('assignment PUT uses only scoped IDs, revision, session and CSRF; no replay header',async()=>{
+  const calls=[];const {client}=setup(async(p,o)=>{calls.push({p,o});return response(200,p==='/api/auth/csrf'?{csrfToken:'fixture'}:{id:7,category_id:5,category_revision:1});});
+  await client.bootstrap();await client.assignApplicationCategory(7,{categoryId:5,expectedRevision:0});await client.assignApplicationCategory(7,{categoryId:null,expectedRevision:1});
+  assert.equal(calls[1].p,'/api/workspaces/2/applications/7/category/');
+  assert.deepEqual(JSON.parse(calls[1].o.body),{category_id:5,expected_revision:0});assert.deepEqual(JSON.parse(calls[2].o.body),{category_id:null,expected_revision:1});
+  assert.equal(calls[1].o.method,'PUT');assert.equal(calls[1].o.credentials,'same-origin');assert.equal(calls[1].o.cache,'no-store');assert.equal(calls[1].o.headers['X-CSRFToken'],'fixture');assert.equal(calls[1].o.headers['Idempotency-Key'],undefined);
+});
+test('assignment rejects unsafe or missing IDs/revisions without transmission',async()=>{
+  let calls=0;const {client,context}=setup(async()=>{calls++;return response(200,{});});
+  for(const bad of [undefined,0,-1,true,'5',1.2,Number.MAX_SAFE_INTEGER+1]) {
+    assert.throws(()=>client.assignApplicationCategory(bad,{categoryId:5,expectedRevision:0}),{code:'unsafe_identifier'});
+    assert.throws(()=>client.assignApplicationCategory(7,{categoryId:bad,expectedRevision:0}),{code:'unsafe_identifier'});
+  }
+  for(const bad of [undefined,-1,true,'0',1.2,Number.MAX_SAFE_INTEGER+1])assert.throws(()=>client.assignApplicationCategory(7,{categoryId:null,expectedRevision:bad}),{code:'unsafe_revision'});
+  context.select(Number.MAX_SAFE_INTEGER+1);assert.throws(()=>client.assignApplicationCategory(7,{categoryId:null,expectedRevision:0}),{code:'unsafe_identifier'});assert.equal(calls,0);
+});
+test('assignment captured context, preabort and active abort do not retry',async()=>{
+  let signal,release,calls=0;const {client,context}=setup(async(p,o)=>{if(p==='/api/auth/csrf')return response(200,{csrfToken:'fixture'});calls++;signal=o.signal;return new Promise(r=>release=r);});
+  await client.bootstrap();const old=context.capture();context.select(3);assert.throws(()=>client.assignApplicationCategory(7,{categoryId:null,expectedRevision:0,captured:old}),{code:'stale_response'});
+  const abort=new AbortController();const task=client.assignApplicationCategory(7,{categoryId:null,expectedRevision:0,signal:abort.signal});abort.abort();assert(signal.aborted);release(response(200,{id:7,category_id:null,category_revision:0}));await task;
+  await assert.rejects(client.assignApplicationCategory(7,{categoryId:null,expectedRevision:0,signal:abort.signal}),{code:'aborted'});assert.equal(calls,1);
+  const failed=setup(async(p)=>p==='/api/auth/csrf'?response(200,{csrfToken:'fixture'}):Promise.reject(new TypeError('lost')));await failed.client.bootstrap();await assert.rejects(failed.client.assignApplicationCategory(7,{categoryId:5,expectedRevision:0}),{code:'network_error'});
+});
+test('assignment observation retains only action authority; receipt is minimal and validated',()=>{
+  const h=assignmentHelpers,row={...applicationFixture(),category_revision:4,private:'secret'};
+  const projected=h.assignmentObservation(row,2,7,row.portable_id.toUpperCase());assert.equal(projected.category_revision,4);assert.equal(projected.section,undefined);assert.equal(projected.private,undefined);
+  for(const change of [{workspace:3},{id:8},{portable_id:'bad'},{category_id:0},{category_revision:-1},{category_revision:Number.MAX_SAFE_INTEGER+1},{override:{}},{effective_trashed:true}])assert.throws(()=>h.assignmentObservation({...row,...change},2,7));
+  const attempt={id:7,categoryId:5,revision:4,captured:{workspace:2}};
+  for(const rev of [4,5])assert.equal(JSON.stringify(h.assignmentReceipt({id:7,category_id:5,category_revision:rev,private:'secret',workspace:2},attempt)),JSON.stringify({id:7,category_id:5,category_revision:rev}));
+  for(const change of [{id:8},{category_id:null},{workspace:3},{workspace_id:3},{category_revision:6},{category_revision:-1},{category_revision:Number.MAX_SAFE_INTEGER+1}])assert.throws(()=>h.assignmentReceipt({id:7,category_id:5,category_revision:5,...change},attempt));
+  assert.equal(h.assignmentReceipt({id:7,category_id:null,category_revision:5},{...attempt,categoryId:null}).category_id,null);
+});
+test('assignment outcomes distinguish rejection from uncertainty and normalize raw details',()=>{
+  const h=assignmentHelpers;
+  for(const [status,code,match] of [[409,'stale_revision',/observed membership changed/],[409,'resource_trashed',/unavailable/],[404,'not_found',/unavailable/],[503,'creation_busy',/database was busy/],[500,'request_failed',/may have completed/],[0,'network_error',/may have completed/],[0,'unexpected_response',/may have completed/],[401,'authentication_required',/session ended/]]) {
+    const result=h.assignmentOutcome(new ApiError(code,'private request key SQL',status));assert.match(result,match);assert(!result.includes('private')&&!result.includes('request key'));
+  }
+  assert.match(h.assignmentReadMessage(new ApiError('unsafe_revision','private')),/cannot be represented safely/);
+});

@@ -7421,13 +7421,186 @@ function ApplicationDetailInspection({client, context, workspaceId, applicationI
   </>;
 }
 
+// BEGIN DJANGO ASSIGNMENT STATE
+function assignmentRevision(value) {
+  if (!Number.isSafeInteger(value) || value < 0) throw new JTHApi.ApiError("unsafe_revision", "The membership revision cannot be represented safely.");
+  return value;
+}
+function assignmentObservation(raw, workspace, id, portable = null) {
+  const row=categoryObject(raw), scope=applicationId(row.workspace), actual=applicationId(row.id);
+  const portable_id=categoryUuid(row.portable_id);
+  if(scope !== applicationId(workspace) || actual !== applicationId(id) || portable !== null && portable_id.toLowerCase() !== portable.toLowerCase()) applicationUnexpected();
+  const lifecycle=categoryLifecycle(row);
+  if(row.override !== null && (!row.override || typeof row.override.archived !== "boolean")) applicationUnexpected();
+  return {id:actual,workspace:scope,portable_id,company:applicationText(row.company),role_label:applicationText(row.role_label),
+    category_id:row.category_id === null ? null : applicationId(row.category_id),category_revision:assignmentRevision(row.category_revision),
+    archived:row.override !== null && row.override.archived,...lifecycle};
+}
+function assignmentReceipt(raw, attempt) {
+  const row=categoryObject(raw), id=applicationId(row.id), category_id=row.category_id === null ? null : applicationId(row.category_id);
+  const category_revision=assignmentRevision(row.category_revision);
+  for(const key of ["workspace","workspace_id"]) if(Object.prototype.hasOwnProperty.call(row,key) && applicationId(row[key]) !== attempt.captured.workspace) applicationUnexpected();
+  if(id !== attempt.id || category_id !== attempt.categoryId ||
+    !(category_revision === attempt.revision || category_revision === attempt.revision + 1)) applicationUnexpected();
+  return {id,category_id,category_revision};
+}
+function assignmentOutcome(error) {
+  if(!error) return "Assignment response received. Current membership is shown after refresh.";
+  if(error.status === 409 && error.code === "stale_revision") return "The assignment was rejected because the observed membership changed. Current membership is shown after refresh.";
+  if(error.status === 404 || error.status === 409 && error.code === "resource_trashed") return "The assignment was rejected because an Application, Category, or Workspace was unavailable. Current resources are checked after refresh.";
+  if(error.status === 503 && error.code === "creation_busy") return "The assignment was rejected while the database was busy. Refresh current state and open a new action before trying again.";
+  if(error.status === 401) return "Your session ended. Sign in to continue.";
+  if(error.status >= 400 && error.status < 500) return "The assignment was rejected. Refresh current state and open a new action before trying again.";
+  return "The assignment response was lost. The request may have completed. Current membership is shown after refresh.";
+}
+function assignmentReadMessage(error) {
+  if(["unsafe_identifier","unsafe_revision"].includes(error.code)) return "Application identity or membership revision cannot be represented safely. Assignment is unavailable.";
+  if(error.status === 404) return "Application, Category, or Workspace unavailable. Assignment is unavailable.";
+  return "Assignment data could not be inspected safely. Refresh current Application before opening a new action.";
+}
+// END DJANGO ASSIGNMENT STATE
+
+function StandaloneApplicationInspection({client,context,workspaceId,applicationId:id,inspectionControl,onAuthFailure,onAttempt}) {
+  const [observation,setObservation]=useState(null), [source,setSource]=useState(null), [action,setAction]=useState(null);
+  const [busy,setBusy]=useState(false), [pending,setPending]=useState(false), [message,setMessage]=useState(null), [blocked,setBlocked]=useState(false);
+  const [coreVersion,setCoreVersion]=useState(0);
+  const readLane=useMemo(()=>createEvidenceLane(context),[context]);
+  const coreControl=useRef(null), mutation=useRef({generation:0,controller:null,alive:true}), lock=useRef(false), identity=useRef(null);
+  const auth=useRef(onAuthFailure);auth.current=onAuthFailure;
+  const outcomeNote=useRef(null);
+  function invalidate() {
+    readLane.invalidate();coreControl.current?.();mutation.current.generation++;mutation.current.controller?.abort();lock.current=false;
+  }
+  function expired(error) {invalidate();setAction(null);setObservation(null);setBlocked(true);auth.current(error);}
+  function current(token) {return readLane.current(token,id);}
+  async function observe(token) {
+    const row=assignmentObservation(await client.readApplication(id,{captured:token.captured,signal:token.signal}),workspaceId,id,identity.current);
+    if(!current(token)) return null;
+    identity.current=row.portable_id.toLowerCase();return row;
+  }
+  async function sourceFor(row,token) {
+    if(row.category_id === null) return null;
+    try {
+      const category=categoryRow(await client.readCategory(row.category_id,{captured:token.captured,signal:token.signal}),workspaceId);
+      if(category.id !== row.category_id) categoryUnexpected();return category;
+    } catch(error) {
+      if(error.status === 401 || ![404,500,502,503,504].includes(error.status) && error.code !== "network_error") throw error;
+      return null;
+    }
+  }
+  async function load(open=false,refresh=false) {
+    if(lock.current) return;
+    const token=readLane.start(id);setBusy(true);setAction(null);setObservation(null);setSource(null);setMessage(open ? null : outcomeNote.current);setBlocked(true);
+    try {
+      const row=await observe(token);if(!row || !current(token)) return;
+      if(row.is_trashed) {setObservation({...row,category_revision:undefined});setMessage("Trashed Application — assignment is unavailable.");return;}
+      let choices=null, metadata=null;
+      if(open) choices=categoryList(await client.readCategories({captured:token.captured,signal:token.signal}),workspaceId);
+      if(open || refresh) metadata=await sourceFor(row,token);
+      if(!current(token)) return;
+      setObservation({...row,category_revision:undefined});setSource(metadata);setBlocked(false);
+      if(open) setAction({row,choices,captured:token.captured,selected:undefined,target:null,confirmation:null});
+      if(refresh) {coreControl.current?.();setCoreVersion(v=>v+1);}
+    } catch(error) {
+      if(current(token)) {if(error.status === 401) expired(error);else setMessage(assignmentReadMessage(error));}
+    } finally {if(current(token)) setBusy(false);}
+  }
+  function closeAction() {if(lock.current) return;readLane.invalidate();setAction(null);setBusy(false);setMessage(null);}
+  async function target(value) {
+    if(lock.current || !action) return;
+    if(!context.current(action.captured)) return;
+    const token=readLane.start(id), row=action.row, choices=action.choices, captured=action.captured;
+    const desired=value === "clear" ? null : applicationId(Number(value));
+    setAction({row,choices,captured,selected:desired,target:null,confirmation:null});setMessage(null);
+    if(desired === row.category_id) {setBusy(false);return;}
+    if(desired === null) {setAction({row,choices,captured,selected:null,target:null,confirmation:{row,category:null}});setBusy(false);return;}
+    setBusy(true);
+    try {
+      const choice=choices.find(c=>c.id === desired);if(!choice) categoryUnexpected();
+      const detail=categoryRow(await client.readCategory(desired,{captured:token.captured,signal:token.signal}),workspaceId,choice);
+      if(!current(token)) return;
+      if(detail.is_trashed) {setMessage("Selected Category is now trashed. Choose another destination.");return;}
+      setAction({row,choices,captured,selected:desired,target:detail,confirmation:{row,category:detail}});
+    } catch(error) {if(current(token)) {if(error.status === 401) expired(error);else setMessage("Selected Category is unavailable or could not be inspected safely. Choose another destination.");}}
+    finally {if(current(token)) setBusy(false);}
+  }
+  async function reconcile(attempt,outcome) {
+    if(!mutationCurrent(attempt)) return;
+    outcomeNote.current=outcome;
+    const token=readLane.start(id);setBusy(true);setBlocked(true);setAction(null);setObservation(null);setSource(null);setMessage(outcome);
+    try {
+      const row=await observe(token);if(!row || !current(token) || !mutationCurrent(attempt)) return;
+      const metadata=await sourceFor(row,token);
+      // Inspect the attempted target on rejection/uncertainty without asserting which resource caused refusal.
+      if(attempt.categoryId !== null && row.category_id !== attempt.categoryId) {
+        try {const check=categoryRow(await client.readCategory(attempt.categoryId,{captured:token.captured,signal:token.signal}),workspaceId,attempt.target);if(check.id !== attempt.categoryId) categoryUnexpected();}
+        catch(error) {if(error.status === 401) throw error;if(![404,500,502,503,504].includes(error.status) && error.code !== "network_error") throw error;}
+      }
+      if(!current(token) || !mutationCurrent(attempt)) return;
+      setObservation({...row,category_revision:undefined});setSource(metadata);setBlocked(row.is_trashed);coreControl.current?.();setCoreVersion(v=>v+1);
+      if(row.is_trashed) setMessage(outcome+" The current Application is trashed; assignment is unavailable.");
+    } catch(error) {
+      if(current(token) && mutationCurrent(attempt)) {if(error.status === 401) expired(error);else setMessage(outcome+" Current Application refresh failed. Further assignment is withheld.");}
+    } finally {if(current(token) && mutationCurrent(attempt)) {setBusy(false);setPending(false);lock.current=false;}}
+  }
+  function mutationCurrent(attempt) {return mutation.current.alive && mutation.current.generation === attempt.generation && context.current(attempt.captured) && attempt.id === id && attempt.portable === identity.current;}
+  async function submit() {
+    if(lock.current || busy || !action?.confirmation || blocked || !context.current(action.captured) || action.captured.workspace !== workspaceId) return;
+    const row=action.confirmation.row, category=action.confirmation.category;
+    const controller=new AbortController();mutation.current.controller=controller;
+    const attempt=Object.freeze({captured:action.captured,id,portable:row.portable_id.toLowerCase(),categoryId:category?.id ?? null,
+      revision:row.category_revision,target:category ? Object.freeze({...category}) : null,generation:++mutation.current.generation});
+    lock.current=true;readLane.invalidate();setPending(true);setBlocked(true);setAction(null);setObservation(null);setSource(null);setMessage("Submitting assignment; then refreshing current Application…");
+    onAttempt();let error=null;
+    try {assignmentReceipt(await client.assignApplicationCategory(id,{categoryId:attempt.categoryId,expectedRevision:attempt.revision,captured:attempt.captured,signal:controller.signal}),attempt);}
+    catch(e) {error=e;}
+    if(!mutationCurrent(attempt)) return;
+    if(error?.status === 401) {expired(error);return;}
+    await reconcile(attempt,assignmentOutcome(error));
+  }
+  useEffect(()=>{
+    const cancel=()=>invalidate();inspectionControl.current=cancel;load();
+    return ()=>{invalidate();readLane.dispose();mutation.current.alive=false;if(inspectionControl.current === cancel) inspectionControl.current=null;};
+  },[readLane]);
+  const categoryLabel=c=>`${c.name} — Category ${c.id} — ${c.section}${c.archived ? " — Archived" : ""}${c.is_trashed ? " — Trashed" : ""}`;
+  const membership=row=>row?.category_id === null ? "Uncategorized" : source ? categoryLabel(source) : `Category ${row?.category_id} — details unavailable`;
+  return <>
+    <ApplicationDetailInspection key={coreVersion} client={client} context={context} workspaceId={workspaceId} applicationId={id}
+      expectedPortable={identity.current} inspectionControl={coreControl} onAuthFailure={expired} />
+    <section data-testid="assignment-workflow" aria-label="Category assignment">
+      {busy && <p role="status">{pending ? "Refreshing current Application after assignment…" : "Inspecting assignment state…"}</p>}
+      {pending && <p role="status">Assignment request pending. Leaving this view does not prove server rollback.</p>}
+      {message && <p role="alert">{message}</p>}
+      {observation && <p>Current membership: {membership(observation)}</p>}
+      {!action && !pending && !busy && <>{observation && !blocked && <button className="btn" onClick={()=>load(true)}>Change Category</button>}
+        {blocked && <button className="btn" onClick={()=>load(false,true)}>Refresh current Application</button>}</>}
+      {action && <>
+        <h4>Change Category</h4><p>Application {id}: {action.row.company} — {action.row.role_label}{action.row.archived ? " — Archived" : ""}</p>
+        <p>Current membership: {membership(action.row)}</p>
+        <label>Destination Category <select aria-label="Destination Category" value={action.selected === undefined ? "" : action.selected === null ? "clear" : String(action.selected)} disabled={pending} onChange={e=>target(e.target.value)}>
+          <option value="" disabled>Select a destination</option><option value="clear" disabled={action.row.category_id === null}>Clear Category membership</option>
+          {action.choices.map(c=><option key={c.id} value={c.id} disabled={c.id === action.row.category_id}>{categoryLabel(c)}</option>)}
+        </select></label>
+        {action.confirmation && !busy && <div data-testid="assignment-confirmation">
+          <p>Confirm Application {id}: {action.row.company} — {action.row.role_label}</p>
+          <p>From: {membership(action.row)}</p><p>Desired: {action.target ? categoryLabel(action.target) : "Clear Category membership"}</p>
+          <p>Application classification is unchanged by this action.</p><p>Backend admission checks current resources when submitted.</p>
+          <button className="btn" disabled={pending} onClick={submit}>Confirm Category assignment</button>
+        </div>}
+        <button className="btn" disabled={pending} onClick={closeAction}>Close Category action</button>
+      </>}
+    </section>
+  </>;
+}
+
 function ApplicationPanel({client, context, workspaceId, onClose, onAuthFailure}) {
   const [rows,setRows] = useState([]), [ready,setReady] = useState(false), [listBusy,setListBusy] = useState(false);
   const [listError,setListError] = useState(null), [selected,setSelected] = useState(null);
   const listLane = useMemo(() => createEvidenceLane(context), [context]);
   const auth = useRef(onAuthFailure); auth.current = onAuthFailure;
   const inspectionControl=useRef(null);
-  function back() {inspectionControl.current?.();setSelected(null);}
+  const listDirty=useRef(false);
+  function back() {inspectionControl.current?.();setSelected(null);if(listDirty.current) {listDirty.current=false;loadList();}}
   function fail(error, setter) {
     const safe = applicationFailure(error);
     if (!safe) return;
@@ -7435,7 +7608,7 @@ function ApplicationPanel({client, context, workspaceId, onClose, onAuthFailure}
     else setter(safe);
   }
   async function loadList() {
-    back(); const token=listLane.start(); setRows([]); setReady(false); setListBusy(true); setListError(null);
+    listDirty.current=false;back(); const token=listLane.start(); setRows([]); setReady(false); setListBusy(true); setListError(null);
     try {
       const data=applicationList(await client.readApplications({captured:token.captured,signal:token.signal}),workspaceId);
       if (listLane.current(token)) {setRows(data);setReady(true);}
@@ -7459,8 +7632,8 @@ function ApplicationPanel({client, context, workspaceId, onClose, onAuthFailure}
         <p>{Object.prototype.hasOwnProperty.call(sectionLabels,row.section) ? sectionLabels[row.section] : row.section} · Status: {value(row.effective_status)} · Applied date: {value(row.effective_date_applied)}{row.archived ? " · Archived" : ""}{row.is_trashed ? " · Trashed" : ""}</p></article>)}
     </> : <>
       <button className="btn" onClick={back}>Back to Applications</button>
-      <ApplicationDetailInspection key={selected} client={client} context={context} workspaceId={workspaceId}
-        applicationId={selected} inspectionControl={inspectionControl} onAuthFailure={e=>{listLane.invalidate();back();setRows([]);setReady(false);auth.current(e);}} />
+      <StandaloneApplicationInspection key={selected} client={client} context={context} workspaceId={workspaceId}
+        onAttempt={()=>{listDirty.current=true;listLane.invalidate();setRows([]);setReady(false);}} applicationId={selected} inspectionControl={inspectionControl} onAuthFailure={e=>{listLane.invalidate();back();setRows([]);setReady(false);auth.current(e);}} />
     </>}
   </section>;
 }
