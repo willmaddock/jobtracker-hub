@@ -79,7 +79,7 @@ document.querySelector('#run').onclick = async function () {
       const path=url.pathname, query=Array.from(url.searchParams.entries());
       // The sole mutation exception is the existing, explicitly exercised logout.
       // The disposable hook marks it only around that foundation control action.
-      if(call.method==='POST')return call.foundationAction==='logout'&&path==='/api/auth/logout'&&!query.length;
+      if(call.method==='POST')return allowedDispositionPost(call)||call.foundationAction==='logout'&&path==='/api/auth/logout'&&!query.length;
       if(call.method==='PUT')return allowedAssignmentPut(call);
       if(call.method!=='GET')return false;
       if(['/api/auth/csrf','/api/auth/me','/api/workspaces/'].includes(path))return !query.length;
@@ -201,9 +201,9 @@ document.querySelector('#run').onclick = async function () {
       let hits=0;intercept=url=>url===continuation&&++hits===1?response(500,{detail:'private-page-error'}):null;
       await click('Load more reviews');await wait(()=>button('Retry reviews'),'page error');
       assert(doc.querySelectorAll('[data-review-id]').length===50&&!text().includes('private-page-error'),'valid rows lost/raw error');
-      await click('Retry reviews');await wait(()=>doc.querySelectorAll('[data-review-id]').length===52,'page retry');
+      await click('Retry reviews');await wait(()=>doc.querySelectorAll('[data-review-id]').length===initialReviews.results.length+finalReviews.results.length,'page retry');
       assert(hits===2&&!button('Load more reviews'),'continuation token/exhaustion');
-      await chooseReview('multiple');await click('Back to reviews');assert(doc.querySelectorAll('[data-review-id]').length===52,'pages lost');
+      await chooseReview('multiple');await click('Back to reviews');assert(doc.querySelectorAll('[data-review-id]').length===initialReviews.results.length+finalReviews.results.length,'pages lost');
       await click('Close reviews');intercept=null;
     });
     await test('review detail separates candidate snapshot, current text and source relationships',async()=>{
@@ -352,6 +352,147 @@ document.querySelector('#run').onclick = async function () {
       await click('Application reviews');await wait(()=>reviewButton(reviewFixtures.reviews.multiple),'switch reviews');assert(!appPanel(),'Applications not closed');await chooseReview('multiple');
       frame.contentWindow.location.reload();await wait(()=>frame.contentDocument!==doc&&frame.contentDocument.querySelector('#root')?.textContent.includes('Connected to A.'),'review refresh');win=frame.contentWindow;doc=frame.contentDocument;
       win.__fixtureIntercept=(url,options)=>intercept?.(url,options);assert(!reviewPanel()&&win.location.hash==='#/workspaces/1','review selection persisted');
+    });
+    const dispositionId=reviewFixtures.reviews.action, dispositionIntents=[];
+    const dispositionUrl=transition=>reviewUrl(dispositionId)+transition+'/';
+    async function dispositionControl(command) {return client.request('/api/test-only/review-disposition-control',{method:'POST',body:{command}});}
+    const currentDisposition=async()=> (await (await win.__fixtureNativeFetch(reviewUrl(dispositionId))).json()).disposition;
+    function allowedDispositionPost(call) {
+      const intent=call.dispositionIntent;if(!intent)return false;
+      const u=new URL(call.url,location.origin);
+      if(u.origin!==location.origin||u.search||u.hash||call.method!=='POST'||!Number.isSafeInteger(intent.revision)||intent.revision<0)return false;
+      return ['dismiss','restore'].includes(intent.transition)&&call.url===reviewUrl(intent.id)+intent.transition+'/'&&call.body===JSON.stringify({expected_revision:intent.revision})&&intent.workspace===1&&[dispositionId,reviewFixtures.reviews.conflict].includes(intent.id);
+    }
+    function allowedDispositionTraffic(call) {
+      if(call.method==='POST')return allowedDispositionPost(call);
+      if(call.method!=='GET')return false;
+      const u=new URL(call.url,location.origin);if(u.origin!==location.origin||u.hash||u.username||u.password)return false;
+      if(['/api/auth/csrf','/api/auth/me','/api/workspaces/'].includes(u.pathname))return !u.search;
+      if(/^\/api\/workspaces\/[1-9]\d*\/insights\/$/.test(u.pathname))return !u.search;
+      if(/^\/api\/workspaces\/1\/application-reviews\/[1-9]\d*\/$/.test(u.pathname))return !u.search;
+      return u.pathname===reviewList&&(!u.search||/^\?after=[1-9]\d*$/.test(u.search));
+    }
+    async function openDisposition() {if(reviewPanel())await click('Close reviews');await openReviews();await chooseReview('action');}
+    async function prepareDisposition() {
+      await click((await currentDisposition()).state==='active'?'Dismiss review':'Restore review');
+      await wait(()=>button('Confirm dismissal')||button('Confirm restoration'),'disposition confirmation');
+    }
+    async function confirmDisposition() {
+      const revision=(await currentDisposition()).revision;
+      const transition=button('Confirm dismissal')?'dismiss':'restore';
+      const intent={workspace:1,id:dispositionId,revision,transition,sequence:dispositionIntents.length+1};
+      // Confirmation may intentionally carry an earlier observation during race tests.
+      intent.revision=confirmedRevision===null?revision:confirmedRevision;confirmedRevision=null;
+      dispositionIntents.push(intent);win.__fixtureDispositionIntent=intent;
+      const node=button(transition==='dismiss'?'Confirm dismissal':'Confirm restoration');node.click();node.click();
+    }
+    let confirmedRevision=null;
+    async function dispositionSettled() {await wait(()=>!text().includes('Loading review detail…')&&!text().includes('Submitting review change.')&&(reviewDetail()&&!!button('Dismiss review')||reviewDetail()&&!!button('Restore review')||!!button('Refresh current review')),'disposition settled');}
+    const dispositionStart=traffic.length;
+    await test('disposition preparation fetches fresh detail, cancellation never writes, and duplicate confirmation sends once',async()=>{
+      await openDisposition();const before=traffic.length;await prepareDisposition();
+      assert(traffic.slice(before).filter(c=>c.url===reviewUrl(dispositionId)&&c.method==='GET').length===1,'fresh observation missing');
+      assert(!traffic.slice(before).some(c=>c.method==='POST'),'preconfirmation write');const obsolete=button('Confirm dismissal')||button('Confirm restoration');await click('Cancel review change');obsolete.click();await new Promise(r=>setTimeout(r,20));assert(!traffic.slice(before).some(c=>c.method==='POST'),'cancelled confirmation transmitted');
+      assert(!button('Confirm dismissal')&&!button('Confirm restoration'),'cancel retained confirmation');
+      const snapshot=await dispositionControl('snapshot');const old=await currentDisposition();await prepareDisposition();await confirmDisposition();await dispositionSettled();
+      const now=await currentDisposition();assert(now.revision===old.revision+1&&now.state==='dismissed','dismiss authority');
+      assert(traffic.slice(before).filter(c=>c.method==='POST').length===1,'double submission');
+      assert((await dispositionControl('snapshot')).digest===snapshot.digest,'domain data changed');
+      await prepareDisposition();await confirmDisposition();await dispositionSettled();assert((await currentDisposition()).state==='active','restore');
+      await click('Close reviews');
+    });
+    await test('stale before no-op and dismiss restore cycle reject the captured confirmation',async()=>{
+      for(const cycle of [false,true]) {
+        await dispositionControl('restore');await openDisposition();await prepareDisposition();confirmedRevision=(await currentDisposition()).revision;
+        await dispositionControl('dismiss');if(cycle)await dispositionControl('restore');
+        await confirmDisposition();await dispositionSettled();assert(text().includes('observed revision changed'),'stale result absent');
+        assert(!button('Confirm dismissal')&&!button('Confirm restoration'),'stale intent replay');await click('Close reviews');
+      }
+    });
+    await test('real committed disposition response loss reconciles once and invalidates all accumulated pages',async()=>{
+      await dispositionControl('restore');await openReviews();await click('Load more reviews');await wait(()=>!button('Load more reviews'),'complete pages');await chooseReview('action');await prepareDisposition();
+      let committed=false;const before=traffic.length;
+      intercept=async(url,o)=>{if(url!==dispositionUrl('dismiss'))return win.__fixtureNativeFetch(url,o);const result=await win.__fixtureNativeFetch(url,o);assert(result.status===200,'real disposition failed');committed=true;throw new TypeError('lost after commit');};
+      await confirmDisposition();await dispositionSettled();assert(committed&&(await currentDisposition()).state==='dismissed'&&reviewDetail()&&text().includes('Current review disposition: Dismissed'),'not real commit/reconciliation');
+      assert(text().includes('may have completed')&&text().includes("not proof of this request's effect"),'uncertainty lost');
+      assert(traffic.slice(before).filter(c=>c.method==='POST').length===1&&traffic.slice(before).some(c=>c.method==='GET'&&c.url===reviewUrl(dispositionId)),'POST replay or missing reconciliation');
+      intercept=null;const backStart=traffic.length;await click('Back to reviews');await wait(()=>reviewButton(dispositionId),'page-one reload');
+      assert(doc.querySelectorAll('[data-review-id]').length===50&&button('Load more reviews'),'old pages reused');
+      assert(traffic.slice(backStart).some(c=>c.url===reviewList)&&!traffic.slice(backStart).some(c=>c.url.includes('?after=')),'not page one');await click('Close reviews');
+    });
+    await test('malformed receipt and failed reconciliation withhold mutation; GET retry preserves uncertain outcome',async()=>{
+      for(const status of [200,500]) {
+        await dispositionControl('restore');await openDisposition();await prepareDisposition();let attempted=false;
+        intercept=url=>{if(url===dispositionUrl('dismiss')){attempted=true;return response(status,status===200?{id:dispositionId,workspace_id:1,disposition:{state:'dismissed',revision:Number.MAX_SAFE_INTEGER+1,dismissed_at:null}}:{});}if(attempted&&url===reviewUrl(dispositionId))return response(500,{});return null;};
+        const before=traffic.length;await confirmDisposition();await dispositionSettled();assert(text().includes('may have completed')&&text().includes('Further changes are withheld'),'uncertain failure');
+        assert(!button('Dismiss review')&&!button('Restore review')&&!button('Confirm dismissal'),'failed refresh offered write');
+        intercept=null;await click('Refresh current review');await wait(()=>button('Dismiss review'),'GET recovery');
+        assert(text().includes('may have completed'),'retry erased uncertainty');assert(traffic.slice(before).filter(c=>c.method==='POST').length===1,'GET retry wrote');await click('Close reviews');
+      }
+    });
+    await test('invalid action detail revision or portable identity never confirms',async()=>{
+      await openDisposition();const raw=await(await win.__fixtureNativeFetch(reviewUrl(dispositionId))).json();
+      for(const changed of [{...raw,disposition:{...raw.disposition,revision:true}},{...raw,portable_id:'00000000-0000-4000-8000-000000000099'}]) {
+        intercept=url=>url===reviewUrl(dispositionId)?response(200,changed):null;await click('Dismiss review');await wait(()=>reviewPanel().querySelector('[role="alert"]'),'bad authority');
+        assert(!button('Confirm dismissal'),'bad authority confirmed');intercept=null;await click('Back to reviews');await chooseReview('action');await wait(()=>button('Dismiss review'),'detail retry');
+      }
+      await click('Close reviews');
+    });
+    await test('pending disposition navigation aborts and ignores obsolete success, errors and finalization',async()=>{
+      for(const navigation of ['back','close','workspace','panel'])for(const status of [200,401]) {
+        await dispositionControl('restore');await openDisposition();await prepareDisposition();let release,signal;
+        intercept=(url,o)=>url===dispositionUrl('dismiss')?new Promise(r=>{signal=o.signal;release=()=>r(response(status,status===200?{id:dispositionId,workspace_id:1,disposition:{state:'dismissed',revision:0,dismissed_at:null}}:{code:'authentication_required'}));}):null;
+        await confirmDisposition();await wait(()=>release,'held POST');assert(text().includes('does not prove server rollback')&&!button('Confirm dismissal'),'pending controls');
+        if(navigation==='back')await click('Back to reviews');else if(navigation==='close')await click('Close reviews');else if(navigation==='panel')await click('Applications');else {const select=doc.querySelector('[aria-label="Workspace"]');select.value='2';select.dispatchEvent(new win.Event('change',{bubbles:true}));await wait(()=>text().includes('Connected to B.'),'B');}
+        assert(signal.aborted,'mutation not aborted');release();await new Promise(r=>setTimeout(r,60));assert(!text().includes('Your session ended'),'obsolete auth');intercept=null;
+        if(navigation==='workspace')await returnA();if(reviewPanel())await click('Close reviews');if(appPanel())await click('Close Applications');
+      }
+    });
+    await test('later concurrent state is current observation, not the acknowledged request result',async()=>{
+      await dispositionControl('restore');await openDisposition();await prepareDisposition();
+      intercept=async(url,o)=>{if(url!==dispositionUrl('dismiss'))return win.__fixtureNativeFetch(url,o);const receipt=await win.__fixtureNativeFetch(url,o);await dispositionControl('restore');return receipt;};
+      await confirmDisposition();await dispositionSettled();assert(text().includes('change was acknowledged')&&text().includes('Current review disposition: Active'),'current state replaced with optimistic result');
+      intercept=null;await click('Close reviews');
+    });
+    await test('malformed JSON and empty success remain uncertain with no retry',async()=>{
+      for(const body of ['not JSON','']) {
+        await dispositionControl('restore');await openDisposition();await prepareDisposition();const before=traffic.length;
+        intercept=url=>url===dispositionUrl('dismiss')?Promise.resolve(new win.Response(body,{status:200})):null;
+        await confirmDisposition();await dispositionSettled();assert(text().includes('may have completed'),'malformed receipt credited');assert(traffic.slice(before).filter(c=>c.method==='POST').length===1,'malformed response replay');intercept=null;await click('Close reviews');
+      }
+    });
+    await test('held reconciliation and preparation cannot change a newer review selection',async()=>{
+      for(const phase of ['prepare','reconcile']) {
+        await dispositionControl('restore');await openDisposition();let release,signal,submitted=false;
+        if(phase==='reconcile')await prepareDisposition();
+        intercept=(url,o)=>{if(url===dispositionUrl('dismiss')){submitted=true;return null;}if(url===reviewUrl(dispositionId)&&(phase==='prepare'||submitted))return new Promise(r=>{signal=o.signal;release=()=>r(response(401,{code:'authentication_required'}));});return null;};
+        if(phase==='prepare')await click('Dismiss review');else await confirmDisposition();await wait(()=>release,'held detail');
+        await click('Back to reviews');await wait(()=>reviewButton(reviewFixtures.reviews.restored),'list');await chooseReview('restored');assert(signal.aborted,'detail not aborted');release();await new Promise(r=>setTimeout(r,60));assert(reviewDetail()&&!text().includes('Your session ended')&&!button('Confirm dismissal'),'obsolete preparation/reconciliation');
+        intercept=null;await click('Close reviews');
+      }
+    });
+    await test('current auth failure clears actions and obsolete actor auth cannot replace newer session',async()=>{
+      await dispositionControl('restore');await openDisposition();await prepareDisposition();
+      intercept=url=>url===dispositionUrl('dismiss')?response(401,{code:'authentication_required'}):null;await confirmDisposition();await wait(()=>text().includes('Your session ended'),'current disposition expiry');assert(!reviewPanel(),'expired panel');
+      intercept=null;win.dispatchEvent(new win.Event('focus'));await wait(()=>text().includes('Signed in as alice'),'session recovery');await returnA();
+      await openDisposition();await prepareDisposition();let release,signal;
+      intercept=(url,o)=>url===dispositionUrl('dismiss')?new Promise(r=>{signal=o.signal;release=()=>r(response(401,{code:'authentication_required'}));}):null;
+      await confirmDisposition();await wait(()=>release,'held actor mutation');await client.bootstrap();const bob=await client.request('/api/auth/login',{method:'POST',body:{username:'bob',password:'browser-fixture-only'}});context.setActor(bob.id);context.select(3);await client.bootstrap();win.dispatchEvent(new win.Event('focus'));await wait(()=>text().includes('Signed in as bob'),'new actor');assert(signal.aborted,'actor did not abort');release();await new Promise(r=>setTimeout(r,60));assert(text().includes('Signed in as bob')&&!text().includes('Your session ended')&&!reviewPanel(),'old actor auth');
+      intercept=null;await client.bootstrap();const alice=await client.request('/api/auth/login',{method:'POST',body:{username:'alice',password:'browser-fixture-only'}});context.setActor(alice.id);context.select(1);await client.bootstrap();win.dispatchEvent(new win.Event('focus'));await wait(()=>text().includes('Signed in as alice'),'Alice restored');await returnA();
+    });
+    await test('conflicted source permits dismissal and restoration without evidence effects',async()=>{
+      await openReviews();await chooseReview('conflict');await click('Dismiss review');await wait(()=>button('Confirm dismissal'),'conflict confirmation');
+      const id=reviewFixtures.reviews.conflict;const old=await(await win.__fixtureNativeFetch(reviewUrl(id))).json();
+      // This case uses a separately scoped intent; expand only its exact fixed fixture identity.
+      const before=traffic.length;win.__fixtureDispositionIntent={workspace:1,id,revision:old.disposition.revision,transition:'dismiss',sequence:dispositionIntents.length+1};dispositionIntents.push(win.__fixtureDispositionIntent);
+      button('Confirm dismissal').click();await dispositionSettled();assert(text().includes('Current review disposition: Dismissed')&&text().includes('Source conflict recorded'),'conflict gate');
+      await click('Restore review');await wait(()=>button('Confirm restoration'),'conflict restore');win.__fixtureDispositionIntent={workspace:1,id,revision:old.disposition.revision+1,transition:'restore',sequence:dispositionIntents.length+1};dispositionIntents.push(win.__fixtureDispositionIntent);button('Confirm restoration').click();await dispositionSettled();
+      assert(traffic.slice(before).filter(c=>c.method==='POST').length===2,'conflict replay');await click('Close reviews');
+    });
+    await test('disposition traffic binds scope body and unique confirmations across every new workflow interval',async()=>{
+      const calls=traffic.slice(dispositionStart);assert(calls.every(c=>allowedDispositionTraffic(c)||c.method==='GET'&&/^\/api\/workspaces\/1\/applications\/(?:\d+\/)?$/.test(c.url)),'excluded disposition traffic');
+      const posts=calls.filter(c=>c.method==='POST');assert(posts.length===dispositionIntents.length,'confirmation count');assert(new Set(posts.map(c=>c.dispositionIntent.sequence)).size===posts.length,'intent reused');
+      for(const bad of [{url:dispositionUrl('dismiss'),method:'POST',body:'{}'},...['attach','create-application'].map(t=>({url:reviewUrl(dispositionId)+t+'/',method:'POST'})),{url:reviewUrl(dispositionId)+'?creation_results_after=1',method:'GET'},{url:'/api/workspaces/1/applications/1/trash/',method:'POST'}])assert(!allowedDispositionTraffic(bad),'excluded authority admitted');
     });
     const categoryFixtures=await client.request('/api/test-only/category-fixtures');
     const categoryRoot='/api/workspaces/1/categories/',categoryListUrl=categoryRoot+'?show_archived=true';

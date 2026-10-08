@@ -119,13 +119,13 @@ with tempfile.TemporaryDirectory(prefix="jth-foundation-") as directory:
     removed = Application.objects.create(workspace=workspace, section="misc", company="Removed", role_label="Gone")
     trashed = Application.objects.create(workspace=workspace, section="credentials", company="Trashed reference", role_label="Read only")
     for label, ids in (("multiple", [first.pk, second.pk, renamed.pk, removed.pk]), ("dismissed", [first.pk]),
-                       ("restored", []), ("conflict", []), ("trashed", [trashed.pk]), ("created", [])):
+                       ("restored", []), ("conflict", []), ("trashed", [trashed.pk]), ("created", []), ("action", [first.pk, second.pk])):
         message = retained("review-" + label, subject="<img src=x onerror=window.reviewInjected=true> Review " + label)
         review, _ = ensure_application_review(actor=alice, workspace=workspace, retained_message_id=message.pk,
             observation_id=message.observations.order_by("pk").first().pk,
             classification="ambiguous" if len(ids)>1 else "match" if ids else "application", candidate_ids=ids)
         reviews[label] = review.pk
-        if label == "multiple":
+        if label in {"multiple", "action"}:
             attach_message(actor=alice, workspace=workspace, application_id=first.pk, retained_message_id=message.pk)
             attach_message(actor=alice, workspace=workspace, application_id=second.pk, retained_message_id=message.pk)
         if label in {"dismissed", "restored"}:
@@ -230,6 +230,29 @@ with tempfile.TemporaryDirectory(prefix="jth-foundation-") as directory:
     def review_fixtures(request):
         return JsonResponse({"reviews":reviews,"renamed":renamed.pk,"trashed":trashed.pk})
 
+    class ReviewDispositionFixtureControl(APIView):
+        def post(self, request):
+            # Only this disposable fixture is mutable through the test controller.
+            if request.user.pk != alice.pk or set(request.data) - {"command"}:
+                return Response(status=404)
+            from applications.models import RetainedApplicationReviewDisposition
+            from django.apps import apps
+            from hashlib import sha256
+            import json
+            review_id = reviews["action"]
+            command = request.data.get("command")
+            if command in {"dismiss", "restore"}:
+                row = RetainedApplicationReviewDisposition.objects.filter(review_id=review_id).first()
+                return Response(set_review_dismissal(actor=alice, workspace=workspace, review_id=review_id,
+                    dismissed=command == "dismiss", expected_revision=row.revision if row else 0))
+            if command != "snapshot":
+                return Response(status=400)
+            # Include canonical domain tables, excluding only the authorized sidecar.
+            values = {m._meta.label: list(m.objects.order_by("pk").values()) for m in apps.get_models(include_auto_created=True)
+                      if m._meta.app_label in {"applications", "documents", "email_sync", "postings"}
+                      and m != RetainedApplicationReviewDisposition}
+            return Response({"digest": sha256(json.dumps(values, sort_keys=True, default=str).encode()).hexdigest()})
+
     def evidence_fixtures(request):
         return JsonResponse({"sources":sources, "empty_workspace":2, "foreign_workspace":3})
 
@@ -255,6 +278,7 @@ with tempfile.TemporaryDirectory(prefix="jth-foundation-") as directory:
           window.__fixtureNativeFetch=nativeFetch; window.__fixtureTraffic=[];
           window.fetch=function(url,options){
             const entry={url:String(url),method:options&&options.method||'GET',body:options&&options.body};
+            if(entry.method==='POST'&&window.__fixtureDispositionIntent){entry.dispositionIntent=window.__fixtureDispositionIntent;window.__fixtureDispositionIntent=null;}
             if(entry.method==='PUT'&&window.__fixtureAssignmentIntent){entry.assignmentIntent=window.__fixtureAssignmentIntent;window.__fixtureAssignmentIntent=null;}
             if(window.__fixtureFoundationAction==='logout'&&entry.url==='/api/auth/logout'&&entry.method==='POST'){
               entry.foundationAction='logout'; window.__fixtureFoundationAction=null;
@@ -284,6 +308,7 @@ with tempfile.TemporaryDirectory(prefix="jth-foundation-") as directory:
                    path("api/test-only/evidence-fixtures", evidence_fixtures),
                    path("api/test-only/application-fixtures", application_fixtures),
                    path("api/test-only/review-fixtures", review_fixtures),
+                   path("api/test-only/review-disposition-control", ReviewDispositionFixtureControl.as_view()),
                    path("api/test-only/category-fixtures", category_fixtures),
                    path("api/test-only/assignment-fixtures", assignment_fixtures),
                    path("api/test-only/assignment-control", AssignmentFixtureControl.as_view()),

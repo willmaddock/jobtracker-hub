@@ -63,6 +63,16 @@
       if (!captured.actor) throw new ApiError("workspace_required", "Select a workspace first.");
       return `/api/workspaces/${safeId(captured.workspace)}/retained-messages/`;
     }
+    function reviewDisposition(reviewId, transition, {expectedRevision, captured = context.capture(), signal} = {}) {
+      check(captured);
+      if (!captured.actor) throw new ApiError("workspace_required", "Select a workspace first.");
+      const workspace = safeId(captured.workspace), id = safeId(reviewId);
+      if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0 || !Number.isSafeInteger(expectedRevision + 1))
+        throw new ApiError("unsafe_revision", "The disposition revision cannot be represented safely.");
+      return request(`/api/workspaces/${workspace}/application-reviews/${id}/${transition}/`, {
+        method:"POST", body:{expected_revision:expectedRevision}, captured, signal
+      });
+    }
     return {
       request,
       readRetainedMessages({after = null, captured = context.capture(), signal} = {}) {
@@ -101,6 +111,8 @@
         if (!captured.actor) throw new ApiError("workspace_required", "Select a workspace first.");
         return request(`/api/workspaces/${safeId(captured.workspace)}/application-reviews/${safeId(reviewId)}/`, {captured, signal});
       },
+      dismissApplicationReview(reviewId, options = {}) { return reviewDisposition(reviewId, "dismiss", options); },
+      restoreApplicationReview(reviewId, options = {}) { return reviewDisposition(reviewId, "restore", options); },
       readCategories({captured = context.capture(), signal} = {}) {
         check(captured);
         if (!captured.actor) throw new ApiError("workspace_required", "Select a workspace first.");

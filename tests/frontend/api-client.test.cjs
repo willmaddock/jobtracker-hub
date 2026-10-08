@@ -243,7 +243,7 @@ test('review reads use exact scoped GETs, explicit cursor, captured context and 
 test('actual review projection distinguishes initial membership/current state and drops excluded payload',()=>{
   const h=reviewHelpers,row=reviewFixture(),detail=h.reviewRow(row,2,7),encoded=JSON.stringify(detail);
   assert.equal(detail.candidate_count,9);assert.equal(detail.candidates.length,1);assert.equal(detail.candidates[0].current_application.company,'Current');
-  assert.equal(detail.subject,'<img src=x>');for(const key of ['revision','attachable','creation_results','mailbox_id','body','secret'])assert(!encoded.includes('"'+key+'"'));
+  assert.equal(detail.subject,'<img src=x>');for(const key of ['attachable','creation_results','mailbox_id','body','secret'])assert(!encoded.includes('"'+key+'"'));
   assert.equal(h.reviewRow(row,2).candidates,undefined);
   const removed=structuredClone(row);Object.assign(removed.candidates[0],{application_id:null,current_application:null,availability:'removed'});assert.equal(h.reviewRow(removed,2,7).candidates[0].application_id,null);
   const trashed=structuredClone(row);trashed.candidates[0].availability='trashed';trashed.candidates[0].current_application.trashed_at='2026-10-06T12:00:00Z';h.reviewRow(trashed,2,7);
@@ -378,4 +378,44 @@ test('assignment outcomes distinguish rejection from uncertainty and normalize r
     const result=h.assignmentOutcome(new ApiError(code,'private request key SQL',status));assert.match(result,match);assert(!result.includes('private')&&!result.includes('request key'));
   }
   assert.match(h.assignmentReadMessage(new ApiError('unsafe_revision','private')),/cannot be represented safely/);
+});
+
+test('review disposition uses strict scoped desired-state POST and no replay',async()=>{
+  const calls=[];const {client,context}=setup(async(p,o)=>{calls.push({p,o});return p==='/api/auth/csrf'?response(200,{csrfToken:'fixture'}):response(200,{});});
+  await client.bootstrap();await client.dismissApplicationReview(7,{expectedRevision:0});await client.restoreApplicationReview(7,{expectedRevision:1});
+  for(const [index,transition,revision] of [[1,'dismiss',0],[2,'restore',1]]) {
+    const c=calls[index];assert.equal(c.p,`/api/workspaces/2/application-reviews/7/${transition}/`);
+    assert.equal(c.o.method,'POST');assert.deepEqual(JSON.parse(c.o.body),{expected_revision:revision});
+    assert.equal(c.o.credentials,'same-origin');assert.equal(c.o.cache,'no-store');assert.equal(c.o.headers['X-CSRFToken'],'fixture');assert.equal(c.o.headers['Idempotency-Key'],undefined);
+  }
+  const old=context.capture();context.select(3);assert.throws(()=>client.dismissApplicationReview(7,{expectedRevision:0,captured:old}),{code:'stale_response'});
+  assert.equal(calls.length,3);
+});
+test('review disposition withholds unsafe identity/revision and preaborted requests',async()=>{
+  let hits=0;const {client,context}=setup(async()=>{hits++;return response(200,{});});
+  for(const method of [client.dismissApplicationReview,client.restoreApplicationReview]) {
+    for(const id of [0,-1,true,'7',1.2,Number.MAX_SAFE_INTEGER+1])assert.throws(()=>method(id,{expectedRevision:0}),{code:'unsafe_identifier'});
+    for(const revision of [undefined,-1,true,'0',0.1,Number.MAX_SAFE_INTEGER,Number.MAX_SAFE_INTEGER+1])assert.throws(()=>method(7,{expectedRevision:revision}),{code:'unsafe_revision'});
+  }
+  context.select(Number.MAX_SAFE_INTEGER+1);assert.throws(()=>client.dismissApplicationReview(7,{expectedRevision:0}),{code:'unsafe_identifier'});assert.equal(hits,0);
+});
+test('review disposition lost response sends once and caller abort cannot prove rollback',async()=>{
+  let posts=0,release,signal;const {client}=setup(async(p,o)=>{if(p==='/api/auth/csrf')return response(200,{csrfToken:'t'});posts++;signal=o.signal;return new Promise(r=>release=r);});
+  await client.bootstrap();const controller=new AbortController();const pending=client.dismissApplicationReview(7,{expectedRevision:0,signal:controller.signal});controller.abort();assert(signal.aborted);release(response(200,{}));await pending;
+  await assert.rejects(client.dismissApplicationReview(7,{expectedRevision:0,signal:controller.signal}),{code:'aborted'});assert.equal(posts,1);
+  let failures=0;const lost=setup(async p=>p==='/api/auth/csrf'?response(200,{csrfToken:'t'}):(failures++,Promise.reject(new TypeError('lost'))));await lost.client.bootstrap();await assert.rejects(lost.client.restoreApplicationReview(7,{expectedRevision:1}),{code:'network_error'});assert.equal(failures,1);
+});
+test('review authority projection and receipts reject unsafe or incoherent disposition',()=>{
+  const h=reviewHelpers,row=reviewFixture();assert.equal(h.reviewRow(row,2,7).disposition.revision,999);
+  for(const revision of [undefined,null,-1,true,'1',0.1,Number.MAX_SAFE_INTEGER+1])assert.throws(()=>h.reviewRow({...row,disposition:{...row.disposition,revision}},2,7));
+  const attempt={id:7,captured:{workspace:2},desired:'dismissed',revision:0};const receipt={id:7,workspace_id:2,disposition:{state:'dismissed',revision:1,dismissed_at:'2026-10-07T12:00:00Z'}};
+  assert.equal(h.reviewReceipt(receipt,attempt).disposition.revision,1);
+  for(const change of [{id:8},{workspace_id:3},{disposition:{...receipt.disposition,revision:0}},{disposition:{...receipt.disposition,revision:2}},{disposition:{...receipt.disposition,state:'active'}},{disposition:{...receipt.disposition,dismissed_at:null}},{disposition:{...receipt.disposition,revision:true}}])assert.throws(()=>h.reviewReceipt({...receipt,...change},attempt));
+  assert.equal(h.reviewReceipt({id:7,workspace_id:2,disposition:{state:'active',revision:2,dismissed_at:null}},{...attempt,desired:'active',revision:1}).disposition.state,'active');
+});
+test('review outcome distinguishes refusal and uncertainty without raw message exposure',()=>{
+  const h=reviewHelpers;
+  for(const [code,status,pattern] of [['stale_revision',409,/revision changed/],['lifecycle_busy',503,/database was busy/],['csrf_failed',403,/rejected/],['unexpected_response',200,/may have completed/],['unexpected_review',0,/may have completed/],['network_error',0,/may have completed/],['request_failed',500,/may have completed/]]){
+    const message=h.reviewOutcome(new ApiError(code,'PRIVATE SQL',status));assert.match(message,pattern);assert(!message.includes('PRIVATE'));
+  }
 });

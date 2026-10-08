@@ -7660,7 +7660,7 @@ function reviewRow(raw, workspace, requested = null) {
     initial_classification:row.initial_classification,snapshot_version:1,candidate_count:reviewCount(row.candidate_count),
     relationship_count,attachment_status:row.attachment_status,created_at:reviewStamp(row.created_at),
     observed_at:reviewStamp(row.observed_at),originating_observation_id:applicationId(row.originating_observation_id),
-    disposition:{state:disposition.state,dismissed_at},
+    disposition:{state:disposition.state,dismissed_at,revision:reviewCount(disposition.revision)},
     retained_message:{id:applicationId(source.id),portable_id:reviewUuid(source.portable_id),state:source.state,
       eligible:source.eligible,retained_at:reviewStamp(source.retained_at),representation_version:1}};
   if(requested === null) return result;
@@ -7710,15 +7710,32 @@ function reviewFailure(error, page = false) {
   if(error.status >= 500 || error.code === "network_error") return {message:"Reviews could not be loaded. Try again.",retry:true};
   return {message:"Review data could not be displayed safely.",restart:page};
 }
-function reviewInitial() {return {rows:[],after:null,ready:false,listBusy:false,listError:null,review:null,detail:null,detailBusy:false,detailError:null,application:null};}
+function reviewReceipt(raw, attempt) {
+  const row=reviewObject(raw), d=reviewObject(row.disposition);
+  if(applicationId(row.id) !== attempt.id || applicationId(row.workspace_id) !== attempt.captured.workspace ||
+    d.state !== attempt.desired || reviewCount(d.revision) !== attempt.revision + 1) reviewUnexpected();
+  const stamp=applicationStamp(d.dismissed_at);
+  if((d.state === "dismissed") !== (stamp !== null)) reviewUnexpected();
+  return {id:row.id,workspace_id:row.workspace_id,disposition:{state:d.state,revision:d.revision,dismissed_at:stamp}};
+}
+function reviewOutcome(error) {
+  if(!error) return "The review change was acknowledged. Refresh shows current state, which may have changed again.";
+  if(error.status === 409 && error.code === "stale_revision") return "The change was rejected because the observed revision changed. Open a new action after refresh.";
+  if(error.status === 503 && error.code === "lifecycle_busy") return "The change was refused while the database was busy. Open a new action after refresh.";
+  if([400,403,404].includes(error.status) && ["validation_error","csrf_failed","not_found"].includes(error.code)) return "The change was rejected. Open a new action after refresh.";
+  return "The response could not be verified. The change may have completed. Refresh shows current state, not proof of this request's effect.";
+}
+function reviewInitial() {return {rows:[],after:null,ready:false,listBusy:false,listError:null,review:null,detail:null,detailBusy:false,detailError:null,application:null,action:null,pending:false,outcome:null,lastPortable:null};}
 // END DJANGO REVIEW STATE
 
 function ApplicationReviewPanel({client, context, workspaceId, onClose, onAuthFailure}) {
   const [state,setState]=useState(reviewInitial);
   const listLane=useMemo(()=>createEvidenceLane(context),[context]), detailLane=useMemo(()=>createEvidenceLane(context),[context]);
   const selected=useRef(null), inspectionControl=useRef(null), auth=useRef(onAuthFailure);auth.current=onAuthFailure;
+  const attemptLife=useRef({generation:0,alive:true,controller:null}), submitLock=useRef(false), listDirty=useRef(false);
   function patch(values) {setState(old=>({...old,...values}));}
-  function reset() {listLane.invalidate();detailLane.invalidate();inspectionControl.current?.();selected.current=null;setState(reviewInitial());}
+  function cancelAction() {attemptLife.current.generation++;attemptLife.current.controller?.abort();detailLane.invalidate();submitLock.current=false;}
+  function reset() {cancelAction();listLane.invalidate();inspectionControl.current?.();selected.current=null;setState(reviewInitial());}
   function authFailure(error) {reset();auth.current(error);}
   function fail(error, lane, token, after = null) {
     if(!lane.current(token,lane === detailLane ? selected.current : after)) return;
@@ -7728,7 +7745,7 @@ function ApplicationReviewPanel({client, context, workspaceId, onClose, onAuthFa
     else patch(lane === listLane ? {listError:{...safe,after},listBusy:false} : {detailError:safe,detail:null,detailBusy:false});
   }
   async function loadList(after = null) {
-    if(after === null) {detailLane.invalidate();inspectionControl.current?.();selected.current=null;patch({...reviewInitial(),listBusy:true});}
+    if(after === null) {cancelAction();listDirty.current=false;inspectionControl.current?.();selected.current=null;patch({...reviewInitial(),listBusy:true});}
     const existing=after === null ? [] : state.rows;
     const token=listLane.start(after);patch({listBusy:true,listError:null});
     try {
@@ -7737,19 +7754,60 @@ function ApplicationReviewPanel({client, context, workspaceId, onClose, onAuthFa
     } catch(error) {fail(error,listLane,token,after);}
     finally {if(listLane.current(token,after)) patch({listBusy:false});}
   }
-  async function selectReview(id) {
-    applicationId(id);listLane.invalidate();inspectionControl.current?.();selected.current=id;
-    patch({review:id,detail:null,detailError:null,detailBusy:true,application:null,listBusy:false});
+  async function selectReview(id, preparing = false, expectedPortable = null) {
+    cancelAction();applicationId(id);listLane.invalidate();inspectionControl.current?.();selected.current=id;
+    patch({review:id,detail:null,detailError:null,detailBusy:true,application:null,listBusy:false,action:null,pending:false,outcome:null});
     const token=detailLane.start(id);
     try {
       const detail=reviewRow(await client.readApplicationReview(id,{captured:token.captured,signal:token.signal}),workspaceId,id);
-      if(detailLane.current(token,selected.current)) patch({detail});
+      if(detailLane.current(token,selected.current)) {
+        if(expectedPortable && detail.portable_id.toLowerCase() !== expectedPortable.toLowerCase()) reviewUnexpected();
+        if(preparing && !Number.isSafeInteger(detail.disposition.revision + 1)) reviewUnexpected();
+        patch({detail,action:preparing ? Object.freeze({id,portable:detail.portable_id.toLowerCase(),revision:detail.disposition.revision,
+          desired:detail.disposition.state === "active" ? "dismissed" : "active",captured:token.captured,generation:attemptLife.current.generation}) : null});
+      }
     } catch(error) {fail(error,detailLane,token);}
     finally {if(detailLane.current(token,selected.current)) patch({detailBusy:false});}
   }
-  useEffect(()=>{loadList();return ()=>{listLane.dispose();detailLane.dispose();selected.current=null;};},[listLane,detailLane]);
-  function back() {detailLane.invalidate();inspectionControl.current?.();selected.current=null;patch({review:null,detail:null,detailError:null,detailBusy:false,application:null});}
-  function open(id, portable = null) {applicationId(id);inspectionControl.current?.();patch({application:{id,portable}});}
+  function attemptCurrent(attempt) {
+    return attemptLife.current.alive && attemptLife.current.generation === attempt.generation &&
+      selected.current === attempt.id && context.current(attempt.captured);
+  }
+  async function reconcile(attempt, outcome) {
+    if(!attemptCurrent(attempt)) return;
+    const token=detailLane.start(attempt.id);patch({detail:null,detailError:null,detailBusy:true,action:null,outcome});
+    try {
+      const detail=reviewRow(await client.readApplicationReview(attempt.id,{captured:attempt.captured,signal:token.signal}),workspaceId,attempt.id);
+      if(!attemptCurrent(attempt) || !detailLane.current(token,selected.current)) return;
+      if(detail.portable_id.toLowerCase() !== attempt.portable) reviewUnexpected();
+      patch({detail});
+    } catch(error) {
+      if(attemptCurrent(attempt) && detailLane.current(token,selected.current)) {
+        if(error.status === 401 && error.code === "authentication_required") {authFailure(error);return;}
+        patch({detail:null,detailError:{message:"Current review refresh failed. Further changes are withheld.",retry:false}});
+      }
+    } finally {if(attemptCurrent(attempt) && detailLane.current(token,selected.current)) {submitLock.current=false;patch({pending:false,detailBusy:false});}}
+  }
+  async function submitDisposition() {
+    const action=state.action;
+    if(submitLock.current || state.pending || !action || action.generation !== attemptLife.current.generation || selected.current !== action.id || !context.current(action.captured)) return;
+    submitLock.current=true;
+    const controller=new AbortController();attemptLife.current.controller=controller;
+    const attempt=Object.freeze({...action,generation:++attemptLife.current.generation});
+    detailLane.invalidate();listLane.invalidate();listDirty.current=true;
+    patch({rows:[],after:null,ready:false,listBusy:false,listError:null,detail:null,lastPortable:attempt.portable,action:null,pending:true,outcome:"Submitting review change. Leaving this view does not prove server rollback."});
+    let error=null;
+    try {
+      const method=attempt.desired === "dismissed" ? client.dismissApplicationReview : client.restoreApplicationReview;
+      reviewReceipt(await method(attempt.id,{expectedRevision:attempt.revision,captured:attempt.captured,signal:controller.signal}),attempt);
+    } catch(e) {error=e;}
+    if(!attemptCurrent(attempt)) return;
+    if(error?.status === 401 && error.code === "authentication_required") {authFailure(error);return;}
+    await reconcile(attempt,reviewOutcome(error));
+  }
+  useEffect(()=>{loadList();return ()=>{cancelAction();attemptLife.current.alive=false;listLane.dispose();detailLane.dispose();selected.current=null;};},[listLane,detailLane]);
+  function back() {cancelAction();inspectionControl.current?.();selected.current=null;patch({review:null,detail:null,detailError:null,detailBusy:false,application:null,action:null,pending:false,outcome:null});if(listDirty.current) loadList();}
+  function open(id, portable = null) {cancelAction();applicationId(id);inspectionControl.current?.();patch({application:{id,portable},action:null,pending:false});}
   const value=v=>v === null ? "Unknown" : v === "" ? "Not supplied" : v;
   const classification={match:"Single candidate",ambiguous:"Multiple candidates",application:"No candidate"};
   const summary=row=><>
@@ -7775,12 +7833,20 @@ function ApplicationReviewPanel({client, context, workspaceId, onClose, onAuthFa
       <p>Review navigation is advisory, not a snapshot.</p>
     </> : <>
       <button className="btn" onClick={back}>Back to reviews</button>
+      {state.outcome && <p role="status">{state.outcome}</p>}
       {state.detailBusy && <p role="status">Loading review detail…</p>}{errorView(state.detailError,()=>selectReview(state.review))}
+      {!state.detail && !state.pending && state.outcome && <button className="btn" onClick={()=>{const note=state.outcome;const attempt={id:state.review,portable:state.lastPortable,captured:context.capture(),generation:attemptLife.current.generation};reconcile(attempt,note);}}>Refresh current review</button>}
       {detail && <article data-testid="review-detail"><h3>Review {detail.id}</h3>{summary(detail)}
         <dl>{[["Review portable identity",detail.portable_id],["Retained source portable identity",detail.retained_message.portable_id],["Originating observation reference",detail.originating_observation_id],
           ["Dismissed at",detail.disposition.dismissed_at],["Reported candidate count",detail.candidate_count],["Reported source relationship count",detail.relationship_count],
           ["Source attachment summary",detail.attachment_status]].map(([label,v])=><React.Fragment key={label}><dt>{label}</dt><dd>{value(v)}</dd></React.Fragment>)}</dl>
         <button className="btn" onClick={()=>selectReview(detail.id)}>Reload review</button>
+        {!state.action && !state.pending && <button className="btn" onClick={()=>selectReview(detail.id,true,detail.portable_id)}>{detail.disposition.state === "active" ? "Dismiss review" : "Restore review"}</button>}
+        {state.action && <section aria-label="Confirm review disposition">
+          <p>{state.action.desired === "dismissed" ? "Dismiss" : "Restore"} review {state.action.id}? This changes whole-review disposition and preserves retained sources, relationships and evidence.</p>
+          <button className="btn" onClick={submitDisposition}>{state.action.desired === "dismissed" ? "Confirm dismissal" : "Confirm restoration"}</button>
+          <button className="btn" onClick={()=>{cancelAction();patch({action:null});}}>Cancel review change</button>
+        </section>}
         <p>All returned references load together; large reviews may take longer.</p>
         <h4>Initial candidate snapshot</h4><p>{detail.candidates.length} returned candidate references. Membership is initial provenance, not an existing relationship or acceptance. Order is not a confidence ranking.</p>
         {detail.candidates.map(c=><section key={c.id} data-testid="review-candidate"><p>Candidate {c.id} · Application portable identity: {c.application_portable_id}</p>
