@@ -92,6 +92,7 @@ document.querySelector('#run').onclick = async function () {
       if(match)return positive(match[1])&&(!match[2]||positive(match[2]))&&(match[2]&&!match[3] ? !query.length : query.length===1&&query[0][0]==='show_archived'&&query[0][1]==='true');
       match=/^\/api\/workspaces\/([1-9]\d*)\/application-reviews\/(?:([1-9]\d*)\/)?$/.exec(path);
       if(match)return positive(match[1])&&(!match[2]||positive(match[2]))&&(match[2] ? !query.length : !query.length||query.length===1&&query[0][0]==='after'&&positive(query[0][1]));
+      if(/^\/api\/workspaces\/[1-9]\d*\/retained-messages\/[1-9]\d*\/$/.test(path))return allowedSourceRead(call);
       match=/^\/api\/workspaces\/([1-9]\d*)\/retained-messages\/$/.exec(path);
       if(match)return positive(match[1])&&(!query.length||query.length===1&&query[0][0]==='after'&&positive(query[0][1]));
       match=/^\/api\/workspaces\/([1-9]\d*)\/retained-messages\/([1-9]\d*)\/posting-extractions\/$/.exec(path);
@@ -493,6 +494,134 @@ document.querySelector('#run').onclick = async function () {
       const calls=traffic.slice(dispositionStart);assert(calls.every(c=>allowedDispositionTraffic(c)||c.method==='GET'&&/^\/api\/workspaces\/1\/applications\/(?:\d+\/)?$/.test(c.url)),'excluded disposition traffic');
       const posts=calls.filter(c=>c.method==='POST');assert(posts.length===dispositionIntents.length,'confirmation count');assert(new Set(posts.map(c=>c.dispositionIntent.sequence)).size===posts.length,'intent reused');
       for(const bad of [{url:dispositionUrl('dismiss'),method:'POST',body:'{}'},...['attach','create-application'].map(t=>({url:reviewUrl(dispositionId)+t+'/',method:'POST'})),{url:reviewUrl(dispositionId)+'?creation_results_after=1',method:'GET'},{url:'/api/workspaces/1/applications/1/trash/',method:'POST'}])assert(!allowedDispositionTraffic(bad),'excluded authority admitted');
+    });
+    const sourceCases=(await client.request('/api/test-only/review-source-fixtures')).cases, sourceIntents=[];
+    const retainedSourceUrl=(id,workspace=1)=>'/api/workspaces/'+workspace+'/retained-messages/'+id+'/';
+    const sourcePane=()=>doc.querySelector('[data-testid="review-source-inspection"]');
+    const sourceContent=()=>doc.querySelector('[data-testid="review-source-content"]');
+    const sourcePlain=()=>doc.querySelector('[data-testid="retained-plain-text"]');
+    function allowedSourceRead(call) {
+      const intent=call.sourceReadIntent;if(!intent)return false;
+      const row=sourceCases[intent.label],u=new URL(call.url,location.origin);
+      return !!row&&call.method==='GET'&&call.body===undefined&&u.origin===location.origin&&!u.search&&!u.hash&&
+        intent.workspace===1&&intent.review===row.review&&intent.source===row.source&&call.url===retainedSourceUrl(row.source)&&
+        Number.isSafeInteger(intent.sequence)&&intent.sequence>0;
+    }
+    function markSource(label) {
+      const row=sourceCases[label];const intent={label,review:row.review,source:row.source,workspace:1,sequence:sourceIntents.length+1};
+      sourceIntents.push(intent);win.__fixtureSourceReadIntent=intent;
+    }
+    async function openSourceReview(label) {
+      if(reviewPanel())await click('Close reviews');await openReviews();reviewButton(sourceCases[label].review).click();
+      await wait(()=>reviewDetail()&&!!button('Inspect retained text'),'source review '+label);
+    }
+    async function inspectSource(label) {markSource(label);await click('Inspect retained text');await wait(()=>sourceContent()||sourcePane()?.querySelector('[role="alert"]'),'source result');}
+    async function refreshSource(label,buttonLabel='Refresh source') {markSource(label);await click(buttonLabel);await wait(()=>sourceContent()||sourcePane()?.querySelector('[role="alert"]'),'source refreshed');}
+    const sourceTrafficStart=traffic.length;
+    await test('retained text is fetched only on explicit selection and rendered literally without links or remote resources',async()=>{
+      const before=traffic.length;await openSourceReview('complete');assert(!traffic.slice(before).some(c=>/\/retained-messages\/\d+\/$/.test(c.url)),'eager text fetch');
+      const oracle=await(await win.__fixtureNativeFetch(retainedSourceUrl(sourceCases.complete.source))).json();
+      await inspectSource('complete');assert(sourcePlain().textContent===oracle.content.text.value,'text trimmed/rewritten');
+      assert(!sourcePane().querySelector('img,script,a,iframe,form')&&!win.sourceInjected,'executable/link DOM');
+      assert(!win.performance.getEntriesByType('resource').some(e=>e.name.includes('tracking.invalid')),'remote resource request');
+      assert(text().includes('Header-sent time: 2026-10-07')&&text().includes('Provider-received time: Unknown'),'time provenance fabricated');
+      const start=traffic.length;await click('Back to review');await wait(()=>reviewDetail()&&!!button('Inspect retained text'),'fresh review on return');
+      assert(!sourcePane()&&traffic.slice(start).some(c=>c.url===reviewUrl(sourceCases.complete.review)),'cached review return');await click('Close reviews');
+    });
+    await test('actual source endpoints distinguish empty partial generated truncation zero prefix unavailable HTML-only and conflict',async()=>{
+      for(const [label,expected] of [['empty','explicitly empty'],['partial','provider_limit'],['truncated','6 of 18 UTF-8 bytes'],['zero-prefix','0 of 4 UTF-8 bytes'],['unavailable','No HTML representation is available'],['html-only','HTML representation is retained'],['conflict','preserved canonical content']]) {
+        await openSourceReview(label);await inspectSource(label);assert(sourceContent()&&text().includes(expected),'source case '+label);
+        if(label==='partial')assert(!text().includes('Retention truncation:'),'inferred truncation');
+        if(label==='zero-prefix')assert(text().includes('content remains partial')&&!sourcePlain(),'empty prefix called complete');
+        if(label==='conflict')assert(text().includes('Header-sent time: legacy-naive-time')&&text().includes('Precision: uncertain'),'uncertain time fabricated');
+        assert(!sourcePane().querySelector('img,script,a,iframe'),'HTML body rendered');await click('Close source inspection');assert(!sourcePane()&&!reviewPanel(),'Close retained sensitive view');
+      }
+    });
+    await test('source renderer supports above-default and exact 262144-byte text without silent truncation',async()=>{
+      for(const [label,bytes] of [['large',196608],['maximum',262144]]) {
+        await openSourceReview(label);await inspectSource(label);assert(new win.TextEncoder().encode(sourcePlain().textContent).length===bytes,'size default/truncation');assert(text().includes('Plain-text completeness: complete'),'mislabelled complete');await click('Close reviews');
+      }
+    });
+    await test('source malformed identity version completeness Unicode and forbidden HTML fail closed',async()=>{
+      const label='complete',url=retainedSourceUrl(sourceCases[label].source),raw=await(await win.__fixtureNativeFetch(url)).json();
+      for(const change of [r=>r.id=Number.MAX_SAFE_INTEGER+1,r=>r.portable_id=sourceCases.empty.portable,r=>r.mailbox_id=null,r=>r.representation_version=2,r=>r.content.version=2,
+        r=>delete r.content.text.value,r=>r.content.text.value=null,r=>r.content.text.value=String.fromCharCode(0xd800),r=>r.content.text.value=String.fromCharCode(0),r=>r.content.text.value='x'.repeat(262145),
+        r=>r.content.text.completeness='guessed',r=>r.content.html.value='<img src=https://tracking.invalid/>']) {
+        const broken=structuredClone(raw);change(broken);await openSourceReview(label);intercept=path=>path===url?response(200,broken):null;await inspectSource(label);
+        assert(!sourceContent()&&!sourcePlain()&&sourcePane().querySelector('[role="alert"]'),'unsafe source displayed');assert(!text().includes('PRIVATE'),'error leaked');intercept=null;await click('Close reviews');
+      }
+    });
+    await test('source GET errors clear text; retry and refresh never write or reuse old content',async()=>{
+      const label='complete',url=retainedSourceUrl(sourceCases[label].source);
+      for(const status of [404,500]) {
+        await openSourceReview(label);await inspectSource(label);intercept=path=>path===url?response(status,{code:status===404?'not_found':'request_failed',detail:'PRIVATE SOURCE'}):null;
+        await refreshSource(label);assert(!sourceContent()&&!sourcePlain()&&!text().includes('PRIVATE'),'old source retained');
+        assert(text().includes(status===404?'unavailable':'could not be loaded'),'404 conflated with empty');intercept=null;await refreshSource(label,'Retry source read');assert(sourcePlain(),'retry failed');await click('Close reviews');
+      }
+    });
+    await test('refresh clears body immediately and held obsolete response cannot overwrite the newer read',async()=>{
+      const label='complete',url=retainedSourceUrl(sourceCases[label].source),raw=await(await win.__fixtureNativeFetch(url)).json();
+      await openSourceReview(label);await inspectSource(label);let release,signal;
+      intercept=(path,o)=>path===url?new Promise(r=>{signal=o.signal;release=()=>r(response(200,{...raw,content:{...raw.content,text:{...raw.content.text,value:'OBSOLETE TEXT'}}}));}):null;
+      markSource(label);await click('Refresh source');await wait(()=>release,'held source refresh');assert(!sourcePlain()&&!sourceContent(),'refresh retained body');
+      await click('Back to review');await wait(()=>button('Inspect retained text'),'review refreshed');assert(signal.aborted,'refresh not aborted');intercept=null;await inspectSource(label);release();await new Promise(r=>setTimeout(r,60));assert(sourcePlain()&&!text().includes('OBSOLETE TEXT'),'obsolete refresh applied');await click('Close reviews');
+    });
+    await test('held source success error and obsolete auth cannot survive Back Close panel or Workspace navigation',async()=>{
+      const label='complete',url=retainedSourceUrl(sourceCases[label].source),raw=await(await win.__fixtureNativeFetch(url)).json();
+      for(const navigation of ['back','close','panel','workspace'])for(const status of [200,500,401]) {
+        await openSourceReview(label);let release,signal;
+        intercept=(path,o)=>path===url?new Promise(r=>{signal=o.signal;release=()=>r(response(status,status===200?{...raw,content:{...raw.content,text:{...raw.content.text,value:'OBSOLETE SOURCE'}}}:{code:status===401?'authentication_required':'request_failed'}));}):null;
+        markSource(label);await click('Inspect retained text');await wait(()=>release,'held source');
+        if(navigation==='back')await click('Back to review');else if(navigation==='close')await click('Close source inspection');else if(navigation==='panel')await click('Applications');else {const select=doc.querySelector('[aria-label="Workspace"]');select.value='2';select.dispatchEvent(new win.Event('change',{bubbles:true}));await wait(()=>text().includes('Connected to B.'),'source B');}
+        assert(signal.aborted,'source navigation not aborted');release();await new Promise(r=>setTimeout(r,60));assert(!sourcePane()&&!text().includes('OBSOLETE SOURCE')&&!text().includes('Your session ended'),'obsolete source response');intercept=null;
+        if(navigation==='workspace')await returnA();if(reviewPanel())await click('Close reviews');if(appPanel())await click('Close Applications');
+      }
+    });
+    await test('different review source after Back cannot receive old content or finalization',async()=>{
+      const label='complete',url=retainedSourceUrl(sourceCases[label].source),raw=await(await win.__fixtureNativeFetch(url)).json();await openSourceReview(label);let release;
+      intercept=path=>path===url?new Promise(r=>release=()=>r(response(200,{...raw,content:{...raw.content,text:{...raw.content.text,value:'WRONG REVIEW SOURCE'}}}))):null;
+      markSource(label);await click('Inspect retained text');await wait(()=>release,'held selection');await click('Back to review');await click('Back to reviews');reviewButton(sourceCases.partial.review).click();await wait(()=>button('Inspect retained text'),'other review');intercept=null;await inspectSource('partial');release();await new Promise(r=>setTimeout(r,60));assert(sourcePlain().textContent==='Provider partial text'&&!text().includes('WRONG REVIEW SOURCE'),'source mixed across reviews');await click('Close reviews');
+    });
+    await test('source inspection cancels prepared confirmation; returning requires fresh review and fresh confirmation',async()=>{
+      await openSourceReview('complete');await click('Dismiss review');await wait(()=>button('Confirm dismissal'),'prepared dismissal');const old=button('Confirm dismissal'),before=traffic.length;
+      await inspectSource('complete');old.click();await new Promise(r=>setTimeout(r,20));assert(!traffic.slice(before).some(c=>c.method==='POST'),'source opening retained confirmation');
+      await click('Back to review');await wait(()=>button('Dismiss review'),'current review');assert(!button('Confirm dismissal'),'confirmation resurrected');
+      await click('Dismiss review');await wait(()=>button('Confirm dismissal'),'fresh confirmation');await click('Cancel review change');await click('Close reviews');
+    });
+    await test('pending disposition and reconciliation withhold source inspection and stale source controls cannot interrupt them',async()=>{
+      await dispositionControl('restore');await openDisposition();const old=button('Inspect retained text');await prepareDisposition();let release;
+      intercept=path=>path===dispositionUrl('dismiss')?new Promise(r=>release=()=>r(response(500,{}))):null;
+      await confirmDisposition();await wait(()=>release,'pending disposition');old.click();await new Promise(r=>setTimeout(r,20));assert(!sourcePane()&&!button('Inspect retained text'),'pending mutation interrupted');release();intercept=null;await dispositionSettled();
+      await prepareDisposition();const oldSource=button('Inspect retained text');let releaseRead,submitted=false;
+      intercept=path=>{if(path===dispositionUrl('dismiss')){submitted=true;return response(500,{});}if(submitted&&path===reviewUrl(dispositionId))return new Promise(r=>releaseRead=()=>r(response(500,{})));return null;};
+      await confirmDisposition();await wait(()=>releaseRead,'pending reconciliation');oldSource.click();assert(!sourcePane()&&!button('Inspect retained text'),'reconciliation interrupted');releaseRead();intercept=null;await dispositionSettled();await click('Close reviews');
+    });
+    await test('source current expiry clears content and obsolete actor expiry cannot clear a newer session',async()=>{
+      const label='complete',url=retainedSourceUrl(sourceCases[label].source);await openSourceReview(label);await inspectSource(label);
+      intercept=path=>path===url?response(401,{code:'authentication_required'}):null;markSource(label);await click('Refresh source');await wait(()=>text().includes('Your session ended'),'source expiry');assert(!reviewPanel()&&!sourcePane(),'sensitive source remained');
+      intercept=null;win.dispatchEvent(new win.Event('focus'));await wait(()=>text().includes('Signed in as alice'),'source recovery');await returnA();
+      for(const status of [200,500,401]) {
+      await openSourceReview(label);let release,signal;const raw=await(await win.__fixtureNativeFetch(url)).json();
+      intercept=(path,o)=>path===url?new Promise(r=>{signal=o.signal;release=()=>r(response(status,status===200?raw:{code:status===401?'authentication_required':'request_failed'}));}):null;
+      markSource(label);await click('Inspect retained text');await wait(()=>release,'held actor source');await client.bootstrap();const bob=await client.request('/api/auth/login',{method:'POST',body:{username:'bob',password:'browser-fixture-only'}});context.setActor(bob.id);context.select(3);await client.bootstrap();win.dispatchEvent(new win.Event('focus'));await wait(()=>text().includes('Signed in as bob'),'source Bob');assert(signal.aborted,'actor source not aborted');release();await new Promise(r=>setTimeout(r,60));assert(!sourcePane()&&!text().includes('Your session ended')&&text().includes('Signed in as bob'),'obsolete source auth');
+      intercept=null;await client.bootstrap();const alice=await client.request('/api/auth/login',{method:'POST',body:{username:'alice',password:'browser-fixture-only'}});context.setActor(alice.id);context.select(1);await client.bootstrap();win.dispatchEvent(new win.Event('focus'));await wait(()=>text().includes('Signed in as alice'),'source Alice');await returnA();
+      }
+    });
+    await test('source readonly workflow preserves domain tables and real endpoint audit rejects writes providers and files',async()=>{
+      const before=await dispositionControl('snapshot'),reviewBefore=await(await win.__fixtureNativeFetch(reviewUrl(sourceCases.complete.review))).json();
+      await openSourceReview('complete');await inspectSource('complete');await refreshSource('complete');await click('Back to review');await wait(()=>button('Inspect retained text'),'preservation return');await click('Close reviews');
+      assert((await dispositionControl('snapshot')).digest===before.digest,'source inspection changed domain tables');
+      assert(JSON.stringify((await(await win.__fixtureNativeFetch(reviewUrl(sourceCases.complete.review))).json()).disposition)===JSON.stringify(reviewBefore.disposition),'source inspection changed disposition');
+      const audit=await client.request('/api/test-only/review-source-audit');assert(audit.reads.length>0&&audit.reads.every(r=>r.select_only&&[200,404].includes(r.status)),'source GET touched forbidden authority');
+      const foreign=await client.request(retainedSourceUrl(sourceCases.complete.source,2)).then(()=>null,e=>e);assert(foreign?.status===404,'same-owner Workspace leak');
+    });
+    await test('source traffic binds each explicit selection and GET to exact review source scope across all intervals',async()=>{
+      const calls=traffic.slice(sourceTrafficStart),sourceCalls=calls.filter(c=>/\/retained-messages\/\d+\/$/.test(c.url));
+      assert(sourceCalls.length===sourceIntents.length&&sourceCalls.every(allowedSourceRead),'unbound/eager source read');
+      assert(new Set(sourceCalls.map(c=>c.sourceReadIntent.sequence)).size===sourceCalls.length,'source intent reused');
+      assert(calls.every(c=>c.method==='GET'&&allowedTraffic(c)||c.method==='POST'&&allowedDispositionPost(c)),'source workflow crossed unauthorized traffic');
+      const valid=sourceCalls[0];for(const bad of [{...valid,url:retainedSourceUrl(sourceCases.empty.source)},{...valid,url:retainedSourceUrl(sourceCases.complete.source,2)},
+        {...valid,url:valid.url+'?workspace=2'},{...valid,method:'POST'},{...valid,sourceReadIntent:null},{...valid,body:'{}'}])assert(!allowedSourceRead(bad),'source traffic policy too broad');
     });
     const categoryFixtures=await client.request('/api/test-only/category-fixtures');
     const categoryRoot='/api/workspaces/1/categories/',categoryListUrl=categoryRoot+'?show_archived=true';
@@ -975,7 +1104,7 @@ document.querySelector('#run').onclick = async function () {
     await test('collected forbidden requests are rejected after document replacement',async()=>{
       const probes=[{url:'/api/workspaces/1/applications/',method:'POST'},
                     {url:'/api/email/sync',method:'GET'},{url:'/api/email/sync',method:'POST'},
-                    {url:'/api/workspaces/1/retained-messages/1/',method:'GET'},
+                    {url:'/api/workspaces/1/retained-messages/1/',method:'POST'},
                     {url:'/api/workspaces/1/retained-messages/',method:'PATCH'},
                     {url:'/api/job-postings',method:'GET'},
                     {url:'/api/workspaces/1/application-reviews/1/attach/',method:'POST'},

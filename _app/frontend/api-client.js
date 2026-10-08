@@ -80,6 +80,9 @@
         if (after !== null) query.set("after", safeId(after));
         return request(path + (query.size ? "?" + query.toString() : ""), {captured, signal});
       },
+      readRetainedReviewSource(sourceId, {captured = context.capture(), signal} = {}) {
+        return request(retainedPath(captured) + safeId(sourceId) + "/", {captured, signal});
+      },
       readRetainedExtractionEvidence(retainedMessageId, {cursor = null, captured = context.capture(), signal} = {}) {
         const path = retainedPath(captured) + safeId(retainedMessageId) + "/posting-extractions/";
         const query = new URLSearchParams();

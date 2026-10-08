@@ -7728,14 +7728,146 @@ function reviewOutcome(error) {
 function reviewInitial() {return {rows:[],after:null,ready:false,listBusy:false,listError:null,review:null,detail:null,detailBusy:false,detailError:null,application:null,action:null,pending:false,outcome:null,lastPortable:null};}
 // END DJANGO REVIEW STATE
 
+// BEGIN DJANGO REVIEW SOURCE STATE
+function sourceUnexpected() {throw new JTHApi.ApiError("unexpected_source", "Retained text could not be displayed safely.");}
+function sourceObject(value) {if(!value || typeof value !== "object" || Array.isArray(value)) sourceUnexpected();return value;}
+function sourceString(value, limit, empty = true) {
+  if(typeof value !== "string" || (!empty && !value) || value.length > limit || value.includes("\u0000")) sourceUnexpected();
+  for(const character of value) {const point=character.codePointAt(0);if(point >= 0xd800 && point <= 0xdfff) sourceUnexpected();}
+  if(new TextEncoder().encode(value).length > limit) sourceUnexpected();
+  return value;
+}
+function sourceBytes(value) {return new TextEncoder().encode(value).length;}
+function sourceInteger(value, max) {if(!Number.isSafeInteger(value) || value < 0 || value > max) sourceUnexpected();return value;}
+function sourceTruncation(raw, bytes = null) {
+  const t=sourceObject(raw), retained_bytes=sourceInteger(t.retained_bytes,262144), original_bytes=sourceInteger(t.original_bytes,2097152);
+  if(t.location !== "utf8_prefix" || original_bytes <= retained_bytes || bytes !== null && retained_bytes !== bytes ||
+    typeof t.original_digest !== "string" || !/^[0-9a-f]{64}$/.test(t.original_digest) || !["complete","partial"].includes(t.source_completeness)) sourceUnexpected();
+  const source_reason=sourceString(t.source_reason,256,t.source_completeness !== "partial");
+  return {location:t.location,retained_bytes,original_bytes,source_completeness:t.source_completeness,source_reason};
+}
+function sourcePart(raw, html = false) {
+  const part=sourceObject(raw), completeness=part.completeness;
+  if(!["complete","partial","unavailable"].includes(completeness)) sourceUnexpected();
+  const reason=sourceString(part.reason,256,completeness !== "partial");
+  let value, available;
+  if(html) {
+    if("value" in part || typeof part.available !== "boolean" || part.available !== (completeness !== "unavailable")) sourceUnexpected();
+    available=part.available;
+  } else {
+    value=part.value;
+    if(completeness === "unavailable") {if(value !== null) sourceUnexpected();}
+    else sourceString(value,262144);
+  }
+  let truncation=null;
+  if("truncation" in part) {
+    if(completeness !== "partial" || reason !== "retention_byte_limit") sourceUnexpected();
+    truncation=sourceTruncation(part.truncation,html ? null : sourceBytes(value));
+  }
+  return html ? {available,completeness,reason,truncation} : {value,completeness,reason,truncation};
+}
+function sourceTime(raw, received = false) {
+  const t=sourceObject(raw), precision=t.precision, source=sourceString(t.source,64,false);
+  if(!["instant","date","uncertain","unknown"].includes(precision) || source === "unknown" && precision !== "unknown") sourceUnexpected();
+  if(received && !["gmail_internal_date","graph_received_datetime","imap_internaldate","unknown"].includes(source)) sourceUnexpected();
+  let value=t.value;
+  if(precision === "unknown") {if(value !== null) sourceUnexpected();}
+  else if(precision === "date") {sourceString(value,10,false);applicationDate(value);}
+  else if(precision === "instant") {sourceString(value,64,false);applicationStamp(value);}
+  else sourceString(value,128,false);
+  const result={precision,value,source};
+  if("source_utc_offset_seconds" in t) {
+    if(precision !== "instant" || !Number.isInteger(t.source_utc_offset_seconds) || Math.abs(t.source_utc_offset_seconds) >= 86400) sourceUnexpected();
+    result.source_utc_offset_seconds=t.source_utc_offset_seconds;
+  }
+  return result;
+}
+function reviewSourceProjection(raw, selection) {
+  const row=sourceObject(raw), id=applicationId(row.id), portable_id=reviewUuid(row.portable_id), mailbox_id=applicationId(row.mailbox_id);
+  if(id !== selection.sourceId || portable_id.toLowerCase() !== selection.sourcePortable || row.representation_version !== 1 ||
+    !["retained","conflict"].includes(row.state) || typeof row.eligible !== "boolean" || row.eligible !== (row.state === "retained")) sourceUnexpected();
+  const retained_at=reviewStamp(row.retained_at), c=sourceObject(row.content), origin=sourceObject(row.source);
+  if(c.version !== 1 || !["gmail","outlook","imap"].includes(origin.provider)) sourceUnexpected();
+  const provider=origin.provider, kind=sourceString(origin.kind,32,false), locator=sourceString(origin.value,512,false), folder=sourceString(origin.folder,512), stability=sourceString(origin.stability,128,false);
+  if(kind !== {gmail:"gmail_message_id",outlook:"graph_immutable_id",imap:"imap_uid"}[provider]) sourceUnexpected();
+  if(provider === "imap") {
+    if(!folder || !/^[1-9][0-9]{0,9}$/.test(locator) || Number(locator)>4294967295 || !/^uidvalidity:[1-9][0-9]{0,9}$/.test(stability) || Number(stability.split(":")[1])>4294967295) sourceUnexpected();
+  } else if(folder !== "" || stability !== "v1") sourceUnexpected();
+  const subject=c.subject === null ? null : sourceString(c.subject,4096);
+  const addresses=sourceObject(c.addresses), roles=["from","sender","reply_to","to","cc","bcc"], shown={from:null,sender:null};
+  for(const role of Object.keys(addresses)) {
+    const entries=addresses[role];if(!roles.includes(role) || !Array.isArray(entries) || entries.length>100) sourceUnexpected();
+    const validated=entries.map(entry=>{const a=sourceObject(entry);return {name:sourceString(a.name,1024),address:sourceString(a.address,1024)};});
+    if(role === "from" || role === "sender") shown[role]=validated;
+  }
+  if(!Array.isArray(c.headers) || c.headers.length>100) sourceUnexpected();
+  for(const header of c.headers) {
+    if(!Array.isArray(header) || header.length !== 2 || !["date","message-id","in-reply-to","references","mime-version","content-type","content-transfer-encoding"].includes(sourceString(header[0],64))) sourceUnexpected();
+    sourceString(header[1],8192);
+  }
+  sourceString(c.conversation_id,512);
+  const provenance=sourceObject(c.provenance);
+  const decoder={method:sourceString(provenance.method,128,false),version:sourceString(provenance.version,128,false)};
+  return {id,portable_id,mailbox_id,state:row.state,eligible:row.eligible,retained_at,provider,subject,...shown,
+    text:sourcePart(c.text),html:sourcePart(c.html,true),header_sent:sourceTime(c.header_sent),provider_received:sourceTime(c.provider_received,true),provenance:decoder};
+}
+function reviewSourceFailure(error) {
+  if(["stale_response","aborted"].includes(error.code) || error.name === "AbortError") return null;
+  if(error.status === 401 && error.code === "authentication_required") return {auth:true};
+  if(error.status === 404) return {message:"Retained source or Workspace unavailable.",retry:true};
+  if(error.status >= 500 || error.code === "network_error") return {message:"Retained text could not be loaded. Try the read again.",retry:true};
+  return {message:"Retained text could not be displayed safely.",retry:true};
+}
+// END DJANGO REVIEW SOURCE STATE
+
+function RetainedReviewSourceInspection({client,context,selection,inspectionControl,onBack,onClose,onAuthFailure}) {
+  const [content,setContent]=useState(null), [busy,setBusy]=useState(false), [error,setError]=useState(null);
+  const lane=useMemo(()=>createEvidenceLane(context),[context]);
+  function current(token) {return context.current(selection.captured) && lane.current(token,selection.sourceId);}
+  function cancel() {lane.invalidate();setContent(null);setError(null);setBusy(false);}
+  async function load() {
+    if(!context.current(selection.captured)) return;
+    const token=lane.start(selection.sourceId);if(!current(token))return;
+    setContent(null);setError(null);setBusy(true);
+    try {
+      const row=reviewSourceProjection(await client.readRetainedReviewSource(selection.sourceId,{captured:selection.captured,signal:token.signal}),selection);
+      if(current(token))setContent(row);
+    } catch(e) {
+      if(current(token)) {const safe=reviewSourceFailure(e);if(safe?.auth) {cancel();onAuthFailure(e);}else if(safe)setError(safe);}
+    } finally {if(current(token))setBusy(false);}
+  }
+  useEffect(()=>{inspectionControl.current=cancel;load();return ()=>{lane.dispose();if(inspectionControl.current===cancel)inspectionControl.current=null;};},[lane,selection]);
+  const time=(label,t)=><p>{label}: {t.precision === "instant" ? <EvidenceTime value={t.value}/> : t.precision === "unknown" ? "Unknown" : t.value} · Precision: {t.precision} · Source: {t.source}{t.source_utc_offset_seconds !== undefined && <> · Recorded source UTC offset: {t.source_utc_offset_seconds} seconds</>}</p>;
+  const address=(label,rows)=><p>{label}: {rows === null ? "Not retained" : !rows.length ? "No addresses supplied" : rows.map((a,i)=><span key={i}>{i ? "; " : ""}{a.name}{a.name ? " — " : ""}{a.address}</span>)}</p>;
+  const truncation=(t)=>t && <p>Retention truncation: {t.retained_bytes} of {t.original_bytes} UTF-8 bytes retained · Location: {t.location} · Source completeness: {t.source_completeness}{t.source_reason && <> · Source reason: {t.source_reason}</>}</p>;
+  return <section data-testid="review-source-inspection" aria-label="Retained review source text" style={{whiteSpace:"normal",overflowWrap:"anywhere"}}>
+    <h3>Retained source text</h3><button className="btn" onClick={()=>{cancel();onBack();}}>Back to review</button><button className="btn" onClick={()=>{cancel();onClose();}}>Close source inspection</button>
+    <button className="btn" disabled={busy} onClick={load}>Refresh source</button>
+    {busy && <p role="status">Loading retained text…</p>}
+    {error && <div role="alert"><p>{error.message}</p>{error.retry && <button className="btn" onClick={load}>Retry source read</button>}</div>}
+    {content && <article data-testid="review-source-content">
+      <p>Review {selection.reviewId} · Source {content.id} · Portable identity: {content.portable_id} · Mailbox lineage {content.mailbox_id} · Provider: {content.provider}</p>
+      <p>Subject: {content.subject === null ? "Not supplied" : content.subject === "" ? "Explicitly blank" : content.subject}</p>{address("From",content.from)}{address("Sender",content.sender)}
+      <p>Source state: {content.state}</p>{content.state === "conflict" && <p role="status">Source conflict recorded. This is preserved canonical content; inspection does not resolve conflicting observations or establish current provider truth.</p>}
+      <p>Retained at: <EvidenceTime value={content.retained_at}/></p>{time("Header-sent time",content.header_sent)}{time("Provider-received time",content.provider_received)}
+      <p>Decoder provenance: {content.provenance.method} · Version: {content.provenance.version}</p>
+      <p>Plain-text completeness: {content.text.completeness}{content.text.reason && <> · Reason: {content.text.reason}</>}</p>{truncation(content.text.truncation)}
+      {content.text.value === null ? <p>Retained plain text is unavailable.{content.html.available ? " An HTML representation is retained, but is not displayed or converted here." : " No HTML representation is available."}</p> : content.text.value === "" ? <p>{content.text.completeness === "complete" ? "Retained plain text is explicitly empty." : "Retained plain text is empty; the content remains partial."}</p> : <pre data-testid="retained-plain-text" style={{whiteSpace:"pre-wrap",overflowWrap:"anywhere",unicodeBidi:"plaintext"}}>{content.text.value}</pre>}
+      <p>HTML representation: {content.html.available ? "Available; not displayed" : "Unavailable"} · Completeness: {content.html.completeness}{content.html.reason && <> · Reason: {content.html.reason}</>}</p>{truncation(content.html.truncation)}
+    </article>}
+  </section>;
+}
+
 function ApplicationReviewPanel({client, context, workspaceId, onClose, onAuthFailure}) {
   const [state,setState]=useState(reviewInitial);
+  const [sourceSelection,setSourceSelection]=useState(null), sourceControl=useRef(null), detailObservation=useRef(null);
   const listLane=useMemo(()=>createEvidenceLane(context),[context]), detailLane=useMemo(()=>createEvidenceLane(context),[context]);
   const selected=useRef(null), inspectionControl=useRef(null), auth=useRef(onAuthFailure);auth.current=onAuthFailure;
   const attemptLife=useRef({generation:0,alive:true,controller:null}), submitLock=useRef(false), listDirty=useRef(false);
   function patch(values) {setState(old=>({...old,...values}));}
   function cancelAction() {attemptLife.current.generation++;attemptLife.current.controller?.abort();detailLane.invalidate();submitLock.current=false;}
-  function reset() {cancelAction();listLane.invalidate();inspectionControl.current?.();selected.current=null;setState(reviewInitial());}
+  function cancelSource() {sourceControl.current?.();setSourceSelection(null);}
+  function reset() {cancelSource();detailObservation.current=null;cancelAction();listLane.invalidate();inspectionControl.current?.();selected.current=null;setState(reviewInitial());}
   function authFailure(error) {reset();auth.current(error);}
   function fail(error, lane, token, after = null) {
     if(!lane.current(token,lane === detailLane ? selected.current : after)) return;
@@ -7745,7 +7877,7 @@ function ApplicationReviewPanel({client, context, workspaceId, onClose, onAuthFa
     else patch(lane === listLane ? {listError:{...safe,after},listBusy:false} : {detailError:safe,detail:null,detailBusy:false});
   }
   async function loadList(after = null) {
-    if(after === null) {cancelAction();listDirty.current=false;inspectionControl.current?.();selected.current=null;patch({...reviewInitial(),listBusy:true});}
+    if(after === null) {cancelSource();detailObservation.current=null;cancelAction();listDirty.current=false;inspectionControl.current?.();selected.current=null;patch({...reviewInitial(),listBusy:true});}
     const existing=after === null ? [] : state.rows;
     const token=listLane.start(after);patch({listBusy:true,listError:null});
     try {
@@ -7755,7 +7887,7 @@ function ApplicationReviewPanel({client, context, workspaceId, onClose, onAuthFa
     finally {if(listLane.current(token,after)) patch({listBusy:false});}
   }
   async function selectReview(id, preparing = false, expectedPortable = null) {
-    cancelAction();applicationId(id);listLane.invalidate();inspectionControl.current?.();selected.current=id;
+    cancelSource();detailObservation.current=null;cancelAction();applicationId(id);listLane.invalidate();inspectionControl.current?.();selected.current=id;
     patch({review:id,detail:null,detailError:null,detailBusy:true,application:null,listBusy:false,action:null,pending:false,outcome:null});
     const token=detailLane.start(id);
     try {
@@ -7763,6 +7895,7 @@ function ApplicationReviewPanel({client, context, workspaceId, onClose, onAuthFa
       if(detailLane.current(token,selected.current)) {
         if(expectedPortable && detail.portable_id.toLowerCase() !== expectedPortable.toLowerCase()) reviewUnexpected();
         if(preparing && !Number.isSafeInteger(detail.disposition.revision + 1)) reviewUnexpected();
+        detailObservation.current={captured:token.captured,id,portable:detail.portable_id.toLowerCase()};
         patch({detail,action:preparing ? Object.freeze({id,portable:detail.portable_id.toLowerCase(),revision:detail.disposition.revision,
           desired:detail.disposition.state === "active" ? "dismissed" : "active",captured:token.captured,generation:attemptLife.current.generation}) : null});
       }
@@ -7780,6 +7913,7 @@ function ApplicationReviewPanel({client, context, workspaceId, onClose, onAuthFa
       const detail=reviewRow(await client.readApplicationReview(attempt.id,{captured:attempt.captured,signal:token.signal}),workspaceId,attempt.id);
       if(!attemptCurrent(attempt) || !detailLane.current(token,selected.current)) return;
       if(detail.portable_id.toLowerCase() !== attempt.portable) reviewUnexpected();
+      detailObservation.current={captured:attempt.captured,id:detail.id,portable:detail.portable_id.toLowerCase()};
       patch({detail});
     } catch(error) {
       if(attemptCurrent(attempt) && detailLane.current(token,selected.current)) {
@@ -7791,7 +7925,7 @@ function ApplicationReviewPanel({client, context, workspaceId, onClose, onAuthFa
   async function submitDisposition() {
     const action=state.action;
     if(submitLock.current || state.pending || !action || action.generation !== attemptLife.current.generation || selected.current !== action.id || !context.current(action.captured)) return;
-    submitLock.current=true;
+    cancelSource();detailObservation.current=null;submitLock.current=true;
     const controller=new AbortController();attemptLife.current.controller=controller;
     const attempt=Object.freeze({...action,generation:++attemptLife.current.generation});
     detailLane.invalidate();listLane.invalidate();listDirty.current=true;
@@ -7805,9 +7939,21 @@ function ApplicationReviewPanel({client, context, workspaceId, onClose, onAuthFa
     if(error?.status === 401 && error.code === "authentication_required") {authFailure(error);return;}
     await reconcile(attempt,reviewOutcome(error));
   }
-  useEffect(()=>{loadList();return ()=>{cancelAction();attemptLife.current.alive=false;listLane.dispose();detailLane.dispose();selected.current=null;};},[listLane,detailLane]);
-  function back() {cancelAction();inspectionControl.current?.();selected.current=null;patch({review:null,detail:null,detailError:null,detailBusy:false,application:null,action:null,pending:false,outcome:null});if(listDirty.current) loadList();}
-  function open(id, portable = null) {cancelAction();applicationId(id);inspectionControl.current?.();patch({application:{id,portable},action:null,pending:false});}
+  useEffect(()=>{loadList();return ()=>{sourceControl.current?.();cancelAction();attemptLife.current.alive=false;listLane.dispose();detailLane.dispose();selected.current=null;};},[listLane,detailLane]);
+  function back() {cancelSource();detailObservation.current=null;cancelAction();inspectionControl.current?.();selected.current=null;patch({review:null,detail:null,detailError:null,detailBusy:false,application:null,action:null,pending:false,outcome:null});if(listDirty.current) loadList();}
+  function open(id, portable = null) {cancelSource();cancelAction();applicationId(id);inspectionControl.current?.();patch({application:{id,portable},action:null,pending:false});}
+  function inspectSource(detail) {
+    const observation=detailObservation.current;
+    if(submitLock.current || state.pending || state.detailBusy || !observation || selected.current !== detail.id || observation.id !== detail.id ||
+      observation.portable !== detail.portable_id.toLowerCase() || !context.current(observation.captured) || observation.captured.workspace !== workspaceId) return;
+    cancelSource();cancelAction();inspectionControl.current?.();patch({action:null});
+    setSourceSelection(Object.freeze({captured:observation.captured,reviewId:detail.id,reviewPortable:observation.portable,
+      sourceId:applicationId(detail.retained_message.id),sourcePortable:reviewUuid(detail.retained_message.portable_id).toLowerCase()}));
+  }
+  function returnFromSource(selection) {
+    cancelSource();
+    if(selected.current === selection.reviewId && context.current(selection.captured))selectReview(selection.reviewId,false,selection.reviewPortable);
+  }
   const value=v=>v === null ? "Unknown" : v === "" ? "Not supplied" : v;
   const classification={match:"Single candidate",ambiguous:"Multiple candidates",application:"No candidate"};
   const summary=row=><>
@@ -7820,7 +7966,8 @@ function ApplicationReviewPanel({client, context, workspaceId, onClose, onAuthFa
   const detail=state.detail;
   return <section data-testid="review-panel" aria-label="Retained Application reviews" style={{marginTop:20,textAlign:"left",overflowWrap:"anywhere"}}>
     <h2>Retained Application reviews</h2><button className="btn" onClick={()=>{reset();onClose();}}>Close reviews</button>
-    {state.application ? <>
+    {sourceSelection ? <RetainedReviewSourceInspection key={sourceSelection.reviewId+":"+sourceSelection.sourceId} client={client} context={context} selection={sourceSelection}
+      inspectionControl={sourceControl} onBack={()=>returnFromSource(sourceSelection)} onClose={()=>{reset();onClose();}} onAuthFailure={authFailure} /> : state.application ? <>
       <button className="btn" onClick={()=>{inspectionControl.current?.();patch({application:null});}}>Back to review</button>
       <ApplicationDetailInspection key={state.application.id+":"+(state.application.portable||"")} client={client} context={context} workspaceId={workspaceId}
         applicationId={state.application.id} expectedPortable={state.application.portable} inspectionControl={inspectionControl} onAuthFailure={authFailure} />
@@ -7841,6 +7988,7 @@ function ApplicationReviewPanel({client, context, workspaceId, onClose, onAuthFa
           ["Dismissed at",detail.disposition.dismissed_at],["Reported candidate count",detail.candidate_count],["Reported source relationship count",detail.relationship_count],
           ["Source attachment summary",detail.attachment_status]].map(([label,v])=><React.Fragment key={label}><dt>{label}</dt><dd>{value(v)}</dd></React.Fragment>)}</dl>
         <button className="btn" onClick={()=>selectReview(detail.id)}>Reload review</button>
+        {!state.pending && !state.detailBusy && <button className="btn" onClick={()=>inspectSource(detail)}>Inspect retained text</button>}
         {!state.action && !state.pending && <button className="btn" onClick={()=>selectReview(detail.id,true,detail.portable_id)}>{detail.disposition.state === "active" ? "Dismiss review" : "Restore review"}</button>}
         {state.action && <section aria-label="Confirm review disposition">
           <p>{state.action.desired === "dismissed" ? "Dismiss" : "Restore"} review {state.action.id}? This changes whole-review disposition and preserves retained sources, relationships and evidence.</p>

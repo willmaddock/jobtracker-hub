@@ -419,3 +419,78 @@ test('review outcome distinguishes refusal and uncertainty without raw message e
     const message=h.reviewOutcome(new ApiError(code,'PRIVATE SQL',status));assert.match(message,pattern);assert(!message.includes('PRIVATE'));
   }
 });
+
+// Execute the actual source projection block alongside its existing identity/time helpers.
+const reviewSourceHelpers=(()=>{
+  const scope={JTHApi:{ApiError},Number,Date,Set,AbortController,TextEncoder};vm.createContext(scope);
+  for(const name of ['APPLICATION','REVIEW','REVIEW SOURCE'])vm.runInContext(html.split('// BEGIN DJANGO '+name+' STATE')[1].split('// END DJANGO '+name+' STATE')[0],scope);
+  return scope;
+})();
+const sourceSelection={sourceId:3,sourcePortable:uuid(3).toLowerCase()};
+function sourceFixture() {
+  return {id:3,portable_id:uuid(3),mailbox_id:4,state:'retained',eligible:true,retained_at:'2026-10-07T12:00:00Z',representation_version:1,
+    source:{provider:'gmail',kind:'gmail_message_id',value:'PRIVATE LOCATOR',folder:'',stability:'v1'},
+    content:{version:1,subject:'<img src=x onerror=alert(1)>',addresses:{from:[{name:'Recruiter',address:'mail@example.test'}]},
+      headers:[['references','PRIVATE HEADER']],conversation_id:'PRIVATE CONVERSATION',provenance:{method:'fixture',version:'1'},
+      header_sent:{precision:'date',value:'2026-10-07',source:'header_date'},provider_received:{precision:'unknown',value:null,source:'unknown'},
+      text:{value:'Unicode 😀 é\n<script>literal</script>',completeness:'complete',reason:''},html:{available:true,completeness:'complete',reason:''}}};
+}
+test('source GET is explicit, scoped, captured, safe and read-only',async()=>{
+  const calls=[];const {client,context}=setup(async(p,o)=>{calls.push({p,o});return response(200,{});});
+  await client.readRetainedReviewSource(3);assert.equal(calls[0].p,'/api/workspaces/2/retained-messages/3/');
+  assert.equal(calls[0].o.method,'GET');assert.equal(calls[0].o.body,undefined);assert.equal(calls[0].o.credentials,'same-origin');assert.equal(calls[0].o.cache,'no-store');
+  for(const bad of [0,-1,true,'3',1.5,Number.MAX_SAFE_INTEGER+1])assert.throws(()=>client.readRetainedReviewSource(bad),{code:'unsafe_identifier'});
+  const old=context.capture();context.select(3);assert.throws(()=>client.readRetainedReviewSource(3,{captured:old}),{code:'stale_response'});
+  const abort=new AbortController();abort.abort();await assert.rejects(client.readRetainedReviewSource(3,{signal:abort.signal}),{code:'aborted'});assert.equal(calls.length,1);
+});
+test('source actual projection preserves literal text and drops raw source data',()=>{
+  const h=reviewSourceHelpers,raw=sourceFixture(),row=h.reviewSourceProjection(raw,sourceSelection);
+  assert.equal(row.text.value,raw.content.text.value);assert.equal(row.subject,raw.content.subject);assert.equal(row.mailbox_id,4);assert.equal(row.sender,null);
+  assert(!JSON.stringify(row).includes('PRIVATE'));assert.equal(row.header_sent.precision,'date');assert.equal(row.provider_received.value,null);
+  assert.equal(h.reviewSourceProjection({...raw,portable_id:raw.portable_id.toUpperCase()},sourceSelection).id,3);
+  const conflict={...raw,state:'conflict',eligible:false};assert.equal(h.reviewSourceProjection(conflict,sourceSelection).text.value,row.text.value);
+});
+test('source null empty partial and HTML-only remain distinct without inferred content',()=>{
+  const h=reviewSourceHelpers;
+  for(const [value,completeness,reason] of [[null,'unavailable','not_supplied'],['','complete',''],['','partial','provider_limit'],['Part','partial','provider_limit']]) {
+    const raw=sourceFixture();raw.content.text={value,completeness,reason};const row=h.reviewSourceProjection(raw,sourceSelection);
+    assert.equal(row.text.value,value);assert.equal(row.text.completeness,completeness);assert.equal(row.text.truncation,null);assert.equal(row.html.available,true);
+  }
+  const raw=sourceFixture();raw.content.text={value:null,completeness:'unavailable',reason:''};raw.content.html={available:false,completeness:'unavailable',reason:'not_supplied'};
+  assert.equal(h.reviewSourceProjection(raw,sourceSelection).html.available,false);
+});
+test('source validates UTF-8 limits and rejects NUL and unpaired surrogates without rewriting Unicode',()=>{
+  const h=reviewSourceHelpers,raw=sourceFixture();raw.content.text.value='😀'.repeat(65536);assert.equal(h.reviewSourceProjection(raw,sourceSelection).text.value,raw.content.text.value);
+  for(const text of [raw.content.text.value+'x','é'.repeat(131073),'\u0000','\ud800','\udc00']){
+    const row=sourceFixture();row.content.text.value=text;assert.throws(()=>h.reviewSourceProjection(row,sourceSelection));
+  }
+  raw.content.subject='é'.repeat(2048);h.reviewSourceProjection(raw,sourceSelection);raw.content.subject+='x';assert.throws(()=>h.reviewSourceProjection(raw,sourceSelection));
+});
+test('source generated truncation validates exact byte facts including zero retained prefix',()=>{
+  const h=reviewSourceHelpers;
+  for(const value of ['','é']) {
+    const raw=sourceFixture(),bytes=new TextEncoder().encode(value).length;
+    raw.content.text={value,completeness:'partial',reason:'retention_byte_limit',truncation:{location:'utf8_prefix',retained_bytes:bytes,original_bytes:4,original_digest:'a'.repeat(64),source_completeness:'complete',source_reason:''}};
+    assert.equal(h.reviewSourceProjection(raw,sourceSelection).text.truncation.retained_bytes,bytes);
+    for(const change of [{retained_bytes:bytes+1},{original_bytes:bytes},{original_digest:'bad'},{location:'guessed'},{source_completeness:'unavailable'}]) {
+      const broken=structuredClone(raw);Object.assign(broken.content.text.truncation,change);assert.throws(()=>h.reviewSourceProjection(broken,sourceSelection));
+    }
+  }
+});
+test('source rejects wrong identities versions completeness times and malformed displayed metadata',()=>{
+  const h=reviewSourceHelpers;
+  const mutations=[r=>r.id=5,r=>r.id=Number.MAX_SAFE_INTEGER+1,r=>r.mailbox_id=null,r=>r.portable_id=uuid(99),r=>r.state='unresolved',r=>r.eligible=false,
+    r=>r.representation_version=2,r=>r.content.version=2,r=>delete r.content.text.value,r=>r.content.text.value=null,r=>r.content.text.completeness='truncated',
+    r=>r.content.text.completeness='partial',r=>r.content.html.value='<script>',r=>r.content.html.available=false,r=>r.content.text.reason=null,r=>r.content.text.truncation=null,
+    r=>delete r.content.subject,r=>r.content.addresses.from[0].name='x'.repeat(1025),r=>r.content.addresses.from=Array(101).fill({name:'',address:''}),
+    r=>r.content.headers=[['date','x'.repeat(8193)]],r=>r.source.provider='other',r=>r.source.stability='invalid',
+    r=>r.content.provider_received={precision:'instant',value:'2026-10-07T00:00:00Z',source:'header_date'},r=>r.content.header_sent.value='2026-02-30'];
+  for(const change of mutations) {const raw=sourceFixture();change(raw);assert.throws(()=>h.reviewSourceProjection(raw,sourceSelection));}
+  const raw=sourceFixture();raw.content.header_sent={precision:'uncertain',value:'legacy-naive-time',source:'legacy_naive'};assert.equal(h.reviewSourceProjection(raw,sourceSelection).header_sent.value,'legacy-naive-time');
+});
+test('source read errors never display server content and obsolete responses are ignored',()=>{
+  const h=reviewSourceHelpers;
+  for(const [code,status] of [['network_error',0],['not_found',404],['unexpected_source',0],['request_failed',500]])assert(!h.reviewSourceFailure(new ApiError(code,'PRIVATE SOURCE',status)).message.includes('PRIVATE'));
+  assert(h.reviewSourceFailure(new ApiError('authentication_required','PRIVATE',401)).auth);
+  for(const code of ['aborted','stale_response'])assert.equal(h.reviewSourceFailure(new ApiError(code,'PRIVATE')),null);
+});

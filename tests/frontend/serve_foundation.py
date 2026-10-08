@@ -144,6 +144,74 @@ with tempfile.TemporaryDirectory(prefix="jth-foundation-") as directory:
     # Privileged fixture deletion exercises the existing nullable candidate contract only.
     removed.delete()
     set_trash(actor=alice, workspace=workspace, kind="applications", pk=trashed.pk, trashed=True, expected_revision=0)
+    # Retain source cases through the production normalizer; no personal mail or provider access.
+    from django.test import override_settings
+    source_cases = {}
+    malicious_text = "Unicode 😀 é\n<script>window.sourceInjected=true</script>\n<img src=https://tracking.invalid/source>\nhttps://tracking.invalid/link\nmail@example.test"
+    for label in ("complete", "empty", "partial", "truncated", "zero-prefix", "unavailable", "html-only", "conflict", "large", "maximum"):
+        data = fixture(mailbox)
+        data["source"]["value"] = "source-inspection-" + label
+        data["content"]["subject"] = "Retained text " + label
+        data["content"]["text"] = {"value": malicious_text, "completeness": "complete"}
+        data["content"]["header_sent"] = {"precision": "date", "value": "2026-10-07", "source": "header_date"}
+        if label == "empty":
+            data["content"]["text"]["value"] = ""
+        elif label == "partial":
+            data["content"]["text"] = {"value": "Provider partial text", "completeness": "partial", "reason": "provider_limit"}
+        elif label in {"truncated", "zero-prefix"}:
+            data["content"]["text"]["value"] = "éééé remainder" if label == "truncated" else "😀"
+        elif label in {"unavailable", "html-only"}:
+            data["content"]["text"] = {"value": None, "completeness": "unavailable", "reason": "not_supplied"}
+            if label == "unavailable":
+                data["content"]["html"] = {"value": None, "completeness": "unavailable", "reason": "not_supplied"}
+        elif label in {"large", "maximum"}:
+            data["content"]["text"]["value"] = "é" * (98304 if label == "large" else 131072)
+        if label == "conflict":
+            data["content"]["header_sent"] = {"precision": "uncertain", "value": "legacy-naive-time", "source": "legacy_naive"}
+        limit = 7 if label == "truncated" else 1 if label == "zero-prefix" else 262144
+        with override_settings(RETAINED_EMAIL_TEXT_BYTES=limit):
+            result = retain_observation(actor=alice, workspace=workspace, key=str(uuid.uuid4()), observation=data)
+        message = RetainedMessage.objects.get(pk=result.message_id)
+        review, _ = ensure_application_review(actor=alice, workspace=workspace, retained_message_id=message.pk,
+            observation_id=result.observation_id, classification="application", candidate_ids=[])
+        if label == "conflict":
+            from copy import deepcopy
+            changed = deepcopy(data)
+            changed["content"]["subject"] = "Conflicting variant"
+            retain_observation(actor=alice, workspace=workspace, key=str(uuid.uuid4()), observation=changed)
+        source_cases[label] = {"review":review.pk,"source":message.pk,"portable":str(message.portable_id)}
+
+    source_read_audit = []
+    class ReviewSourceReadAudit:
+        def __init__(self, get_response):
+            self.get_response = get_response
+        def __call__(self, request):
+            import re
+            if request.method != "GET" or not re.fullmatch(r"/api/workspaces/[1-9]\d*/retained-messages/[1-9]\d*/", request.path):
+                return self.get_response(request)
+            from contextlib import ExitStack
+            from unittest.mock import patch
+            from django.db import connection
+            from django.test.utils import CaptureQueriesContext
+            with ExitStack() as stack:
+                for name in ("email_sync.providers.get_provider", "email_sync.retention.retain_observation",
+                             "applications.message_relationships.attach_message", "applications.retained_reviews.attach_review",
+                             "django.core.files.storage.default_storage.open"):
+                    stack.enter_context(patch(name, side_effect=AssertionError("source GET crossed a forbidden boundary")))
+                queries = stack.enter_context(CaptureQueriesContext(connection))
+                response = self.get_response(request)
+            source_read_audit.append({"path":request.path,"status":response.status_code,
+                                      "select_only":all(q["sql"].lstrip().upper().startswith("SELECT") for q in queries)})
+            return response
+
+    settings.MIDDLEWARE = [*settings.MIDDLEWARE, __name__ + ".ReviewSourceReadAudit"]
+    def review_source_fixtures(request):
+        return JsonResponse({"cases":source_cases})
+    def review_source_audit(request):
+        if request.user.pk != alice.pk:
+            return JsonResponse({}, status=404)
+        return JsonResponse({"reads":source_read_audit})
+
     for index in range(46):
         message=retained("review-page-"+str(index))
         ensure_application_review(actor=alice, workspace=workspace, retained_message_id=message.pk,
@@ -273,11 +341,12 @@ with tempfile.TemporaryDirectory(prefix="jth-foundation-") as directory:
         response = product_index(request)
         # Installed before React/client construction, so the captured fetch binding
         # remains the actual runtime boundary. Hooks exist only on disposable pages.
-        hook = """<script>(function(){
+        hook = r"""<script>(function(){
           const nativeFetch=window.fetch.bind(window);
           window.__fixtureNativeFetch=nativeFetch; window.__fixtureTraffic=[];
           window.fetch=function(url,options){
             const entry={url:String(url),method:options&&options.method||'GET',body:options&&options.body};
+            if(entry.method==='GET'&&/\/retained-messages\/[1-9]\d*\/$/.test(entry.url)&&window.__fixtureSourceReadIntent){entry.sourceReadIntent=window.__fixtureSourceReadIntent;window.__fixtureSourceReadIntent=null;}
             if(entry.method==='POST'&&window.__fixtureDispositionIntent){entry.dispositionIntent=window.__fixtureDispositionIntent;window.__fixtureDispositionIntent=null;}
             if(entry.method==='PUT'&&window.__fixtureAssignmentIntent){entry.assignmentIntent=window.__fixtureAssignmentIntent;window.__fixtureAssignmentIntent=null;}
             if(window.__fixtureFoundationAction==='logout'&&entry.url==='/api/auth/logout'&&entry.method==='POST'){
@@ -308,6 +377,8 @@ with tempfile.TemporaryDirectory(prefix="jth-foundation-") as directory:
                    path("api/test-only/evidence-fixtures", evidence_fixtures),
                    path("api/test-only/application-fixtures", application_fixtures),
                    path("api/test-only/review-fixtures", review_fixtures),
+                   path("api/test-only/review-source-fixtures", review_source_fixtures),
+                   path("api/test-only/review-source-audit", review_source_audit),
                    path("api/test-only/review-disposition-control", ReviewDispositionFixtureControl.as_view()),
                    path("api/test-only/category-fixtures", category_fixtures),
                    path("api/test-only/assignment-fixtures", assignment_fixtures),
