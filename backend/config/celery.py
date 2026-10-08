@@ -42,12 +42,10 @@ import os
 
 from celery import Celery
 
-# Mirrors manage.py's own default -- a real deployment sets
-# DJANGO_SETTINGS_MODULE explicitly (config.settings.prod), so
-# setdefault here never overrides that; it only lets `celery -A
-# config worker` boot with sane settings the same way `manage.py`
-# does when nothing else has set the env var yet.
-os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings.dev")
+# Package initialization must not preempt WSGI/ASGI's production default.
+# Development workers explicitly select config.settings.dev. manage.py still
+# supplies its own development default; explicit test/profile selectors win.
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings.prod")
 
 app = Celery("jobtracker_hub")
 app.config_from_object("django.conf:settings", namespace="CELERY")

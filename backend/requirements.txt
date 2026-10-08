@@ -6,6 +6,7 @@
 #   pip install -r backend/requirements.txt
 Django==6.1.1
 djangorestframework==3.18.0
+psycopg==3.3.6
 
 # Phase 4 -- S3-compatible object storage for the Document model
 # (docs/DJANGO_MIGRATION_PLAN.md Phase 4). django-storages provides
