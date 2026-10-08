@@ -1,12 +1,14 @@
 # Django migration: current status
 
-Maintained checkpoint: 2026-10-06. Authoritative branch: `django-migration`;
-implementation checkpoint `6d2c736cb9a5a2bb68850019e74a77546c819f25`
-(`Implement Application Category assignment browser workflow`), parent documentation checkpoint
-`a8b2cbfead42fcf0b0f187ca305ca59e4a604f2f`
-(`Reconcile Category workspace browser status`). Before this documentation edit,
-local HEAD, tracking ref and live remote were verified synchronized at that checkpoint,
-ahead/behind 0/0, with a clean working tree and empty index.
+Maintained checkpoint: 2026-10-07. Authoritative branch: `django-migration`;
+current implementation checkpoint `160c8a4007f262bab1361485b959accce145a628`
+(`Harden production settings admission`). Its parent and the current documentation
+checkpoint are `c96be928f065b82f114aa0ecc3b845b0c6e92334`
+(`Reconcile Application Category assignment status`), until this reconciliation is
+separately committed/pushed. The future documentation commit will have the implementation
+checkpoint as its parent; no future documentation SHA is known. Before this Status-only edit,
+local HEAD, tracking ref and live remote were verified synchronized at the implementation
+checkpoint, ahead/behind 0/0, with a clean working tree and empty index.
 
 Retained Email Source Identity and Content
 Foundation is committed at `2f0cd1f`; Gmail Mailbox Identity and Durable Lineage
@@ -93,7 +95,7 @@ at `bcad64038e6fbb4c224dc5a7ddfe075d4b3f22f7`. Workspace-Scoped Read-Only Catego
 Navigation and Application Core Inspection is committed/pushed at
 `17ec29a476503d0e91ce7b6f123604386e04dad3`, adding read-only presentation/navigation.
 Workspace-Scoped Application Category Assignment Browser Workflow is committed/pushed at
-the current implementation checkpoint: explicit browser invocation of existing Application
+`6d2c736cb9a5a2bb68850019e74a77546c819f25`: explicit browser invocation of existing Application
 Category assignment authority, exposed only from standalone Applications. This is the first
 completed bounded domain browser mutation workflow, not general mutation infrastructure.
 Accumulated browser capability is Workspace/session shell → extraction-evidence inspection
@@ -102,6 +104,10 @@ Accumulated browser capability is Workspace/session shell → extraction-evidenc
 mutation. These are accumulated UI capabilities, not one domain authority chain. Category
 mutations, remaining Application/review mutations, broader evidence workflows, frontend migration,
 historical reconciliation, email derivation and operational cutover remain pending.
+Following those browser checkpoints, **production fail-closed configuration admission** is
+implemented at `160c8a4007f262bab1361485b959accce145a628` as an architecture-hardening
+checkpoint, not a browser capability or extension of domain authority. This validates
+configuration admission and profile selection; operational production gates remain open.
 
 ## 1. Scope and source of truth
 
@@ -120,6 +126,108 @@ historical reconciliation, email derivation and operational cutover remain pendi
 
 ## 2. Current verification evidence
 
+### Production Settings Fail-Closed Configuration Prerequisite — committed checkpoint, 2026-10-07
+
+**Fail-closed production configuration admission is implemented** at
+`160c8a4007f262bab1361485b959accce145a628` (`Harden production settings admission`),
+parent documentation checkpoint `c96be928f065b82f114aa0ecc3b845b0c6e92334`
+(`Reconcile Application Category assignment status`). This validates configuration admission
+and profile selection; operational production gates remain open.
+
+The reviewed implementation contains exactly seven paths, one added file, **559 insertions
+and 33 deletions**: `backend/config/settings/base.py`, `backend/config/settings/dev.py`,
+`backend/config/settings/prod.py`, `backend/config/celery.py`, `backend/manage.py`,
+`backend/requirements.txt`, and the added `backend/core/tests_production_settings.py`.
+No models, migrations, views, serializers, domain services, frontend, provider behavior,
+real data, credentials or documentation changed in that implementation commit.
+
+Configuration/profile boundary:
+
+- Shared base no longer loads dotenv. Development still loads repository-local `backend/.env`
+  before base with `override=False`; process environment wins. Production does not
+  automatically load development dotenv and expects process/service configuration.
+  Admission assumes a fresh process; in-process profile switching is not supported.
+- Production fixes the engine to `django.db.backends.postgresql` and requires explicit
+  `DJANGO_DB_NAME`, `DJANGO_DB_USER`, `DJANGO_DB_PASSWORD`, `DJANGO_DB_HOST`, and
+  `DJANGO_DB_PORT`. Required values reject missing/empty/control-containing input;
+  name/user/host/port reject surrounding whitespace, while passwords are preserved exactly.
+  Hosts accept validated DNS/IP forms, not URLs, lists, embedded ports or socket paths;
+  port is ASCII decimal in `1..65535`. There is no SQLite fallback or alternate engine;
+  nonempty `DATABASE_URL` and `DJANGO_DB_ENGINE` are unsupported and rejected.
+  This is configuration-shape admission, not live connectivity, TLS/certificate or pooling validation.
+- Runtime `backend/requirements.txt` now declares `psycopg==3.3.6`, without a binary extra;
+  the PostgreSQL test manifest is unchanged. No dependency installation occurred.
+  Native libpq deployment remains unresolved; local driver availability is not deployed-runtime evidence.
+- Production requires explicit valid `DJANGO_SECRET_KEY`, rejecting the committed development
+  fallback, `django-insecure-` prefix, controls and weak values (fewer than 50 characters or
+  five distinct characters). Accepted values are preserved; no fallback is generated and
+  `SECRET_KEY_FALLBACKS=[]`.
+- `GMAIL_TOKEN_ENCRYPTION_KEY`, `MICROSOFT_TOKEN_ENCRYPTION_KEY`, and
+  `IMAP_TOKEN_ENCRYPTION_KEY` are all explicit production requirements. Local validation
+  requires canonical URL-safe Base64 encoding of 32 bytes, rejects every committed
+  development fallback in any provider position, and requires distinct decoded keys.
+  No credentials were inspected, rotated or re-encrypted; no provider was enabled.
+- `DJANGO_ALLOWED_HOSTS` is required and validated as comma-separated exact DNS/IPv4/
+  bracketed-IPv6 entries, with trim, case normalization and deduplication; empty entries,
+  wildcards, schemes, paths, userinfo, ports and controls are rejected. Same-origin CSRF
+  uses `CSRF_TRUSTED_ORIGINS=[]`; nonempty `DJANGO_CSRF_TRUSTED_ORIGINS` is rejected.
+  Production explicitly sets `DEBUG=False`, secure session/CSRF cookies, session HttpOnly,
+  Lax SameSite behavior and HTTPS redirect. Forwarded host/port trust remains disabled and
+  `SECURE_PROXY_SSL_HEADER=None`. HSTS remains zero; rollout and proxy topology are separate gates.
+- Bare/default Celery selects production; explicit `DJANGO_SETTINGS_MODULE` selectors remain
+  respected, including development workers. No task behavior changed or broker connectivity was validated.
+- Bare management commands still default to development. Exact production selection by
+  environment or either CLI `--settings` form triggers admission before Django command dispatch;
+  CLI selection retains Django precedence. `prod.py` owns policy; `manage.py` only enforces
+  the pre-dispatch gate. Actual WSGI/ASGI bootstrap paths retain production defaults.
+  This does not add special handling for arbitrary Python entrypoints.
+- Admission failures use deterministic, fixed, secret-free `ImproperlyConfigured` messages,
+  without supplied values, environment dumps or input-bearing parsing exception chains.
+
+Management blocker/correction: initial readiness inspection assumed production settings-import
+admission covered commands. Verification demonstrated Django could suppress admission failure
+and still execute shell code. Implementation stopped at the authorized file boundary;
+a separately authorized one-file expansion added `backend/manage.py`. The pre-dispatch
+blocker was corrected and validated before commit, with normal successful dispatch preserved.
+
+Retained **pre-commit final-snapshot evidence**:
+
+| Validation | Result | Time |
+|---|---|---|
+| Production-settings focused suite | 12 passed; zero skips/failures/errors | 52.357s |
+| Existing settings/auth suite | 45 passed; zero skips/failures/errors | 5.618s |
+| Full labelled Django (`accounts applications email_sync postings documents core`) | 1,375 discovered/reported run; 1,362 passed; 13 skipped; zero failures/errors | 198.144s |
+
+The 13 skips are PostgreSQL-only concurrency tests under isolated SQLite; these counts
+are not PostgreSQL operational validation. Focused fresh-subprocess tests use controlled
+synthetic configuration and redirected temporary dotenv fixtures, assert secret-canary
+non-leakage, and assert zero guarded database/socket/DNS/HTTP/provider/broker/storage/AWS/
+additional-subprocess attempts. Positive/negative admission covers WSGI, ASGI, Celery,
+management selection and the shell execution-marker regression; development/test profiles remain preserved.
+All six Python paths, including the added test module, passed AST parsing; whitespace and
+isolated system checks passed. Installed versions satisfied the runtime manifest. Postings
+migration drift was absent; global drift remained only known `EmailAccount.provider`; no
+migration was generated. Suites were not rerun after implementation commit/push or during
+this documentation reconciliation. No new operational validation is claimed.
+
+**MINOR — invalid-command tests do not directly assert dispatcher non-entry** remains
+non-blocking and unremediated. The shell regression directly proves the original bypass
+is fixed; representative invalid-command tests assert admission failure and zero external
+attempts, but do not independently mock/assert `execute_from_command_line()` non-entry.
+The straight-line pre-dispatch gate plus shell regression provides implementation confidence;
+this is a test-strength limitation only.
+
+Generic no-label discovery retains **PRE-EXISTING NON-BLOCKER**, unresolved and not green;
+no generic-discovery remediation or new validation is claimed. The three historical traffic
+MINORs remain unchanged, non-blocking, unremediated and unrelated to this settings slice:
+**MINOR — workflow-specific traffic assertion coverage**,
+**MINOR — Category traffic assertion excludes later coexistence intervals**, and
+**MINOR — Assignment GET traffic policy is not bound to workflow scope**.
+
+This checkpoint does not establish PostgreSQL connectivity/TLS, native libpq deployment,
+trusted proxy topology, private storage, Redis/Celery broker operation, OAuth/provider
+credentials or execution, production browser acceptance, deployment, coordinated backup/restore,
+or cutover/rollback. Manual-status concurrency and provider-automation policy remain unresolved.
 
 ### Workspace-Scoped Application Category Assignment Browser Workflow — committed checkpoint, 2026-10-06
 
@@ -1521,12 +1629,14 @@ All ten decisions are approved; full boundaries and consequences live in the
   core/application/document/posting APIs now require a selected workspace in the
   URL. New retained-email inspection is also workspace-scoped; transitional
   provider APIs remain separate, and old destructive deletion routes are retired.
-  Production settings still inherit SQLite.
+  Production now admits explicit PostgreSQL configuration without SQLite/development-secret
+  fallbacks; admission/profile enforcement is implemented, with operational gates still open (§2).
 - Environments: `.venv/` for legacy tests; `backend/venv/` for Django. Manifests:
   `_app/requirements.txt`, `requirements-dev.txt`, `desktop/requirements.txt`,
   and `backend/requirements.txt`. Isolated validation additionally uses
-  `backend/requirements-postgres-test.txt` and harness-only test settings; production
-  settings still inherit SQLite.
+  `backend/requirements-postgres-test.txt` and harness-only test settings. Production runtime
+  ownership of `psycopg==3.3.6` is now declared in `backend/requirements.txt`; native libpq
+  deployment and live production connectivity remain unvalidated.
 
 ## 5. Functional migration matrix
 
@@ -1550,10 +1660,15 @@ No newly accepted capability is marked verified merely because it is designed.
 | Retained messages/review | Protected source/observation models, verified Gmail lineage and native-ID producer adoption; scoped review inspection, explicit attachment, independent disposition and atomic create-Application orchestration with durable results; retained-source summary browsing supports extraction evidence selection; DjangoFoundation now provides read-only retained Application review inspection and navigation to existing Application core detail | Retention, Gmail adoption, attachment/disposition/creation APIs, migration preservation and SQLite logical concurrency coverage in §2; current combined browser/read-contract evidence and bounded PostgreSQL retention/extraction conflict evidence above | Browser review dismiss/restore/create/attach and broader evidence/creation-result workflows, other-provider adoption and operational validation pending |
 | Postings | Integer PK plus immutable Workspace-scoped portable UUID; existing extractor/ingestion and list/save/dismiss/restore/apply APIs; explicit retained-text extraction production with validated historical replay, operator batch extraction execution and source-scoped read-only extraction evidence inspection, plus a workspace-scoped read-only retained extraction evidence HTTP API and read-only Workspace browser evidence UI; retained extraction/items and corrections, PostingSource mapping/corrections, item interpretation, posting-level arbitration, descriptor projection, canonical allocation, stateless review orchestration and bounded advisory candidate discovery | Identity/migration/replay and authority-boundary coverage in §2; HTTP checkpoint API 18, retained inspection 22, combined focused 262 and postings 615 passed; UI checkpoint Node 16, Chromium 28, relevant Django 95 and full Django 1,332 passed; bounded PostgreSQL extraction/retention evidence above | Sync does not produce canonical postings; automatic retained-to-canonical workflows, broader canonical consumers, provider/sync adoption, canonical-posting/review frontend and remaining Application/review action/evidence UI, broader retained-workflow APIs, concurrency outside the exercised extraction/retention boundary, production load and deployment/cutover validation remain pending |
 | Import/export | No Django legacy importer or portable export/restore | Unimplemented/unverified | Reconciliation/cutover pending |
-| Production | Partial settings/storage/task scaffolding; SQLite inherited, development fallbacks remain | Suite success is not deployment verification | Isolated extraction/retention PostgreSQL evidence above; production PostgreSQL/storage/jobs/backup/restore/rollback pending |
+| Production | Fail-closed configuration admission: explicit PostgreSQL shape, required secrets/provider keys, validated hosts/security and profile/pre-dispatch enforcement at `160c8a4`; existing storage/task scaffolding remains | Focused admission and full labelled isolated SQLite regression evidence in §2; suite success is not deployment verification | Bounded extraction/retention PostgreSQL evidence remains separate; production connectivity/TLS/libpq/proxy/storage/broker/providers/browser/deployment/backup/restore/cutover gates open |
 
 ## 6. Known parity gaps and blockers
 
+- Production fail-closed configuration admission is complete (§2). Actual PostgreSQL
+  connectivity/TLS, deployed libpq, proxy topology, storage, broker, provider operations,
+  production browser acceptance, deployment, backup/restore and cutover remain open (§10).
+  Provider-key admission does not resolve source-admission/recurring-operation identity,
+  selector/retry authority or extraction/cursor coupling; manual-status concurrency is unchanged.
 - Retained-text extraction production, explicit operator batch execution, source-level
   evidence inspection, its workspace-scoped read-only HTTP adapter and authenticated
   DjangoFoundation browser evidence UI are complete. Broader retained-review/Application
@@ -1616,6 +1731,10 @@ unpaginated Category/member arrays, inherited serializer/download costs, advisor
 safe-ID and transient-navigation limits; scale/performance remains unvalidated.
 
 ## 7. Current implementation phase
+
+Production configuration admission/profile hardening is committed at
+`160c8a4007f262bab1361485b959accce145a628`; scope, retained validation and limitations
+are in §2. It adds no domain authority and closes no operational production gate.
 
 Decisions 1–10 and foundational Topics 1–9, including final refinements, are
 accepted. **Workspace Scoping Core — Backend Only is implemented.** A reusable
@@ -2067,7 +2186,7 @@ preservation, reverse limitations and verification evidence.
 
 ## 8. Completed checkpoint and separately scoped remaining work
 
-- Retained-text extraction production, explicit operator batch execution, source-scoped read-only evidence inspection, its workspace-scoped read-only HTTP API and authenticated Workspace browser evidence UI are complete through `8a4af32e4fb9949430487449e5cbaaea5ab93a3c`; bounded extraction/retention PostgreSQL validation is complete at `c71f6cdcf183a4e76333b2c62582b8ecfdb1fc68`, alongside the existing explicit retained-posting authorities. Read-only Application list/core-detail browsing is complete at `845ad1f57addaf350b974aeaecc5aba5a750d2fa`; retained Application review inspection with core-detail navigation is complete at `bcad64038e6fbb4c224dc5a7ddfe075d4b3f22f7`; read-only named Category inspection with Application navigation is complete at `17ec29a476503d0e91ce7b6f123604386e04dad3`, consuming existing GET authority only. Standalone Application Category assignment/move/clear is complete at `6d2c736cb9a5a2bb68850019e74a77546c819f25`, invoking existing assignment authority as one bounded browser mutation workflow. The next substantive migration slice remains unselected and unauthorized. Provider/sync adoption, automatic canonical workflows, broader canonical consumers, broader retained-workflow APIs, remaining Application/domain frontend work, concurrency outside the exercised boundary, production load and production/operational/cutover validation require separate planning and authorization. Prior local database provenance remains unresolved.
+- Retained-text extraction production, explicit operator batch execution, source-scoped read-only evidence inspection, its workspace-scoped read-only HTTP API and authenticated Workspace browser evidence UI are complete through `8a4af32e4fb9949430487449e5cbaaea5ab93a3c`; bounded extraction/retention PostgreSQL validation is complete at `c71f6cdcf183a4e76333b2c62582b8ecfdb1fc68`, alongside the existing explicit retained-posting authorities. Read-only Application list/core-detail browsing is complete at `845ad1f57addaf350b974aeaecc5aba5a750d2fa`; retained Application review inspection with core-detail navigation is complete at `bcad64038e6fbb4c224dc5a7ddfe075d4b3f22f7`; read-only named Category inspection with Application navigation is complete at `17ec29a476503d0e91ce7b6f123604386e04dad3`, consuming existing GET authority only. Standalone Application Category assignment/move/clear is complete at `6d2c736cb9a5a2bb68850019e74a77546c819f25`, invoking existing assignment authority as one bounded browser mutation workflow. Production fail-closed configuration admission is complete at `160c8a4007f262bab1361485b959accce145a628` as architecture hardening, without extending browser/domain capability. The next substantive migration slice remains unselected and unauthorized. Provider/sync adoption, automatic canonical workflows, broader canonical consumers, broader retained-workflow APIs, remaining Application/domain frontend work, concurrency outside the exercised boundary, production load and production/operational/cutover validation require separate planning and authorization. Prior local database provenance remains unresolved.
 
 Remaining areas below are unranked and require separate scope/authorization. No next substantive slice is selected.
 
@@ -2094,7 +2213,12 @@ No local/hosted synchronization or silent installation repointing is implied.
 
 ## 10. Production validation and retirement gates
 
-All remain open unless supported by new, recorded evidence:
+Fail-closed configuration admission and profile enforcement are implemented (§2).
+This does not close the operational gates below, which remain open unless supported
+by separate recorded evidence:
+
+- Actual production PostgreSQL connectivity, TLS/certificate and pooling policy, native
+  libpq deployment, deployment environment and trusted proxy topology; HSTS rollout is deferred.
 - Same-origin product sessions/CSRF, administrative onboarding/recovery, isolation.
 - Production PostgreSQL deployment/migration and broader concurrency/load validation
   (isolated extraction/retention evidence above does not close this gate), private storage,
@@ -2110,6 +2234,12 @@ All remain open unless supported by new, recorded evidence:
   desktop retirement; no deletion/alteration of local source data without approval.
 
 ## 11. Historical checkpoint context
+
+2026-10-07: production settings admission was committed/pushed at
+`160c8a4007f262bab1361485b959accce145a628`, parent documentation checkpoint
+`c96be928f065b82f114aa0ecc3b845b0c6e92334`. §2 records its retained pre-commit evidence,
+corrected management-command bypass and configuration-only boundary. This Status-only
+reconciliation adds no application tests or operational evidence; prior checkpoints remain intact.
 
 At `ecd1727`, main is integrated and inspected legacy fixes are preserved. Three
 repeated legacy commits are patch-equivalent; no inspected evidence of merge
