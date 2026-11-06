@@ -1,0 +1,10 @@
+# Stands in for the ALB: terminates TLS (local self-signed CA) and forwards plain HTTP to
+# the web container with X-Forwarded-Proto: https, which Caddy sets itself.
+{
+	auto_https disable_redirects
+}
+
+https://localhost:8443 {
+	tls internal
+	reverse_proxy web:8000
+}

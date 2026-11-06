@@ -33,5 +33,5 @@ EXPOSE 8000
 
 # Web by default. Override the command for other roles (see docs/DEPLOYMENT.md):
 #   celery -A config worker -l info
-#   celery -A config beat -l info
+#   celery -A config beat -l info -s /tmp/celerybeat-schedule
 CMD ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "3", "--access-logfile", "-"]

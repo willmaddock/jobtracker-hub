@@ -1,0 +1,116 @@
+# Local production-like stack: the SAME image as AWS, run against real Postgres, Redis and
+# an S3-compatible mock (Adobe S3Mock), behind a TLS-terminating proxy (Caddy) that plays the ALB.
+# Local testing only: never use these settings or credentials anywhere else.
+#
+#   sh deploy/local/make-env.sh                                   # once: writes deploy/local/.env
+#   docker compose -f docker-compose.local.yml up --build -d
+#   docker compose -f docker-compose.local.yml run --rm web python manage.py createsuperuser
+#   open https://localhost:8443/admin/   (accept the local certificate warning)
+#   docker compose -f docker-compose.local.yml down        # add -v to also delete all data
+
+x-app: &app
+  build: .
+  image: jobtracker-hub
+  env_file: deploy/local/.env
+  environment:
+    DJANGO_SETTINGS_MODULE: config.settings.prod
+    DJANGO_ALLOWED_HOSTS: localhost
+    DJANGO_BEHIND_TLS_PROXY: "true"
+    DJANGO_DB_HOST: db
+    DJANGO_DB_PORT: "5432"
+    DJANGO_DB_NAME: jobtracker
+    DJANGO_DB_USER: jobtracker
+    CELERY_BROKER_URL: redis://redis:6379/0
+    AWS_STORAGE_BUCKET_NAME: jth-local
+    AWS_S3_REGION_NAME: us-east-1
+    AWS_S3_ENDPOINT_URL: http://s3mock:9090
+  depends_on:
+    db: {condition: service_healthy}
+    redis: {condition: service_started}
+
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: jobtracker
+      POSTGRES_USER: jobtracker
+    env_file: deploy/local/.env   # supplies POSTGRES_PASSWORD
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jobtracker -d jobtracker"]
+      interval: 3s
+      retries: 20
+
+  redis:
+    image: redis:7
+
+  s3mock:
+    image: adobe/s3mock   # S3-compatible mock; keeps data in a temp dir inside the container
+    expose: ["9090"]
+
+  # Creates the bucket with boto3 from the app image (no extra image to pull).
+  minio-init:
+    <<: *app
+    depends_on:
+      s3mock: {condition: service_started}
+    restart: "no"
+    command:
+      - python
+      - -c
+      - |
+        import os, time, boto3
+        from botocore.exceptions import ClientError
+        s3 = boto3.client("s3", endpoint_url=os.environ["AWS_S3_ENDPOINT_URL"],
+                          aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
+                          aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
+                          region_name="us-east-1")
+        bucket = os.environ["AWS_STORAGE_BUCKET_NAME"]
+        for _ in range(60):
+            try:
+                s3.create_bucket(Bucket=bucket)
+                break
+            except ClientError as e:
+                if e.response["Error"]["Code"] in ("BucketAlreadyOwnedByYou", "BucketAlreadyExists"):
+                    break
+                time.sleep(1)
+            except Exception:
+                time.sleep(1)
+        else:
+            raise SystemExit("bucket not created")
+        print("bucket ready:", bucket)
+
+  migrate:
+    <<: *app
+    command: python manage.py migrate
+    restart: "no"
+
+  web:
+    <<: *app
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      minio-init: {condition: service_completed_successfully}
+    expose: ["8000"]
+
+  worker:
+    <<: *app
+    command: celery -A config worker -l info
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+
+  beat:
+    <<: *app
+    command: celery -A config beat -l info -s /tmp/celerybeat-schedule
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+
+  proxy:
+    image: caddy:2
+    ports: ["8443:8443"]
+    volumes:
+      - ./deploy/local/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+    depends_on: [web]
+
+volumes:
+  pgdata:
+  caddydata:

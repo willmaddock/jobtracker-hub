@@ -12,7 +12,7 @@ no staging deploy was run. This does not close the Status §10 production gates.
 |---|---|
 | web | image default: `gunicorn config.wsgi:application --bind 0.0.0.0:8000` |
 | worker | `celery -A config worker -l info` |
-| beat (exactly one instance) | `celery -A config beat -l info` |
+| beat (exactly one instance) | `celery -A config beat -l info -s /tmp/celerybeat-schedule` |
 | migrate (one-off task, not on every web start) | `python manage.py migrate` |
 
 Build from the repository root (the backend serves `_app/frontend/`):
@@ -37,6 +37,14 @@ Use an IAM role for S3 instead of static keys where possible.
 4. **Celery/Redis pins:** `celery==5.7.0`, `redis==8.1.0`.
 5. **Data:** start fresh on the hosted instance; no migration from the macOS app. Revisit later
    if needed.
+
+## Local production-like stack (before AWS)
+`docker-compose.local.yml` runs the same image as AWS against Postgres, Redis and Adobe S3Mock
+(S3-compatible mock), with Caddy as a stand-in for the ALB (TLS termination, `X-Forwarded-Proto`).
+Run `sh deploy/local/make-env.sh` once (random throwaway credentials, git-ignored), then
+`docker compose -f docker-compose.local.yml up --build -d` and browse to
+`https://localhost:8443/` (accept the local certificate warning). Local testing only.
+It does not cover: RDS database TLS, IAM-role S3 access, ALB security groups, or real DNS/ACM.
 
 ## First-user onboarding (administrator-created accounts, no signup)
 Run as one-off tasks using the same image and environment as web:
