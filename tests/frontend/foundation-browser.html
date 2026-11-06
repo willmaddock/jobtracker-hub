@@ -79,9 +79,10 @@ document.querySelector('#run').onclick = async function () {
       const path=url.pathname, query=Array.from(url.searchParams.entries());
       // The sole mutation exception is the existing, explicitly exercised logout.
       // The disposable hook marks it only around that foundation control action.
-      if(call.method==='POST')return allowedDispositionPost(call)||call.foundationAction==='logout'&&path==='/api/auth/logout'&&!query.length;
+      if(call.method==='POST')return allowedAttachPost(call)||allowedDispositionPost(call)||call.foundationAction==='logout'&&path==='/api/auth/logout'&&!query.length;
       if(call.method==='PUT')return allowedAssignmentPut(call);
       if(call.method!=='GET')return false;
+      if(call.attachReadScope)return allowedAttachRead(call);
       if(['/api/auth/csrf','/api/auth/me','/api/workspaces/'].includes(path))return !query.length;
       const positive=value=>/^[1-9]\d*$/.test(value)&&Number.isSafeInteger(Number(value));
       let match=/^\/api\/workspaces\/([1-9]\d*)\/insights\/$/.exec(path);
@@ -589,12 +590,12 @@ document.querySelector('#run').onclick = async function () {
       await click('Dismiss review');await wait(()=>button('Confirm dismissal'),'fresh confirmation');await click('Cancel review change');await click('Close reviews');
     });
     await test('pending disposition and reconciliation withhold source inspection and stale source controls cannot interrupt them',async()=>{
-      await dispositionControl('restore');await openDisposition();const old=button('Inspect retained text');await prepareDisposition();let release;
+      await dispositionControl('restore');await openDisposition();const old=button('Inspect retained text'),oldAttach=button('Attach to existing Application');await prepareDisposition();let release;
       intercept=path=>path===dispositionUrl('dismiss')?new Promise(r=>release=()=>r(response(500,{}))):null;
-      await confirmDisposition();await wait(()=>release,'pending disposition');old.click();await new Promise(r=>setTimeout(r,20));assert(!sourcePane()&&!button('Inspect retained text'),'pending mutation interrupted');release();intercept=null;await dispositionSettled();
+      await confirmDisposition();await wait(()=>release,'pending disposition');old.click();oldAttach.click();await new Promise(r=>setTimeout(r,20));assert(!sourcePane()&&!doc.querySelector('[data-testid="review-attach"]')&&!button('Inspect retained text'),'pending mutation interrupted');release();intercept=null;await dispositionSettled();
       await prepareDisposition();const oldSource=button('Inspect retained text');let releaseRead,submitted=false;
       intercept=path=>{if(path===dispositionUrl('dismiss')){submitted=true;return response(500,{});}if(submitted&&path===reviewUrl(dispositionId))return new Promise(r=>releaseRead=()=>r(response(500,{})));return null;};
-      await confirmDisposition();await wait(()=>releaseRead,'pending reconciliation');oldSource.click();assert(!sourcePane()&&!button('Inspect retained text'),'reconciliation interrupted');releaseRead();intercept=null;await dispositionSettled();await click('Close reviews');
+      await confirmDisposition();await wait(()=>releaseRead,'pending reconciliation');oldSource.click();oldAttach.click();assert(!sourcePane()&&!doc.querySelector('[data-testid="review-attach"]')&&!button('Inspect retained text'),'reconciliation interrupted');releaseRead();intercept=null;await dispositionSettled();await click('Close reviews');
     });
     await test('source current expiry clears content and obsolete actor expiry cannot clear a newer session',async()=>{
       const label='complete',url=retainedSourceUrl(sourceCases[label].source);await openSourceReview(label);await inspectSource(label);
@@ -622,6 +623,149 @@ document.querySelector('#run').onclick = async function () {
       assert(calls.every(c=>c.method==='GET'&&allowedTraffic(c)||c.method==='POST'&&allowedDispositionPost(c)),'source workflow crossed unauthorized traffic');
       const valid=sourceCalls[0];for(const bad of [{...valid,url:retainedSourceUrl(sourceCases.empty.source)},{...valid,url:retainedSourceUrl(sourceCases.complete.source,2)},
         {...valid,url:valid.url+'?workspace=2'},{...valid,method:'POST'},{...valid,sourceReadIntent:null},{...valid,body:'{}'}])assert(!allowedSourceRead(bad),'source traffic policy too broad');
+    });
+    const attachFixtures=await client.request('/api/test-only/review-attach-fixtures'),attachIntents=[],attachReads=[];
+    const attachUrl=label=>reviewUrl(attachFixtures.cases[label].review)+'attach/';
+    const attachPane=()=>doc.querySelector('[data-testid="review-attach"]');
+    const attachTarget=id=>doc.querySelector('[data-attach-target="'+id+'"]');
+    const attachControl=(command,label='zero',target=attachFixtures.targets.first)=>client.request('/api/test-only/review-attach-control',{method:'POST',body:{command,label,target}});
+    function allowedAttachPost(call) {
+      const i=call.attachIntent;if(!i)return false;const c=attachFixtures.cases[i.label],u=new URL(call.url,location.origin);
+      return !!c&&call.method==='POST'&&u.origin===location.origin&&!u.search&&!u.hash&&i.workspace===1&&i.review===c.review&&i.source===c.source&&
+        Object.values(attachFixtures.targets).includes(i.target)&&call.url===attachUrl(i.label)&&call.body===JSON.stringify({application_id:i.target})&&Number.isSafeInteger(i.sequence)&&i.sequence>0;
+    }
+    function allowedAttachRead(call) {
+      const i=call.attachReadScope;if(!i)return false;const c=attachFixtures.cases[i.label],u=new URL(call.url,location.origin);
+      return !!c&&i.review===c.review&&i.source===c.source&&i.workspace===1&&call.method==='GET'&&call.body===undefined&&u.origin===location.origin&&!u.search&&!u.hash&&
+        [reviewList,reviewUrl(c.review),appList,...(i.target!==null&&Object.values(attachFixtures.targets).includes(i.target)?[appUrl(i.target)]:[])].includes(call.url);
+    }
+    function attachmentScope(label,target=null) {
+      const c=attachFixtures.cases[label],scope={label,review:c.review,source:c.source,target,workspace:1};attachReads.push(scope);win.__fixtureAttachReadScope=scope;
+    }
+    async function openAttach(label) {
+      win.__fixtureAttachReadScope=null;if(reviewPanel())await click('Close reviews');await openReviews();attachmentScope(label);
+      reviewButton(attachFixtures.cases[label].review).click();await wait(()=>reviewDetail()&&button('Attach to existing Application'),'attachment review');
+      await click('Attach to existing Application');await wait(()=>attachPane()&&!text().includes('Loading fresh attachment observations'),'attachment targets');
+    }
+    async function chooseAttach(label,target) {attachmentScope(label,target);attachTarget(target).click();await new Promise(r=>setTimeout(r,0));await wait(()=>!text().includes('Loading fresh attachment observations'),'attachment confirmation');}
+    async function confirmAttach(label,target,rapid=false) {
+      const i={label,review:attachFixtures.cases[label].review,source:attachFixtures.cases[label].source,target,workspace:1,sequence:attachIntents.length+1};attachIntents.push(i);win.__fixtureAttachIntent=i;
+      const b=button('Confirm attachment')||button('Confirm existing attachment');assert(b,'confirmation absent');b.click();if(rapid){b.click();b.click();}await new Promise(r=>setTimeout(r,0));
+    }
+    const attachSettled=()=>wait(()=>reviewDetail()||text().includes('Current relationship refresh failed'),'attachment settled');
+    const finishAttach=async()=>{intercept=null;win.__fixtureAttachReadScope=null;if(reviewPanel())await click('Close reviews');};
+    const attachTrafficStart=traffic.length;
+    await test('attachment supports zero one many candidates and explicit outside archived non-pipeline targets',async()=>{
+      for(const label of ['zero','one','many']){
+        await openAttach(label);assert(!button('Confirm attachment')&&!button('Confirm existing attachment'),'automatic target');
+        const pane=attachPane().textContent;assert(pane.includes('Outside snapshot')&&pane.includes('Archived'),'outside/archived omitted');
+        if(label==='many')assert(pane.includes('Application '+attachFixtures.targets.first)&&pane.includes('Application '+attachFixtures.targets.second),'attempts collapsed');
+        const start=traffic.length;await chooseAttach(label,attachFixtures.targets.outside);assert(button('Confirm attachment'),'outside confirmation');
+        const reads=traffic.slice(start).filter(c=>c.method==='GET');assert(reads.length===2&&reads[0].url===appUrl(attachFixtures.targets.outside)&&reads[1].url===reviewUrl(attachFixtures.cases[label].review),'fresh read order');
+        await finishAttach();
+      }
+    });
+    await test('actual attachment 201 rapid confirmation inserts only one pair and preserves all other domain tables',async()=>{
+      const before=await attachControl('snapshot');await openAttach('zero');await chooseAttach('zero',attachFixtures.targets.outside);const start=traffic.length;
+      await confirmAttach('zero',attachFixtures.targets.outside,true);await attachSettled();assert(text().includes('Attachment creation was acknowledged')&&text().includes('relationship is present'),'201 receipt');
+      const after=await attachControl('snapshot');assert(before.digest===after.digest&&after.pairs.length===before.pairs.length+1,'unauthorized domain change');const inserted=after.pairs.filter(p=>!before.pairs.some(old=>old.id===p.id));assert(inserted.length===1&&inserted[0].application_id===attachFixtures.targets.outside&&inserted[0].retained_message_id===attachFixtures.cases.zero.source&&inserted[0].workspace_id===1&&inserted[0].origin==='manual','wrong inserted pair');assert(traffic.slice(start).filter(c=>c.method==='POST').length===1,'duplicate POST');
+      win.__fixtureAttachReadScope=null;await click('Back to reviews');await wait(()=>reviewButton(attachFixtures.cases.zero.review),'page one');assert(!button('Load more reviews')||reviewPanel(),'list return');assert(traffic.slice(start).some(c=>c.url===reviewList&&c.method==='GET'),'no page-one reload');await finishAttach();
+    });
+    await test('existing and dismissed-existing pairs return 200 without changing identity or domain state',async()=>{
+      for(const label of ['existing','dismissed-existing']){const before=await attachControl('snapshot');await openAttach(label);assert(attachPane().textContent.includes('Already associated'),'existing indicator');await chooseAttach(label,attachFixtures.targets.first);assert(button('Confirm existing attachment'),'existing confirmation');await confirmAttach(label,attachFixtures.targets.first);await attachSettled();assert(text().includes('existing attachment was acknowledged'),'200 lost');const after=await attachControl('snapshot');assert(JSON.stringify(after)===JSON.stringify(before),'replay changed domain');await finishAttach();}
+    });
+    await test('dismissed new conflict and trashed target observations withhold confirmation',async()=>{
+      for(const label of ['dismissed','conflict']){await openAttach(label);await chooseAttach(label,attachFixtures.targets.outside);assert(!button('Confirm attachment')&&!button('Confirm existing attachment'),'ineligible confirmation');await finishAttach();}
+      await openAttach('one');assert(!attachTarget(attachFixtures.targets.trashed),'trashed in target list');await finishAttach();
+    });
+    await test('concurrent pair creation yields valid 200 without claiming a new insert',async()=>{
+      await openAttach('many');await chooseAttach('many',attachFixtures.targets.second);await attachControl('attach','many',attachFixtures.targets.second);const before=await attachControl('snapshot');await confirmAttach('many',attachFixtures.targets.second);await attachSettled();assert(text().includes('existing attachment was acknowledged'),'concurrent 200 rejected');assert(JSON.stringify(await attachControl('snapshot'))===JSON.stringify(before),'concurrent replay wrote');await finishAttach();
+    });
+    await test('committed response loss reconciles with GET only and never attributes current pair to request',async()=>{
+      await openAttach('lost');await chooseAttach('lost',attachFixtures.targets.outside);let posted=false;const before=await attachControl('snapshot'),start=traffic.length;
+      intercept=(path,o)=>path===attachUrl('lost')?(async()=>{const r=await win.__fixtureNativeFetch(path,o);assert(r.status===201,'did not commit');posted=true;throw Error('lost after commit');})():null;
+      await confirmAttach('lost',attachFixtures.targets.outside);await attachSettled();assert(posted&&text().includes('may have completed')&&text().includes("do not prove this request's effect")&&text().includes('relationship is present'),'uncertainty misattributed');
+      const after=await attachControl('snapshot');assert(before.digest===after.digest&&after.pairs.length===before.pairs.length+1,'lost preservation');assert(traffic.slice(start).filter(c=>c.method==='POST').length===1,'mutation replay');await finishAttach();
+    });
+    await test('actual post-commit count contention returns lifecycle_busy and browser reconciles uncertain outcome with GET only',async()=>{
+      const label='busy',target=attachFixtures.targets.outside;await openAttach(label);await chooseAttach(label,target);
+      const before=await attachControl('snapshot');await attachControl('post-count-busy',label,target);const start=traffic.length;let refusedResponse=false;
+      intercept=(path,o)=>path===attachUrl(label)?(async()=>{const r=await win.__fixtureNativeFetch(path,o),body=await r.clone().json();assert(r.status===503&&body.code==='lifecycle_busy','fault not converted');refusedResponse=true;return r;})():null;
+      await confirmAttach(label,target);await attachSettled();assert(refusedResponse&&text().includes('Attachment may have completed')&&text().includes('does not prove this request created')&&text().includes('relationship is present'),'busy outcome claimed refusal/success');
+      assert(!text().includes('Attachment was refused')&&!text().includes('creation was acknowledged'),'false definitive outcome');
+      const after=await attachControl('snapshot'),inserted=after.pairs.filter(p=>!before.pairs.some(old=>old.id===p.id));assert(before.digest===after.digest&&inserted.length===1&&inserted[0].application_id===target&&inserted[0].retained_message_id===attachFixtures.cases[label].source,'count fault did not preserve commit');
+      const calls=traffic.slice(start);assert(calls.filter(c=>c.method==='POST').length===1&&calls.some(c=>c.method==='GET'&&c.url===reviewUrl(attachFixtures.cases[label].review)),'busy replay/no GET');
+      const audit=await client.request('/api/test-only/review-attach-audit');assert(audit.post_commit_failures.some(f=>f.path===attachUrl(label)&&f.outside_atomic&&f.pair_id===inserted[0].id),'commit boundary unproven');await finishAttach();
+    });
+    await test('post-commit lifecycle_busy with failed reconciliation retains uncertainty until fresh GET and explicit reconfirmation',async()=>{
+      const label='busy-failed',target=attachFixtures.targets.outside;await openAttach(label);await chooseAttach(label,target);await attachControl('post-count-busy',label,target);let submitted=false;
+      intercept=(path,o)=>{if(path===attachUrl(label))return(async()=>{const r=await win.__fixtureNativeFetch(path,o);assert(r.status===503&&(await r.clone().json()).code==='lifecycle_busy','missing post-commit busy');submitted=true;return r;})();if(submitted&&path===reviewUrl(attachFixtures.cases[label].review))return response(500,{detail:'PRIVATE'});return null;};
+      const start=traffic.length;await confirmAttach(label,target);await attachSettled();assert(text().includes('may have completed')&&text().includes('Current relationship refresh failed')&&!button('Attach to existing Application')&&!button('Confirm attachment'),'failed refresh lost uncertainty');
+      intercept=null;await click('Refresh current review');await wait(()=>reviewDetail(),'busy fresh GET');assert(text().includes('may have completed')&&text().includes('relationship is present')&&!button('Confirm existing attachment'),'refresh claimed outcome or restored confirmation');
+      await click('Attach to existing Application');await wait(()=>attachPane()&&!text().includes('Loading fresh attachment observations'),'busy new selector');assert(!button('Confirm existing attachment'),'selected automatically');await chooseAttach(label,target);assert(button('Confirm existing attachment'),'fresh reconfirmation missing');
+      assert(traffic.slice(start).filter(c=>c.method==='POST').length===1,'busy automatically replayed');await finishAttach();
+    });
+    await test('malformed receipts and failed reconciliation require explicit GET refresh and new confirmation',async()=>{
+      for(const broken of [{id:1},{...await(await win.__fixtureNativeFetch(reviewUrl(attachFixtures.cases.existing.review))).json(),origin:'invalid'}]){
+        await openAttach('existing');await chooseAttach('existing',attachFixtures.targets.first);let submitted=false;
+        intercept=path=>{if(path===attachUrl('existing')){submitted=true;return response(200,broken);}if(submitted&&path===reviewUrl(attachFixtures.cases.existing.review))return response(500,{detail:'PRIVATE'});return null;};
+        const start=traffic.length;await confirmAttach('existing',attachFixtures.targets.first);await attachSettled();assert(!button('Attach to existing Application')&&!text().includes('PRIVATE'),'failed read enabled changes');intercept=null;await click('Refresh current review');await wait(()=>reviewDetail(),'manual GET');assert(!button('Confirm existing attachment')&&traffic.slice(start).filter(c=>c.method==='POST').length===1,'replay/confirmation resurrected');await finishAttach();
+      }
+    });
+    await test('target UUID and scope malformed reads fail closed',async()=>{
+      for(const field of ['portable_id','workspace','id']){await openAttach('one');const target=attachFixtures.targets.first,raw=await(await win.__fixtureNativeFetch(appUrl(target))).json();raw[field]=field==='portable_id'?'invalid':Number.MAX_SAFE_INTEGER+1;intercept=path=>path===appUrl(target)?response(200,raw):null;await chooseAttach('one',target);assert(!button('Confirm attachment')&&!button('Confirm existing attachment'),'malformed target');await finishAttach();}
+    });
+    await test('eligibility changes after confirmation are rejected by real attachment authority',async()=>{
+      for(const command of ['trash','dismiss','conflict']){const label=command==='conflict'?'race':'one',target=command==='trash'?attachFixtures.targets.outside:attachFixtures.targets.second;await openAttach(label);await chooseAttach(label,target);await attachControl(command,label,target);const before=await attachControl('snapshot');await confirmAttach(label,target);await attachSettled();assert(text().includes('Attachment was rejected'),'eligibility race admitted');assert(JSON.stringify(await attachControl('snapshot'))===JSON.stringify(before),'rejection wrote');await finishAttach();if(command==='trash')await attachControl('restore',label,target);}
+    });
+    await test('source and disposition preparation cancel attachment; old controls cannot submit',async()=>{
+      await openAttach('existing');await chooseAttach('existing',attachFixtures.targets.first);const old=button('Confirm existing attachment'),before=traffic.length;const source=attachFixtures.cases.existing;
+      win.__fixtureAttachReadScope=null;win.__fixtureSourceReadIntent={label:'attachment-existing',review:source.review,source:source.source,workspace:1,sequence:sourceIntents.length+1};sourceCases['attachment-existing']=source;sourceIntents.push(win.__fixtureSourceReadIntent);
+      await click('Inspect retained text');await wait(()=>sourceContent(),'source coexistence');old.click();await new Promise(r=>setTimeout(r,20));assert(!traffic.slice(before).some(c=>c.method==='POST'),'source retained attachment');await click('Back to review');await wait(()=>reviewDetail(),'source return');await click('Attach to existing Application');await wait(()=>attachPane()&&!text().includes('Loading fresh attachment observations'),'prepare again');await chooseAttach('existing',attachFixtures.targets.first);const old2=button('Confirm existing attachment');await click('Dismiss review');await wait(()=>button('Confirm dismissal'),'disposition preparation');old2.click();assert(!attachPane()&&!traffic.slice(before).some(c=>c.method==='POST'),'disposition retained attachment');await click('Cancel review change');await finishAttach();
+    });
+    await test('pending attachment and held reconciliation block competing mutation and stale inspection controls',async()=>{
+      await openAttach('existing');await chooseAttach('existing',attachFixtures.targets.first);const staleSource=button('Inspect retained text'),staleDisposition=button('Dismiss review'),staleAttach=button('Attach to existing Application'),staleCancel=button('Cancel attachment');let release,releaseRead,submitted=false;
+      intercept=path=>{if(path===attachUrl('existing'))return new Promise(r=>release=()=>{submitted=true;r(response(500,{}));});if(submitted&&path===reviewUrl(attachFixtures.cases.existing.review))return new Promise(r=>releaseRead=()=>r(response(500,{})));return null;};
+      await confirmAttach('existing',attachFixtures.targets.first);await wait(()=>release,'held POST');staleSource.click();staleDisposition.click();staleAttach.click();staleCancel.click();assert(!sourcePane()&&!attachPane()&&!button('Confirm dismissal'),'pending overlap');release();await wait(()=>releaseRead,'held reconcile');staleSource.click();staleDisposition.click();staleAttach.click();staleCancel.click();assert(!sourcePane()&&!attachPane()&&!button('Confirm dismissal'),'reconcile overlap');releaseRead();await attachSettled();await finishAttach();
+    });
+    await test('attachment preparation target and submitted responses cannot survive navigation or obsolete auth',async()=>{
+      for(const stage of ['prepare','target','post'])for(const status of [200,500,401])for(const navigation of ['back','close','workspace','panel']){
+        const label='existing',target=attachFixtures.targets.first;await openAttach(label);if(stage==='post')await chooseAttach(label,target);let release,signal;
+        const url=stage==='prepare'?reviewUrl(attachFixtures.cases[label].review):stage==='target'?appUrl(target):attachUrl(label);
+        const valid=stage==='post'?await attachControl('receipt',label,target):await(await win.__fixtureNativeFetch(url)).json();
+        intercept=(path,o)=>path===url?new Promise(r=>{signal=o.signal;release=()=>r(response(status,status===200?valid:{code:status===401?'authentication_required':'request_failed'}));}):null;
+        if(stage==='prepare')await click('Attach to existing Application');else if(stage==='target'){attachmentScope(label,target);attachTarget(target).click();}else await confirmAttach(label,target);
+        await wait(()=>release,'held attachment');if(navigation==='back')await click('Back to reviews');else if(navigation==='close')await click('Close reviews');else if(navigation==='panel'){win.__fixtureAttachReadScope=null;await click('Applications');await wait(()=>appPanel(),'attachment panel switch');}else{const select=doc.querySelector('[aria-label="Workspace"]');select.value='2';select.dispatchEvent(new win.Event('change',{bubbles:true}));await wait(()=>text().includes('Connected to B.'),'attach B');}
+        assert(signal.aborted,'attachment not aborted');release();await new Promise(r=>setTimeout(r,30));assert(!attachPane()&&!text().includes('Your session ended'),'obsolete attach auth');intercept=null;win.__fixtureAttachReadScope=null;if(navigation==='workspace')await returnA();if(reviewPanel())await click('Close reviews');
+      }
+    });
+    await test('partial source attaches; unavailable candidates stay disabled without changing target identity',async()=>{
+      await openAttach('unavailable');assert(attachPane().textContent.includes('trashed')&&attachPane().textContent.includes('removed'),'availability absent');
+      const shortcuts=Array.from(attachPane().querySelectorAll('button')).filter(b=>b.textContent.startsWith('Choose candidate'));assert(shortcuts.length===2&&shortcuts.every(b=>b.disabled),'unavailable shortcut enabled');await finishAttach();
+      await openAttach('partial');await chooseAttach('partial',attachFixtures.targets.outside);const before=await attachControl('snapshot');await confirmAttach('partial',attachFixtures.targets.outside);await attachSettled();assert(text().includes('creation was acknowledged'),'partial rejected');const after=await attachControl('snapshot');assert(before.digest===after.digest&&after.pairs.length===before.pairs.length+1,'partial changed other state');await finishAttach();
+    });
+    await test('cancelled target read cannot overwrite a newly selected attempt',async()=>{
+      await openAttach('existing');const target=attachFixtures.targets.first,url=appUrl(target);let release,signal;const raw=await(await win.__fixtureNativeFetch(url)).json();
+      intercept=(path,o)=>path===url?new Promise(r=>{signal=o.signal;release=()=>r(response(200,raw));}):null;
+      attachmentScope('existing',target);attachTarget(target).click();await wait(()=>release,'old target');await click('Cancel attachment');assert(signal.aborted,'old target not aborted');intercept=null;await click('Attach to existing Application');await wait(()=>attachPane()&&!text().includes('Loading fresh attachment observations'),'new selector');await chooseAttach('existing',attachFixtures.targets.second);release();await new Promise(r=>setTimeout(r,40));assert(button('Confirm attachment')&&!button('Confirm existing attachment'),'old target confirmation resurrected');await finishAttach();
+    });
+    await test('current attachment expiry clears context; obsolete target and POST actor responses cannot expire newer session',async()=>{
+      await openAttach('existing');intercept=path=>path===appUrl(attachFixtures.targets.first)?response(401,{code:'authentication_required'}):null;attachmentScope('existing',attachFixtures.targets.first);attachTarget(attachFixtures.targets.first).click();await wait(()=>text().includes('Your session ended'),'attach expiry');assert(!reviewPanel()&&!attachPane(),'attachment remained');intercept=null;win.__fixtureAttachReadScope=null;win.dispatchEvent(new win.Event('focus'));await wait(()=>text().includes('Signed in as alice'),'attachment session recovery');await returnA();
+      for(const stage of ['target','post'])for(const status of [200,500,401]){
+        await openAttach('existing');const target=attachFixtures.targets.first;if(stage==='post')await chooseAttach('existing',target);let release,signal;const url=stage==='post'?attachUrl('existing'):appUrl(target);
+        const valid=stage==='post'?await attachControl('receipt','existing',target):await(await win.__fixtureNativeFetch(url)).json();
+        intercept=(path,o)=>path===url?new Promise(r=>{signal=o.signal;release=()=>r(response(status,status===200?valid:{code:status===401?'authentication_required':'request_failed'}));}):null;
+        if(stage==='post')await confirmAttach('existing',target);else{attachmentScope('existing',target);attachTarget(target).click();}await wait(()=>release,'held actor attachment');
+        win.__fixtureAttachReadScope=null;await client.bootstrap();const bob=await client.request('/api/auth/login',{method:'POST',body:{username:'bob',password:'browser-fixture-only'}});context.setActor(bob.id);context.select(3);await client.bootstrap();win.dispatchEvent(new win.Event('focus'));await wait(()=>text().includes('Signed in as bob'),'attachment Bob');assert(signal.aborted,'actor attachment not aborted');release();await new Promise(r=>setTimeout(r,40));assert(!attachPane()&&!text().includes('Your session ended')&&text().includes('Signed in as bob'),'obsolete attachment auth');
+        intercept=null;await client.bootstrap();const alice=await client.request('/api/auth/login',{method:'POST',body:{username:'alice',password:'browser-fixture-only'}});context.setActor(alice.id);context.select(1);await client.bootstrap();win.dispatchEvent(new win.Event('focus'));await wait(()=>text().includes('Signed in as alice'),'attachment Alice');await returnA();
+      }
+    });
+    await test('attachment traffic binds exact review source target and confirmation across the full interval',async()=>{
+      const calls=traffic.slice(attachTrafficStart),posts=calls.filter(c=>c.url.endsWith('/attach/')&&c.method==='POST');assert(posts.length===attachIntents.length&&posts.every(allowedAttachPost),'unbound attachment');assert(new Set(posts.map(c=>c.attachIntent.sequence)).size===posts.length,'intent reused');
+      const scopedReads=calls.filter(c=>c.attachReadScope);assert(scopedReads.length>0&&scopedReads.every(allowedAttachRead),'unrelated attachment read');
+      const sample=scopedReads.find(c=>c.url===appUrl(c.attachReadScope.target));for(const bad of [{...sample,url:appUrl(attachFixtures.targets.trashed)},{...sample,url:sample.url.replace('/1/','/2/')},{...sample,url:sample.url+'?x=1'},{...sample,attachReadScope:{...sample.attachReadScope,source:99999}}])assert(!allowedAttachRead(bad),'broad read scope');
+      const audit=await client.request('/api/test-only/review-attach-audit');assert(audit.writes.length>0&&audit.writes.every(r=>[200,201,409].includes(r.status)||r.status===503&&audit.post_commit_failures.some(f=>f.path===r.path&&f.outside_atomic)),'forbidden attachment seam');
+      assert(calls.every(allowedTraffic),'unauthorized product traffic');const valid=posts[0];for(const bad of [{...valid,body:'{}'},{...valid,url:valid.url+'?x=1'},{...valid,attachIntent:{...valid.attachIntent,workspace:2}},{...valid,attachIntent:null}])assert(!allowedAttachPost(bad),'broad POST policy');
     });
     const categoryFixtures=await client.request('/api/test-only/category-fixtures');
     const categoryRoot='/api/workspaces/1/categories/',categoryListUrl=categoryRoot+'?show_archived=true';

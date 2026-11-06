@@ -68,11 +68,13 @@ with tempfile.TemporaryDirectory(prefix="jth-foundation-") as directory:
     mailbox = establish_mailbox(actor=alice, workspace=workspace, provider="gmail",
                                evidence={"method":"test", "reference":"browser-fixtures"})
     sources = {}
-    def retained(label, subject=None):
+    def retained(label, subject=None, partial=False):
         data = fixture(mailbox)
         data["source"]["value"] = "private-locator-" + label
         data["content"]["subject"] = subject if subject is not None else "private-subject-" + label
         data["content"]["text"]["value"] = "private-body-" + label
+        if partial:
+            data["content"]["text"].update(completeness="partial",reason="provider_limit")
         result = retain_observation(actor=alice, workspace=workspace, key=str(uuid.uuid4()), observation=data)
         return RetainedMessage.objects.get(pk=result.message_id)
     def extraction(message, outputs):
@@ -212,6 +214,113 @@ with tempfile.TemporaryDirectory(prefix="jth-foundation-") as directory:
             return JsonResponse({}, status=404)
         return JsonResponse({"reads":source_read_audit})
 
+    # Attachment cases use production authorities in this disposable database only.
+    from applications.models import ApplicationMessage
+    attach_cases = {}
+    missing_target=Application.objects.create(workspace=workspace,section="misc",company="Removed attach candidate",role_label="Gone")
+    outside = Application.objects.create(workspace=workspace, section="credentials", company="Outside snapshot", role_label="Archived target")
+    Override.objects.create(application=outside, archived=True)
+    for label, candidate_ids in (("zero", []), ("one", [first.pk]), ("many", [first.pk, second.pk]),
+                                  ("existing", [first.pk]), ("dismissed", []), ("dismissed-existing", [first.pk]),
+                                  ("conflict", []), ("lost", []), ("race", []), ("partial", []), ("busy", []), ("busy-failed", []), ("busy-focused", []), ("unavailable", [trashed.pk,missing_target.pk])):
+        message = retained("attach-" + label, partial=label=="partial")
+        review, _ = ensure_application_review(actor=alice, workspace=workspace, retained_message_id=message.pk,
+            observation_id=message.observations.first().pk, classification="ambiguous" if len(candidate_ids)>1 else "match" if candidate_ids else "application", candidate_ids=candidate_ids)
+        if label in {"existing", "dismissed-existing"}:
+            attach_message(actor=alice, workspace=workspace, application_id=first.pk, retained_message_id=message.pk)
+        if label.startswith("dismissed"):
+            set_review_dismissal(actor=alice, workspace=workspace, review_id=review.pk, dismissed=True, expected_revision=0)
+        if label == "conflict":
+            RetainedMessage.objects.filter(pk=message.pk).update(has_conflict=True)
+        attach_cases[label] = {"review":review.pk,"source":message.pk,"portable":str(message.portable_id)}
+
+    missing_target.delete()
+
+    attach_write_audit = []
+    post_count_faults = {}
+    post_commit_failures = []
+    class ReviewAttachWriteAudit:
+        def __init__(self, get_response):
+            self.get_response=get_response
+        def __call__(self, request):
+            import re
+            if request.method != "POST" or not re.fullmatch(r"/api/workspaces/[1-9]\d*/application-reviews/[1-9]\d*/attach/",request.path):
+                return self.get_response(request)
+            from contextlib import ExitStack
+            from unittest.mock import patch
+            with ExitStack() as stack:
+                for name in ("email_sync.providers.get_provider","email_sync.retention.retain_observation",
+                             "applications.derivation.derive_application","applications.derivation.apply_overrides",
+                             "django.core.files.storage.default_storage.open"):
+                    stack.enter_context(patch(name,side_effect=AssertionError("attachment crossed a forbidden boundary")))
+                fault=post_count_faults.pop(request.path,None)
+                if fault is not None:
+                    from django.db import connection, OperationalError
+                    from applications.review_views import review_relationships
+                    def faulty_relationships(ws, message_id):
+                        queryset=review_relationships(ws,message_id)
+                        def fail_count():
+                            pair=ApplicationMessage.objects.get(workspace=ws,retained_message_id=message_id,application_id=fault)
+                            if connection.in_atomic_block:
+                                raise AssertionError("count fault occurred before commit")
+                            post_commit_failures.append({"path":request.path,"target":fault,"source":message_id,
+                                                         "pair_id":pair.pk,"outside_atomic":True})
+                            raise OperationalError("database is locked")
+                        queryset.count=fail_count
+                        return queryset
+                    stack.enter_context(patch("applications.review_views.review_relationships",side_effect=faulty_relationships))
+                response=self.get_response(request)
+            attach_write_audit.append({"path":request.path,"status":response.status_code})
+            return response
+    settings.MIDDLEWARE=[*settings.MIDDLEWARE,__name__+".ReviewAttachWriteAudit"]
+    def attach_audit(request):
+        if request.user.pk != alice.pk:return JsonResponse({},status=404)
+        return JsonResponse({"writes":attach_write_audit,"post_commit_failures":post_commit_failures})
+
+    def attach_fixtures(request):
+        return JsonResponse({"cases":attach_cases,"targets":{"first":first.pk,"second":second.pk,"outside":outside.pk,"trashed":trashed.pk}})
+
+    class ReviewAttachFixtureControl(APIView):
+        def post(self, request):
+            if request.user.pk != alice.pk or set(request.data)-{"command","label","target"}:
+                return Response(status=404)
+            command=request.data.get("command")
+            if command == "snapshot":
+                from django.apps import apps
+                from hashlib import sha256
+                import json
+                values={m._meta.label:list(m.objects.order_by("pk").values()) for m in apps.get_models(include_auto_created=True)
+                        if m._meta.app_label in {"applications","documents","email_sync","postings"} and m != ApplicationMessage}
+                return Response({"digest":sha256(json.dumps(values,sort_keys=True,default=str).encode()).hexdigest(),
+                                 "pairs":list(ApplicationMessage.objects.order_by("pk").values())})
+            case=attach_cases.get(request.data.get("label"))
+            if case is None:return Response(status=400)
+            target=request.data.get("target", first.pk)
+            if command == "post-count-busy":
+                if request.data.get("label") not in {"busy","busy-failed","busy-focused"}:return Response(status=400)
+                path=f"/api/workspaces/{workspace.pk}/application-reviews/{case['review']}/attach/"
+                post_count_faults[path]=target
+                return Response({"armed":True})
+            if command == "receipt":
+                from applications.message_views import relationship_data
+                from applications.review_views import attachment_data, review_relationships
+                row=ApplicationMessage.objects.get(application_id=target,retained_message_id=case["source"],workspace=workspace)
+                return Response({**relationship_data(row),**attachment_data(review_relationships(workspace,case["source"]).count())})
+            if command == "attach":
+                row,created=attach_message(actor=alice,workspace=workspace,application_id=target,retained_message_id=case["source"])
+                return Response({"id":row.pk,"created":created})
+            if command == "conflict":
+                RetainedMessage.objects.filter(pk=case["source"]).update(has_conflict=True)
+            elif command in {"trash","restore"}:
+                app=Application.objects.get(pk=target,workspace=workspace)
+                set_trash(actor=alice,workspace=workspace,kind="applications",pk=target,trashed=command=="trash",expected_revision=app.lifecycle_revision)
+            elif command == "dismiss":
+                from applications.models import RetainedApplicationReviewDisposition
+                row=RetainedApplicationReviewDisposition.objects.filter(review_id=case["review"]).first()
+                set_review_dismissal(actor=alice,workspace=workspace,review_id=case["review"],dismissed=True,expected_revision=row.revision if row else 0)
+            else:return Response(status=400)
+            return Response({"ok":True})
+
     for index in range(46):
         message=retained("review-page-"+str(index))
         ensure_application_review(actor=alice, workspace=workspace, retained_message_id=message.pk,
@@ -347,6 +456,8 @@ with tempfile.TemporaryDirectory(prefix="jth-foundation-") as directory:
           window.fetch=function(url,options){
             const entry={url:String(url),method:options&&options.method||'GET',body:options&&options.body};
             if(entry.method==='GET'&&/\/retained-messages\/[1-9]\d*\/$/.test(entry.url)&&window.__fixtureSourceReadIntent){entry.sourceReadIntent=window.__fixtureSourceReadIntent;window.__fixtureSourceReadIntent=null;}
+            if(window.__fixtureAttachReadScope&&entry.method==='GET'&&/^\/api\/workspaces\/[1-9]\d*\/(?:application-reviews|applications)\/(?:[1-9]\d*\/)?$/.test(entry.url)){entry.attachReadScope=window.__fixtureAttachReadScope;}
+            if(entry.method==='POST'&&/\/application-reviews\/[1-9]\d*\/attach\/$/.test(entry.url)&&window.__fixtureAttachIntent){entry.attachIntent=window.__fixtureAttachIntent;window.__fixtureAttachIntent=null;}
             if(entry.method==='POST'&&window.__fixtureDispositionIntent){entry.dispositionIntent=window.__fixtureDispositionIntent;window.__fixtureDispositionIntent=null;}
             if(entry.method==='PUT'&&window.__fixtureAssignmentIntent){entry.assignmentIntent=window.__fixtureAssignmentIntent;window.__fixtureAssignmentIntent=null;}
             if(window.__fixtureFoundationAction==='logout'&&entry.url==='/api/auth/logout'&&entry.method==='POST'){
@@ -377,6 +488,9 @@ with tempfile.TemporaryDirectory(prefix="jth-foundation-") as directory:
                    path("api/test-only/evidence-fixtures", evidence_fixtures),
                    path("api/test-only/application-fixtures", application_fixtures),
                    path("api/test-only/review-fixtures", review_fixtures),
+                   path("api/test-only/review-attach-fixtures", attach_fixtures),
+                   path("api/test-only/review-attach-audit", attach_audit),
+                   path("api/test-only/review-attach-control", ReviewAttachFixtureControl.as_view()),
                    path("api/test-only/review-source-fixtures", review_source_fixtures),
                    path("api/test-only/review-source-audit", review_source_audit),
                    path("api/test-only/review-disposition-control", ReviewDispositionFixtureControl.as_view()),

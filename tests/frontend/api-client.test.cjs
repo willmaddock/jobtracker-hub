@@ -494,3 +494,49 @@ test('source read errors never display server content and obsolete responses are
   assert(h.reviewSourceFailure(new ApiError('authentication_required','PRIVATE',401)).auth);
   for(const code of ['aborted','stale_response'])assert.equal(h.reviewSourceFailure(new ApiError(code,'PRIVATE')),null);
 });
+
+const attachHelpers=(()=>{const scope={JTHApi:{ApiError},Number,Date,Set,AbortController};vm.createContext(scope);for(const name of ['APPLICATION','REVIEW','REVIEW ATTACH'])vm.runInContext(html.split('// BEGIN DJANGO '+name+' STATE')[1].split('// END DJANGO '+name+' STATE')[0],scope);return scope;})();
+const attachIntent={id:8,portable:uuid(8),sourceId:3,sourcePortable:uuid(3).toLowerCase(),captured:{workspace:2},target:{id:5,portable_id:uuid(5)},pair:null};
+function attachReceiptFixture(){return {status:201,data:{id:9,portable_id:uuid(9),workspace_id:2,application_id:5,retained_message_id:3,origin:'manual',created_at:'2026-10-08T00:00:00Z',attachment_status:'attached',relationship_count:2,retained_message:{id:3,portable_id:uuid(3),mailbox_id:4,state:'retained',eligible:true,retained_at:'2026-10-07T00:00:00Z',representation_version:1}}};}
+test('attachment client keeps success status without changing existing return shapes and posts only target',async()=>{
+ const calls=[];const {client}=setup(async(p,o)=>{calls.push({p,o});return p.endsWith('csrf')?response(200,{csrfToken:'t'}):response(201,{id:9});});await client.bootstrap();
+ assert.deepEqual(await client.attachApplicationReview(8,5),{status:201,data:{id:9}});assert.equal(calls[1].p,'/api/workspaces/2/application-reviews/8/attach/');assert.equal(calls[1].o.body,'{"application_id":5}');assert.equal(calls[1].o.headers['X-CSRFToken'],'t');assert(!calls[1].o.headers['Idempotency-Key']);assert.equal((await client.readApplication(5)).id,9);
+ for(const bad of [true,'5',0,-1,1.5,Number.MAX_SAFE_INTEGER+1])assert.throws(()=>client.attachApplicationReview(8,bad),{code:'unsafe_identifier'});
+});
+test('attachment transport never retries uncertainty or obsolete auth',async()=>{
+ for(const status of [200,401]){let release,count=0;const {client,context}=setup((p)=>p.endsWith('csrf')?response(200,{csrfToken:'t'}):(count++,new Promise(r=>release=r)));await client.bootstrap();const pending=client.attachApplicationReview(8,5);context.select(3);release(response(status,{}));await assert.rejects(pending,{code:'stale_response'});assert.equal(count,1);}
+ let count=0;const {client}=setup(p=>p.endsWith('csrf')?response(200,{csrfToken:'t'}):(count++,Promise.reject(Error('lost'))));await client.bootstrap();await assert.rejects(client.attachApplicationReview(8,5),{code:'network_error'});assert.equal(count,1);
+});
+test('actual attachment receipt accepts new and concurrently existing pair with advisory counts',()=>{
+ const h=attachHelpers;for(const status of [200,201]){const raw=attachReceiptFixture();raw.status=status;assert.equal(h.attachReceipt(raw,attachIntent).status,status);}
+ const raw=attachReceiptFixture();raw.data.retained_message.state='conflict';raw.data.retained_message.eligible=false;assert.equal(h.attachReceipt(raw,attachIntent).id,9);
+});
+test('observed pair receipt requires immutable identity timestamp origin and 200',()=>{
+ const h=attachHelpers,raw=attachReceiptFixture();raw.status=200;const attempt={...attachIntent,pair:{id:9,portable_id:uuid(9),origin:'manual',created_at:raw.data.created_at}};h.attachReceipt(raw,attempt);
+ for(const mutate of [r=>r.status=201,r=>r.data.id=10,r=>r.data.portable_id=uuid(10),r=>r.data.created_at='2026-10-09T00:00:00Z',r=>r.data.origin='automatic']){const bad=structuredClone(raw);mutate(bad);assert.throws(()=>h.attachReceipt(bad,attempt));}
+});
+test('attachment receipt rejects unsafe mismatched malformed scopes identities and source state',()=>{
+ for(const mutate of [r=>r.status=204,r=>r.data.id=Number.MAX_SAFE_INTEGER+1,r=>r.data.workspace_id=3,r=>r.data.application_id=6,r=>r.data.retained_message_id=4,r=>r.data.retained_message.id=4,r=>r.data.retained_message.portable_id=uuid(4),r=>r.data.retained_message.mailbox_id=null,r=>r.data.retained_message.eligible=false,r=>r.data.retained_message.representation_version=2,r=>r.data.attachment_status='unattached',r=>r.data.relationship_count=0]){const bad=attachReceiptFixture();mutate(bad);assert.throws(()=>attachHelpers.attachReceipt(bad,attachIntent));}
+});
+test('attachment confirmation admits archived outside targets and dismissed existing pairs only',()=>{
+ const h=attachHelpers,target={id:5,is_trashed:false,effective_trashed:false,archived:true,section:'credentials'},review={retained_message:{eligible:true},disposition:{state:'active'},relationships:[]};assert.equal(h.attachConfirmation(review,target,attachIntent).target,target);
+ review.disposition.state='dismissed';assert.throws(()=>h.attachConfirmation(review,target,attachIntent),{code:'review_dismissed'});review.relationships=[{id:9,application_id:5,availability:'live'}];assert(h.attachConfirmation(review,target,attachIntent).pair);review.retained_message.eligible=false;assert.throws(()=>h.attachConfirmation(review,target,attachIntent));review.retained_message.eligible=true;assert.throws(()=>h.attachConfirmation(review,{...target,effective_trashed:true},attachIntent));
+});
+test('attachment outcome treats malformed lost and unknown success as uncertain without server text',()=>{
+ for(const e of [new ApiError('network_error','PRIVATE'),new ApiError('unexpected_review','PRIVATE',200),new ApiError('request_failed','PRIVATE',500)]){const text=attachHelpers.attachOutcome(e);assert(text.includes('may have completed')&&!text.includes('PRIVATE'));}
+});
+test('attachment target projection keeps UUIDs and rejects list identity collisions and wrong detail target',()=>{
+ const h=attachHelpers,a=applicationFixture(5),b=applicationFixture(6);assert.equal(h.attachTargets([a,b],2).length,2);assert.equal(h.attachTarget(a,2,5,uuid(5)).portable_id,uuid(5));
+ for(const f of [()=>h.attachTarget(a,3),()=>h.attachTarget(a,2,6),()=>h.attachTarget(a,2,5,uuid(6)),()=>h.attachTargets([a,a],2),()=>h.attachTargets([a,{...b,portable_id:a.portable_id}],2),()=>h.attachTarget({...a,portable_id:null},2)])assert.throws(f);
+});
+test('attachment fresh review verifies immutable review and source provenance and new receipt identity',()=>{
+ const raw=reviewFixture(8),h=attachHelpers,intent={...attachIntent,sourceId:raw.retained_message.id,sourcePortable:raw.retained_message.portable_id.toLowerCase()};assert.equal(h.attachReview(raw,intent).id,8);
+ for(const f of [r=>r.portable_id=uuid(99),r=>r.retained_message.id=99,r=>r.retained_message.portable_id=uuid(99)]){const bad=structuredClone(raw);f(bad);assert.throws(()=>h.attachReview(bad,intent));}
+ assert.throws(()=>h.attachReceipt(attachReceiptFixture(),{...attachIntent,observedRelationships:[{id:9,portable_id:uuid(9)}]}));
+});
+
+test('attachment lifecycle_busy is uncertain even after a committed write',()=>{
+ const outcome=attachHelpers.attachOutcome(new ApiError('lifecycle_busy','PRIVATE SQL',503));
+ assert(outcome.includes('may have completed')&&outcome.includes('before another explicit action')&&outcome.includes('does not prove'));
+ assert(!outcome.includes('refused')&&!outcome.includes('acknowledged')&&!outcome.includes('PRIVATE'));
+});

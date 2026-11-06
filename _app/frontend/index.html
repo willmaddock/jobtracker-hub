@@ -7725,7 +7725,7 @@ function reviewOutcome(error) {
   if([400,403,404].includes(error.status) && ["validation_error","csrf_failed","not_found"].includes(error.code)) return "The change was rejected. Open a new action after refresh.";
   return "The response could not be verified. The change may have completed. Refresh shows current state, not proof of this request's effect.";
 }
-function reviewInitial() {return {rows:[],after:null,ready:false,listBusy:false,listError:null,review:null,detail:null,detailBusy:false,detailError:null,application:null,action:null,pending:false,outcome:null,lastPortable:null};}
+function reviewInitial() {return {rows:[],after:null,ready:false,listBusy:false,listError:null,review:null,detail:null,detailBusy:false,detailError:null,application:null,action:null,pending:false,outcome:null,lastPortable:null,attach:null,lastAttachment:null};}
 // END DJANGO REVIEW STATE
 
 // BEGIN DJANGO REVIEW SOURCE STATE
@@ -7858,14 +7858,62 @@ function RetainedReviewSourceInspection({client,context,selection,inspectionCont
   </section>;
 }
 
+// BEGIN DJANGO REVIEW ATTACH STATE
+function attachTarget(raw, workspace, requested = null, portable = null) {
+  const row=applicationRow(raw,workspace), uuid=reviewUuid(raw.portable_id).toLowerCase();
+  if(requested !== null && row.id !== requested || portable !== null && uuid !== portable.toLowerCase()) reviewUnexpected();
+  return {...row,portable_id:uuid};
+}
+function attachTargets(raw, workspace) {
+  if(!Array.isArray(raw))reviewUnexpected();
+  const rows=raw.map(row=>attachTarget(row,workspace));
+  if(new Set(rows.map(row=>row.id)).size !== rows.length || new Set(rows.map(row=>row.portable_id)).size !== rows.length)reviewUnexpected();
+  return rows;
+}
+function attachReview(raw, attempt) {
+  const row=reviewRow(raw,attempt.captured.workspace,attempt.id);
+  if(row.portable_id.toLowerCase() !== attempt.portable || row.retained_message.id !== attempt.sourceId || row.retained_message.portable_id.toLowerCase() !== attempt.sourcePortable)reviewUnexpected();
+  return row;
+}
+function attachConfirmation(review, target, attempt) {
+  if(target.is_trashed || target.effective_trashed || !review.retained_message.eligible)throw new JTHApi.ApiError("attachment_ineligible","The source or Application is unavailable for attachment.");
+  const pair=review.relationships.find(row=>row.application_id === target.id) || null;
+  if(!pair && review.disposition.state === "dismissed")throw new JTHApi.ApiError("review_dismissed","Restore this review before adding a new attachment.");
+  if(pair && pair.availability !== "live")reviewUnexpected();
+  return Object.freeze({...attempt,target,pair,observedRelationships:review.relationships});
+}
+function attachReceipt(response, attempt) {
+  if(!response || ![200,201].includes(response.status))reviewUnexpected();
+  const row=reviewObject(response.data), source=reviewObject(row.retained_message);
+  const id=applicationId(row.id), portable=reviewUuid(row.portable_id).toLowerCase(), created=reviewStamp(row.created_at);
+  if(applicationId(row.workspace_id) !== attempt.captured.workspace || applicationId(row.application_id) !== attempt.target.id ||
+    applicationId(row.retained_message_id) !== attempt.sourceId || applicationId(source.id) !== attempt.sourceId ||
+    reviewUuid(source.portable_id).toLowerCase() !== attempt.sourcePortable || row.origin !== "manual" ||
+    source.representation_version !== 1 || !["retained","conflict"].includes(source.state) || typeof source.eligible !== "boolean" || source.eligible !== (source.state === "retained") ||
+    row.attachment_status !== "attached" || reviewCount(row.relationship_count)<1)reviewUnexpected();
+  applicationId(source.mailbox_id);reviewStamp(source.retained_at);
+  if(attempt.pair && (response.status !== 200 || id !== attempt.pair.id || portable !== attempt.pair.portable_id.toLowerCase() || created !== attempt.pair.created_at || row.origin !== attempt.pair.origin))reviewUnexpected();
+  if(response.status === 201 && attempt.observedRelationships?.some(pair=>pair.id===id||pair.portable_id.toLowerCase()===portable))reviewUnexpected();
+  return {status:response.status,id,portable_id:portable,created_at:created};
+}
+function attachOutcome(error, receipt = null) {
+  if(receipt)return receipt.status === 201 ? "Attachment creation was acknowledged." : "The existing attachment was acknowledged; no new pair was reported.";
+  if(error?.status === 409 && ["review_dismissed","resource_trashed","retained_source_ineligible"].includes(error.code))return "Attachment was rejected because current source, review or Application eligibility changed.";
+  if(error?.status === 503 && error.code === "lifecycle_busy")return "The database was busy. Attachment may have completed; check current relationships before another explicit action. Current state does not prove this request created the relationship.";
+  if([400,403,404].includes(error?.status) && ["validation_error","csrf_failed","permission_denied","not_found"].includes(error.code))return "Attachment was rejected. Refresh before preparing another confirmation.";
+  return "The response could not be verified. Attachment may have completed; current relationships do not prove this request's effect.";
+}
+// END DJANGO REVIEW ATTACH STATE
+
 function ApplicationReviewPanel({client, context, workspaceId, onClose, onAuthFailure}) {
   const [state,setState]=useState(reviewInitial);
   const [sourceSelection,setSourceSelection]=useState(null), sourceControl=useRef(null), detailObservation=useRef(null);
   const listLane=useMemo(()=>createEvidenceLane(context),[context]), detailLane=useMemo(()=>createEvidenceLane(context),[context]);
+  const attachLane=useMemo(()=>createEvidenceLane(context),[context]);
   const selected=useRef(null), inspectionControl=useRef(null), auth=useRef(onAuthFailure);auth.current=onAuthFailure;
   const attemptLife=useRef({generation:0,alive:true,controller:null}), submitLock=useRef(false), listDirty=useRef(false);
   function patch(values) {setState(old=>({...old,...values}));}
-  function cancelAction() {attemptLife.current.generation++;attemptLife.current.controller?.abort();detailLane.invalidate();submitLock.current=false;}
+  function cancelAction() {attemptLife.current.generation++;attemptLife.current.controller?.abort();detailLane.invalidate();attachLane.invalidate();submitLock.current=false;patch({attach:null,lastAttachment:null});}
   function cancelSource() {sourceControl.current?.();setSourceSelection(null);}
   function reset() {cancelSource();detailObservation.current=null;cancelAction();listLane.invalidate();inspectionControl.current?.();selected.current=null;setState(reviewInitial());}
   function authFailure(error) {reset();auth.current(error);}
@@ -7887,8 +7935,9 @@ function ApplicationReviewPanel({client, context, workspaceId, onClose, onAuthFa
     finally {if(listLane.current(token,after)) patch({listBusy:false});}
   }
   async function selectReview(id, preparing = false, expectedPortable = null) {
+    if(submitLock.current)return;
     cancelSource();detailObservation.current=null;cancelAction();applicationId(id);listLane.invalidate();inspectionControl.current?.();selected.current=id;
-    patch({review:id,detail:null,detailError:null,detailBusy:true,application:null,listBusy:false,action:null,pending:false,outcome:null});
+    patch({review:id,detail:null,detailError:null,detailBusy:true,application:null,listBusy:false,action:null,pending:false,outcome:null,lastAttachment:null});
     const token=detailLane.start(id);
     try {
       const detail=reviewRow(await client.readApplicationReview(id,{captured:token.captured,signal:token.signal}),workspaceId,id);
@@ -7925,11 +7974,11 @@ function ApplicationReviewPanel({client, context, workspaceId, onClose, onAuthFa
   async function submitDisposition() {
     const action=state.action;
     if(submitLock.current || state.pending || !action || action.generation !== attemptLife.current.generation || selected.current !== action.id || !context.current(action.captured)) return;
-    cancelSource();detailObservation.current=null;submitLock.current=true;
+    cancelSource();detailObservation.current=null;attachLane.invalidate();submitLock.current=true;
     const controller=new AbortController();attemptLife.current.controller=controller;
     const attempt=Object.freeze({...action,generation:++attemptLife.current.generation});
     detailLane.invalidate();listLane.invalidate();listDirty.current=true;
-    patch({rows:[],after:null,ready:false,listBusy:false,listError:null,detail:null,lastPortable:attempt.portable,action:null,pending:true,outcome:"Submitting review change. Leaving this view does not prove server rollback."});
+    patch({rows:[],after:null,ready:false,listBusy:false,listError:null,detail:null,lastPortable:attempt.portable,lastAttachment:null,attach:null,action:null,pending:true,outcome:"Submitting review change. Leaving this view does not prove server rollback."});
     let error=null;
     try {
       const method=attempt.desired === "dismissed" ? client.dismissApplicationReview : client.restoreApplicationReview;
@@ -7939,9 +7988,9 @@ function ApplicationReviewPanel({client, context, workspaceId, onClose, onAuthFa
     if(error?.status === 401 && error.code === "authentication_required") {authFailure(error);return;}
     await reconcile(attempt,reviewOutcome(error));
   }
-  useEffect(()=>{loadList();return ()=>{sourceControl.current?.();cancelAction();attemptLife.current.alive=false;listLane.dispose();detailLane.dispose();selected.current=null;};},[listLane,detailLane]);
+  useEffect(()=>{loadList();return ()=>{sourceControl.current?.();cancelAction();attemptLife.current.alive=false;listLane.dispose();detailLane.dispose();attachLane.dispose();selected.current=null;};},[listLane,detailLane]);
   function back() {cancelSource();detailObservation.current=null;cancelAction();inspectionControl.current?.();selected.current=null;patch({review:null,detail:null,detailError:null,detailBusy:false,application:null,action:null,pending:false,outcome:null});if(listDirty.current) loadList();}
-  function open(id, portable = null) {cancelSource();cancelAction();applicationId(id);inspectionControl.current?.();patch({application:{id,portable},action:null,pending:false});}
+  function open(id, portable = null) {if(submitLock.current)return;cancelSource();cancelAction();applicationId(id);inspectionControl.current?.();patch({application:{id,portable},action:null,pending:false});}
   function inspectSource(detail) {
     const observation=detailObservation.current;
     if(submitLock.current || state.pending || state.detailBusy || !observation || selected.current !== detail.id || observation.id !== detail.id ||
@@ -7954,6 +8003,63 @@ function ApplicationReviewPanel({client, context, workspaceId, onClose, onAuthFa
     cancelSource();
     if(selected.current === selection.reviewId && context.current(selection.captured))selectReview(selection.reviewId,false,selection.reviewPortable);
   }
+  async function prepareAttachment(detail, generation) {
+    if(submitLock.current || state.pending || state.detailBusy || generation !== attemptLife.current.generation || selected.current !== detail.id)return;
+    const observed=detailObservation.current;
+    if(!observed || !context.current(observed.captured) || observed.portable !== detail.portable_id.toLowerCase())return;
+    cancelSource();cancelAction();inspectionControl.current?.();listLane.invalidate();patch({action:null});
+    const attempt=Object.freeze({id:detail.id,portable:observed.portable,sourceId:detail.retained_message.id,sourcePortable:detail.retained_message.portable_id.toLowerCase(),captured:observed.captured,generation:attemptLife.current.generation});
+    const token=attachLane.start(attempt.id), current=()=>attemptCurrent(attempt)&&attachLane.current(token,attempt.id);
+    patch({attach:{attempt,review:detail,targets:[],busy:true,error:null,confirmation:null}});
+    try {
+      const review=attachReview(await client.readApplicationReview(attempt.id,{captured:attempt.captured,signal:token.signal}),attempt);
+      if(!current())return;
+      const targets=attachTargets(await client.readApplications({captured:attempt.captured,signal:token.signal}),workspaceId);
+      if(current())patch({detail:review,attach:{attempt,review,targets,busy:false,error:null,confirmation:null}});
+    } catch(e) {if(current()){if(e.status===401&&e.code==="authentication_required"){authFailure(e);return;}patch({attach:null,detailError:{message:"Attachment preparation failed. Reload the review before trying again.",retry:true}});}}
+  }
+  async function chooseAttachment(target) {
+    const attachment=state.attach;
+    if(submitLock.current || !attachment || !attemptCurrent(attachment.attempt))return;
+    const attempt=Object.freeze({...attachment.attempt,generation:++attemptLife.current.generation});
+    const token=attachLane.start(target.id), current=()=>attemptCurrent(attempt)&&attachLane.current(token,target.id);
+    patch({attach:{...attachment,attempt,busy:true,error:null,confirmation:null}});
+    try {
+      const fresh=attachTarget(await client.readApplication(target.id,{captured:attempt.captured,signal:token.signal}),workspaceId,target.id,target.portable_id);
+      if(!current())return;
+      const review=attachReview(await client.readApplicationReview(attempt.id,{captured:attempt.captured,signal:token.signal}),attempt);
+      if(!current())return;
+      const confirmation=attachConfirmation(review,fresh,attempt);
+      patch({detail:review,attach:{...attachment,attempt,review,busy:false,error:null,confirmation}});
+    } catch(e) {if(current()){if(e.status===401&&e.code==="authentication_required"){authFailure(e);return;}patch({attach:{...attachment,attempt,busy:false,confirmation:null,error:e.code==="review_dismissed" ? "Restore this review before adding a new attachment." : "The source or target could not be confirmed safely. Reload or select an eligible Application."}});}}
+  }
+  async function reconcileAttachment(attempt, outcome) {
+    if(!attemptCurrent(attempt))return;
+    const token=detailLane.start(attempt.id);patch({detail:null,detailError:null,detailBusy:true,action:null,attach:null,outcome});
+    try {
+      const detail=attachReview(await client.readApplicationReview(attempt.id,{captured:attempt.captured,signal:token.signal}),attempt);
+      if(!attemptCurrent(attempt)||!detailLane.current(token,selected.current))return;
+      const pair=detail.relationships.find(row=>row.application_id===attempt.target.id);
+      detailObservation.current={captured:attempt.captured,id:attempt.id,portable:attempt.portable};
+      patch({detail,outcome:outcome+" Current observation: "+(pair ? "the selected Application/source relationship is present." : "the selected Application/source relationship is not present.")+" Further requests require fresh confirmation."});
+    } catch(e) {if(attemptCurrent(attempt)&&detailLane.current(token,selected.current)){if(e.status===401&&e.code==="authentication_required"){authFailure(e);return;}patch({detailError:{message:"Current relationship refresh failed. Further changes are withheld; use GET refresh.",retry:false}});}}
+    finally {if(attemptCurrent(attempt)&&detailLane.current(token,selected.current)){submitLock.current=false;patch({pending:false,detailBusy:false});}}
+  }
+  async function submitAttachment() {
+    const confirmation=state.attach?.confirmation;
+    if(submitLock.current || state.pending || !confirmation || !attemptCurrent(confirmation))return;
+    submitLock.current=true;cancelSource();detailObservation.current=null;
+    const attempt=Object.freeze({...confirmation,generation:++attemptLife.current.generation});
+    const controller=new AbortController();attemptLife.current.controller=controller;
+    attachLane.invalidate();detailLane.invalidate();listLane.invalidate();listDirty.current=true;
+    patch({attach:null,action:null,rows:[],after:null,ready:false,listBusy:false,listError:null,detail:null,pending:true,lastPortable:attempt.portable,lastAttachment:attempt,
+      outcome:"Submitting attachment. Leaving this view does not prove server rollback."});
+    let receipt=null,error=null;
+    try {receipt=attachReceipt(await client.attachApplicationReview(attempt.id,attempt.target.id,{captured:attempt.captured,signal:controller.signal}),attempt);}catch(e){error=e;}
+    if(!attemptCurrent(attempt))return;
+    if(error?.status===401&&error.code==="authentication_required"){authFailure(error);return;}
+    await reconcileAttachment(attempt,attachOutcome(error,receipt));
+  }
   const value=v=>v === null ? "Unknown" : v === "" ? "Not supplied" : v;
   const classification={match:"Single candidate",ambiguous:"Multiple candidates",application:"No candidate"};
   const summary=row=><>
@@ -7963,7 +8069,7 @@ function ApplicationReviewPanel({client, context, workspaceId, onClose, onAuthFa
     <p>Observed: <EvidenceTime value={row.observed_at} /> · Retained: <EvidenceTime value={row.retained_message.retained_at} /> · Review created: <EvidenceTime value={row.created_at} /></p>
   </>;
   const errorView=(error,retry)=><>{error && <div role="alert"><p>{error.message}</p>{error.retry && <button className="btn" onClick={retry}>Retry reviews</button>}{error.restart && <button className="btn" onClick={()=>loadList()}>Restart reviews from first page</button>}</div>}</>;
-  const detail=state.detail;
+  const detail=state.detail, renderGeneration=attemptLife.current.generation;
   return <section data-testid="review-panel" aria-label="Retained Application reviews" style={{marginTop:20,textAlign:"left",overflowWrap:"anywhere"}}>
     <h2>Retained Application reviews</h2><button className="btn" onClick={()=>{reset();onClose();}}>Close reviews</button>
     {sourceSelection ? <RetainedReviewSourceInspection key={sourceSelection.reviewId+":"+sourceSelection.sourceId} client={client} context={context} selection={sourceSelection}
@@ -7982,7 +8088,7 @@ function ApplicationReviewPanel({client, context, workspaceId, onClose, onAuthFa
       <button className="btn" onClick={back}>Back to reviews</button>
       {state.outcome && <p role="status">{state.outcome}</p>}
       {state.detailBusy && <p role="status">Loading review detail…</p>}{errorView(state.detailError,()=>selectReview(state.review))}
-      {!state.detail && !state.pending && state.outcome && <button className="btn" onClick={()=>{const note=state.outcome;const attempt={id:state.review,portable:state.lastPortable,captured:context.capture(),generation:attemptLife.current.generation};reconcile(attempt,note);}}>Refresh current review</button>}
+      {!state.detail && !state.pending && state.outcome && <button className="btn" onClick={()=>{if(submitLock.current||renderGeneration!==attemptLife.current.generation)return;const note=state.outcome;if(state.lastAttachment){reconcileAttachment({...state.lastAttachment,captured:context.capture(),generation:attemptLife.current.generation},note);return;}const attempt={id:state.review,portable:state.lastPortable,captured:context.capture(),generation:attemptLife.current.generation};reconcile(attempt,note);}}>Refresh current review</button>}
       {detail && <article data-testid="review-detail"><h3>Review {detail.id}</h3>{summary(detail)}
         <dl>{[["Review portable identity",detail.portable_id],["Retained source portable identity",detail.retained_message.portable_id],["Originating observation reference",detail.originating_observation_id],
           ["Dismissed at",detail.disposition.dismissed_at],["Reported candidate count",detail.candidate_count],["Reported source relationship count",detail.relationship_count],
@@ -7990,10 +8096,24 @@ function ApplicationReviewPanel({client, context, workspaceId, onClose, onAuthFa
         <button className="btn" onClick={()=>selectReview(detail.id)}>Reload review</button>
         {!state.pending && !state.detailBusy && <button className="btn" onClick={()=>inspectSource(detail)}>Inspect retained text</button>}
         {!state.action && !state.pending && <button className="btn" onClick={()=>selectReview(detail.id,true,detail.portable_id)}>{detail.disposition.state === "active" ? "Dismiss review" : "Restore review"}</button>}
+        {!state.pending && !state.detailBusy && <button className="btn" onClick={()=>prepareAttachment(detail,renderGeneration)}>Attach to existing Application</button>}
+        {state.attach && <section data-testid="review-attach" aria-label="Attach retained review source">
+          <h4>Select an existing Application</h4><button className="btn" onClick={()=>{if(submitLock.current||renderGeneration!==attemptLife.current.generation)return;cancelAction();patch({attach:null});}}>Cancel attachment</button>
+          {state.attach.busy && <p role="status">Loading fresh attachment observations…</p>}
+          {state.attach.error && <p role="alert">{state.attach.error}</p>}
+          <p>Candidate shortcuts are suggestions; no Application is selected automatically.</p>
+          {state.attach.review.candidates.map(c=>{const target=state.attach.targets.find(t=>t.id===c.application_id&&t.portable_id===c.application_portable_id.toLowerCase());return <p key={c.id}>Candidate {c.id} · {c.application_portable_id} · {c.availability} <button className="btn" disabled={!target||c.availability!=="live"||state.attach.busy} onClick={()=>chooseAttachment(target)}>Choose candidate Application {c.application_id ?? "unavailable"}</button></p>;})}
+          <p>All existing live Applications in this Workspace are available, including outside the snapshot.</p>
+          {!state.attach.busy && !state.attach.targets.length && <p>No eligible Applications returned.</p>}
+          {state.attach.targets.map(target=><p key={target.id}>Application {target.id} · {target.portable_id} · {target.company} — {target.role_label} · {target.section}{target.archived && " · Archived"}{state.attach.review.relationships.some(r=>r.application_id===target.id)&&" · Already associated"} <button className="btn" data-attach-target={target.id} disabled={state.attach.busy||target.effective_trashed} onClick={()=>chooseAttachment(target)}>Choose Application {target.id}</button></p>)}
+          {state.attach.confirmation && <section aria-label="Confirm attachment"><p>{state.attach.confirmation.pair ? "Verify existing attachment" : "Attach retained source"} {state.attach.confirmation.sourceId} to Application {state.attach.confirmation.target.id} · {state.attach.confirmation.target.portable_id} · {state.attach.confirmation.target.company} — {state.attach.confirmation.target.role_label}? This preserves review disposition, status and evidence. Eligibility is rechecked by the backend.</p>
+            <button className="btn" onClick={submitAttachment}>{state.attach.confirmation.pair ? "Confirm existing attachment" : "Confirm attachment"}</button>
+          </section>}
+        </section>}
         {state.action && <section aria-label="Confirm review disposition">
           <p>{state.action.desired === "dismissed" ? "Dismiss" : "Restore"} review {state.action.id}? This changes whole-review disposition and preserves retained sources, relationships and evidence.</p>
           <button className="btn" onClick={submitDisposition}>{state.action.desired === "dismissed" ? "Confirm dismissal" : "Confirm restoration"}</button>
-          <button className="btn" onClick={()=>{cancelAction();patch({action:null});}}>Cancel review change</button>
+          <button className="btn" onClick={()=>{if(submitLock.current||renderGeneration!==attemptLife.current.generation)return;cancelAction();patch({action:null});}}>Cancel review change</button>
         </section>}
         <p>All returned references load together; large reviews may take longer.</p>
         <h4>Initial candidate snapshot</h4><p>{detail.candidates.length} returned candidate references. Membership is initial provenance, not an existing relationship or acceptance. Order is not a confidence ranking.</p>

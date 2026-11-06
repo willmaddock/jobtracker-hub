@@ -30,7 +30,7 @@
         throw new ApiError("invalid_request", "Expected a same-origin API path.");
       }
     }
-    async function request(path, { method = "GET", body, captured = context.capture(), signal } = {}) {
+    async function request(path, { method = "GET", body, captured = context.capture(), signal, withStatus = false } = {}) {
       pathCheck(path); check(captured);
       const unsafe = !["GET", "HEAD", "OPTIONS"].includes(method);
       if (unsafe && !csrf) throw new ApiError("csrf_required", "Refresh authentication before trying again.");
@@ -47,7 +47,8 @@
         const response = await fetchImpl(path, { method, headers, body: payload, credentials: "same-origin", cache: "no-store", signal: controller.signal });
         const text = await response.text();
         check(captured);
-        return decode(response.status, text, captured);
+        const data = decode(response.status, text, captured);
+        return withStatus ? {status:response.status,data} : data;
       } catch (e) {
         check(captured);
         if (e instanceof ApiError) throw e;
@@ -113,6 +114,13 @@
         check(captured);
         if (!captured.actor) throw new ApiError("workspace_required", "Select a workspace first.");
         return request(`/api/workspaces/${safeId(captured.workspace)}/application-reviews/${safeId(reviewId)}/`, {captured, signal});
+      },
+      attachApplicationReview(reviewId, applicationId, {captured = context.capture(), signal} = {}) {
+        check(captured);
+        if (!captured.actor) throw new ApiError("workspace_required", "Select a workspace first.");
+        return request(`/api/workspaces/${safeId(captured.workspace)}/application-reviews/${safeId(reviewId)}/attach/`, {
+          method:"POST", body:{application_id:safeId(applicationId)}, captured, signal, withStatus:true
+        });
       },
       dismissApplicationReview(reviewId, options = {}) { return reviewDisposition(reviewId, "dismiss", options); },
       restoreApplicationReview(reviewId, options = {}) { return reviewDisposition(reviewId, "restore", options); },
