@@ -1,0 +1,17 @@
+.git
+.idea
+.venv
+**/venv
+**/__pycache__
+.pytest_cache
+.jobtracker
+tests
+docs
+sample-tracker
+desktop
+assets
+backend/media
+*.db
+*.sqlite3
+.env
+.env.*
