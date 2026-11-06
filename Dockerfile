@@ -21,6 +21,11 @@ RUN pip install -r backend/requirements.txt
 COPY backend backend
 COPY _app/frontend _app/frontend
 
+# Collect admin/static assets for WhiteNoise (prod.py). Dev settings are used only
+# here because they need no production secrets; STATIC_ROOT comes from base.py.
+# Runs as root so the output exists before dropping to the unprivileged user.
+RUN cd backend && DJANGO_SETTINGS_MODULE=config.settings.dev python manage.py collectstatic --noinput
+
 USER app
 WORKDIR /app/backend
 ENV DJANGO_SETTINGS_MODULE=config.settings.prod

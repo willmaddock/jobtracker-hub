@@ -23,14 +23,32 @@ See `deploy/env.example`. `prod.py` loads no `.env` file; inject variables from 
 Manager/SSM. It rejects `DATABASE_URL`, `DJANGO_DB_ENGINE` and `DJANGO_CSRF_TRUSTED_ORIGINS`.
 Use an IAM role for S3 instead of static keys where possible.
 
-## Known blockers found while building this (not fixed here)
-1. **TLS/proxy:** see `DEPLOYMENT_PROXY_TLS_PROPOSAL.md`. Behind an ALB, current prod
-   settings will fail (redirect loop / CSRF). Needs a recorded decision.
-2. **`manage.py check --deploy` fails with `mail.E001`:** `MAILERS` is the console backend
-   in all environments, including prod. Decide whether the product sends email (SES SMTP)
-   or the check should be explicitly handled.
-3. **Static files:** no `STATIC_ROOT`/static serving, so `/admin/` renders unstyled.
-   Decide: add WhiteNoise/`collectstatic`, or disable admin in production.
-4. **Celery pins:** `celery>=5.4` / `redis>=5.0` are still minimum bounds. Run
-   `pip freeze | grep -iE 'celery|redis'` in `backend/venv` and pin exact versions.
-5. **`check --deploy` warning `security.W004` (HSTS):** deliberately deferred in `prod.py`.
+## Decisions taken (owner delegated; implemented in `backend/config/settings/prod.py`)
+1. **TLS/proxy:** option A, opt-in `DJANGO_BEHIND_TLS_PROXY=true` (see
+   `DEPLOYMENT_PROXY_TLS_PROPOSAL.md`). With it on, `X-Forwarded-Proto: https` is trusted and
+   `GET`/`HEAD /api/health` is answered before host validation so ALB probes (plain HTTP, task-IP
+   Host) get 200. Point the target group health check at `/api/health`. Containers must be
+   reachable only from the ALB security group.
+2. **Email:** the product sends none. `MAILERS` uses the SMTP backend with no options, which
+   clears `mail.E001` and makes any future send fail loudly until a real mail service (e.g. SES)
+   is configured.
+3. **Admin/static:** admin stays enabled (it is the account-provisioning tool, decision 9).
+   WhiteNoise serves `collectstatic` output, which the Dockerfile generates at build.
+4. **Celery/Redis pins:** `celery==5.7.0`, `redis==8.1.0`.
+5. **Data:** start fresh on the hosted instance; no migration from the macOS app. Revisit later
+   if needed.
+
+## First-user onboarding (administrator-created accounts, no signup)
+Run as one-off tasks using the same image and environment as web:
+1. `python manage.py migrate`
+2. `python manage.py createsuperuser` (the operator account, used for `/admin/`)
+3. Sign in at `/admin/`, create the product user (Users -> Add), set a password; the user then
+   signs in at the app root and creates their workspace there.
+Keep the superuser separate from product users.
+
+## Still open / not verified
+- The Docker image was not built here; nothing was run against RDS, S3, Redis or an ALB.
+  Verify in staging: redirect behaviour, CSRF on login, admin CSS, uploads to S3, Celery beat.
+- `security.W004` (HSTS) is deliberately deferred in `prod.py`; enable only after HTTPS works
+  end to end.
+- `DJANGO_MIGRATION_DECISIONS.md` has not been updated to record these decisions.

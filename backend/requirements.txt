@@ -69,8 +69,8 @@ requests>=2.32
 # then `pip freeze | grep -iE 'celery|redis'` and replace these two
 # lines with exact pins the same way Django/DRF/the OAuth packages
 # above already are.
-celery>=5.4
-redis>=5.0
+celery==5.7.0
+redis==8.1.0
 python-dotenv==1.2.3
 
 # Production WSGI server (Dockerfile CMD). Added for AWS deployment scaffolding.

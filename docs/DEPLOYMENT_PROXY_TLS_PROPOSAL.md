@@ -1,7 +1,9 @@
-# Proposal: TLS-terminating proxy support (NOT ACCEPTED)
+# Proposal: TLS-terminating proxy support (option A approved; implemented)
 
-This is a proposal for review. It does not change `DJANGO_MIGRATION_DECISIONS.md` and
-no settings were changed. Status calls "trusted proxy topology" an open gate.
+Option (A) was approved by the project owner and implemented behind `DJANGO_BEHIND_TLS_PROXY`
+(default off), with a pre-host-validation health responder (`core.middleware`). It is still not
+recorded in `DJANGO_MIGRATION_DECISIONS.md`, and the "trusted proxy topology" gate stays open
+until verified in staging behind a real ALB.
 
 ## Problem
 `prod.py` sets `SECURE_SSL_REDIRECT = True`, `SECURE_PROXY_SSL_HEADER = None` and rejects
