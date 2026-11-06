@@ -144,9 +144,36 @@ SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = "Lax"
 CSRF_COOKIE_SAMESITE = "Lax"
 SECURE_SSL_REDIRECT = True
-SECURE_PROXY_SSL_HEADER = None
+# TLS-terminating proxy (accepted option A, docs/DEPLOYMENT_PROXY_TLS_PROPOSAL.md).
+# Default OFF: the fail-closed behaviour above is unchanged. Only the exact value
+# "true" enables it; "" / "false" keep it off; anything else is refused. Enable ONLY
+# when containers are reachable solely through the proxy (e.g. an ALB), which must
+# set X-Forwarded-Proto itself -- otherwise a client could spoof HTTPS.
+_proxy = os.environ.get("DJANGO_BEHIND_TLS_PROXY", "")
+if _proxy not in ("", "true", "false"):
+    _invalid("DJANGO_BEHIND_TLS_PROXY")
+if _proxy == "true":
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+    # Answer load-balancer health probes (plain HTTP, task-IP Host) before host
+    # validation and the HTTPS redirect. Liveness only; touches no database.
+    MIDDLEWARE = ["core.middleware.HealthCheckMiddleware", *MIDDLEWARE]
+else:
+    SECURE_PROXY_SSL_HEADER = None
 USE_X_FORWARDED_HOST = False
 USE_X_FORWARDED_PORT = False
+
+# Static files for /admin/ (the operational/onboarding tool): WhiteNoise serves the
+# output of `collectstatic` (run at image build). Unhashed storage so the build does
+# not need production secrets. Inserted directly after SecurityMiddleware.
+MIDDLEWARE = list(MIDDLEWARE)
+MIDDLEWARE.insert(MIDDLEWARE.index("django.middleware.security.SecurityMiddleware") + 1,
+                  "whitenoise.middleware.WhiteNoiseMiddleware")
+STORAGES["staticfiles"] = {"BACKEND": "whitenoise.storage.CompressedStaticFilesStorage"}
+
+# The product sends no email today (nothing calls send_mail). The development console
+# backend would silently drop mail and fails `check --deploy` (mail.E001). Use SMTP with
+# no OPTIONS so any future send fails loudly until a real mail service is configured.
+MAILERS = {"default": {"BACKEND": "django.core.mail.backends.smtp.EmailBackend"}}
 
 # File storage — Phase 4. Overrides base.py's plain-filesystem
 # STORAGES["default"] with S3 (or any S3-compatible endpoint, e.g.

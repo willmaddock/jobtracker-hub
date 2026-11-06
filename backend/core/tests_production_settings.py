@@ -106,6 +106,29 @@ result = {"profile": settings.SETTINGS_MODULE, "engine": settings.DATABASES["def
     'SECURE_PROXY_SSL_HEADER', 'USE_X_FORWARDED_HOST', 'USE_X_FORWARDED_PORT', 'SECURE_HSTS_SECONDS')))
 
 
+# --- TLS-terminating proxy, static files, mailer (docs/DEPLOYMENT_PROXY_TLS_PROPOSAL.md) ---
+PROXY_BEHAVIOUR = '''
+import django
+django.setup()
+from django.test import Client
+from django.conf import settings
+c = Client()
+def code(path, **extra):
+    return c.get(path, **extra).status_code
+result = {
+    "header": list(settings.SECURE_PROXY_SSL_HEADER) if settings.SECURE_PROXY_SSL_HEADER else None,
+    "x_host": settings.USE_X_FORWARDED_HOST, "x_port": settings.USE_X_FORWARDED_PORT,
+    "csrf_origins": settings.CSRF_TRUSTED_ORIGINS, "middleware": list(settings.MIDDLEWARE),
+    "plain": code("/nope", HTTP_HOST="example.test"),
+    "forwarded": code("/nope", HTTP_HOST="example.test", HTTP_X_FORWARDED_PROTO="https"),
+    "spoof_http": code("/nope", HTTP_HOST="example.test", HTTP_X_FORWARDED_PROTO="http"),
+    "probe": code("/api/health", HTTP_HOST="10.0.3.7:8000"),
+    "probe_post": code("/api/health", HTTP_HOST="10.0.3.7:8000", REQUEST_METHOD="POST"),
+    "other_task_ip": code("/nope", HTTP_HOST="10.0.3.7:8000", HTTP_X_FORWARDED_PROTO="https"),
+}
+'''
+
+
 class ProductionSettingsTests(SimpleTestCase):
     databases = set()
 
@@ -378,3 +401,61 @@ result={"guards":True}
         completed,data=self.run_child(action,changes={'DJANGO_SETTINGS_MODULE':'config.settings.test_postgres'},dotenv=True)
         self.assertEqual(completed.returncode,0,data)
         self.assertTrue(data['result']['guards'])
+
+
+    def test_proxy_default_off_keeps_fail_closed_behaviour(self):
+        for changes in ({}, {'DJANGO_BEHIND_TLS_PROXY': ''}, {'DJANGO_BEHIND_TLS_PROXY': 'false'}):
+            with self.subTest(changes=changes):
+                completed, data = self.run_child(PROXY_BEHAVIOUR, changes=changes)
+                self.assertEqual(completed.returncode, 0, data)
+                r = data['result']
+                self.assertIsNone(r['header'])
+                self.assertNotIn('core.middleware.HealthCheckMiddleware', r['middleware'])
+                self.assertEqual(r['plain'], 301)
+                self.assertEqual(r['forwarded'], 301)   # header is NOT trusted when off
+                self.assertEqual(r['probe'], 400)       # unchanged: probe rejected by ALLOWED_HOSTS
+
+    def test_proxy_enabled_trusts_only_forwarded_https_and_answers_probes(self):
+        completed, data = self.run_child(PROXY_BEHAVIOUR, changes={'DJANGO_BEHIND_TLS_PROXY': 'true'})
+        self.assertEqual(completed.returncode, 0, data)
+        r = data['result']
+        self.assertEqual(r['header'], ['HTTP_X_FORWARDED_PROTO', 'https'])
+        self.assertFalse(r['x_host'] or r['x_port'])
+        self.assertEqual(r['csrf_origins'], [])
+        self.assertEqual(r['middleware'][0], 'core.middleware.HealthCheckMiddleware')
+        self.assertEqual(r['plain'], 301)         # direct plain HTTP still redirected
+        self.assertEqual(r['spoof_http'], 301)    # forwarded "http" is not secure
+        self.assertEqual(r['forwarded'], 404)     # forwarded https reaches routing (no redirect loop)
+        self.assertEqual(r['probe'], 200)         # LB probe with task-IP Host, plain HTTP
+        self.assertEqual(r['other_task_ip'], 400) # host validation still enforced elsewhere
+        self.assertEqual(r['probe_post'], 400)    # only GET/HEAD are answered early
+
+    def test_proxy_flag_refuses_anything_but_exact_values(self):
+        for value in ('yes', '1', 'TRUE', 'True', ' true', 'true ', 'on', 'enabled'):
+            with self.subTest(value=value):
+                self.refusal(changes={'DJANGO_BEHIND_TLS_PROXY': value},
+                             message='Production configuration has invalid DJANGO_BEHIND_TLS_PROXY.')
+
+    def test_static_mailer_and_deploy_checks(self):
+        action = '''
+import django
+django.setup()
+from django.conf import settings
+from django.core.checks import run_checks
+mw = list(settings.MIDDLEWARE)
+result = {
+    "static_backend": settings.STORAGES["staticfiles"]["BACKEND"],
+    "default_backend": settings.STORAGES["default"]["BACKEND"],
+    "wn_after_security": mw.index("whitenoise.middleware.WhiteNoiseMiddleware") == mw.index("django.middleware.security.SecurityMiddleware") + 1,
+    "mailer": settings.MAILERS["default"],
+    "deploy_errors": [m.id for m in run_checks(include_deployment_checks=True) if m.level >= 40],
+}
+'''
+        completed, data = self.run_child(action)
+        self.assertEqual(completed.returncode, 0, data)
+        r = data['result']
+        self.assertEqual(r['static_backend'], 'whitenoise.storage.CompressedStaticFilesStorage')
+        self.assertEqual(r['default_backend'], 'storages.backends.s3.S3Storage')
+        self.assertTrue(r['wn_after_security'])
+        self.assertEqual(r['mailer'], {'BACKEND': 'django.core.mail.backends.smtp.EmailBackend'})
+        self.assertEqual(r['deploy_errors'], [])
