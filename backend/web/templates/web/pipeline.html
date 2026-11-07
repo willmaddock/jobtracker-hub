@@ -9,7 +9,7 @@
 {% if applications %}
 <ul class="rows">
   {% for a in applications %}
-    <li class="row"><span class="pill">{{ a.get_status_display }}</span><b>{{ a.company }}</b><small>{{ a.role_label }}</small></li>
+    <li class="row"><span class="pill">{{ a.shown_status_label }}</span><b>{{ a.company }}</b><small>{{ a.role_label }}</small></li>
   {% endfor %}
 </ul>
 {% else %}

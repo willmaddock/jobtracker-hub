@@ -2,7 +2,7 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from accounts.models import User, Workspace
-from applications.models import Application
+from applications.models import Application, Override
 
 
 class PipelinePageTests(TestCase):
@@ -31,6 +31,22 @@ class PipelinePageTests(TestCase):
         self.assertContains(response, "GCA USA")
         self.assertNotContains(response, "Secret Co")
         self.assertEqual(response.context["total"], 1)
+
+    def test_manual_status_override_wins_in_counts_and_rows(self):
+        app = Application.objects.get(company="GCA USA")
+        Override.objects.create(application=app, manual_status="interviewing")
+        self.client.force_login(self.owner)
+        response = self.client.get(self.url())
+        counts = {s["status"]: s["count"] for s in response.context["stats"]}
+        self.assertEqual(counts["interviewing"], 1)
+        self.assertEqual(counts["applied"], 0)
+        self.assertContains(response, "Interviewing")
+
+    def test_automatic_status_is_used_without_an_override(self):
+        self.client.force_login(self.owner)
+        response = self.client.get(self.url())
+        counts = {s["status"]: s["count"] for s in response.context["stats"]}
+        self.assertEqual(counts["applied"], 1)
 
     def test_other_users_workspace_is_404(self):
         self.client.force_login(self.owner)

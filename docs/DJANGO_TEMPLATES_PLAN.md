@@ -116,6 +116,9 @@ is the reference for the rest.
   middleware now also guards `/app/`. Anonymous visitors go to `/` until the template
   sign-in pages exist. Tests: `web.tests` (8 pass). Not yet done: template sign-in pages,
   workspace create, Pipeline filters, detail panel and Kanban.
+- 2026-11-07, step 1 fix: the Pipeline cards and rows now use the effective status
+  (manual override first, then automatic), matching the API. Before, manual statuses
+  were ignored. Tests: two added to `web.tests`.
 
 ## 10. Out of scope for now
 
