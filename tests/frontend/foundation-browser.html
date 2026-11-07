@@ -83,7 +83,7 @@ document.querySelector('#run').onclick = async function () {
       if(call.method==='PUT')return allowedAssignmentPut(call);
       if(call.method!=='GET')return false;
       if(call.attachReadScope)return allowedAttachRead(call);
-      if(['/api/auth/csrf','/api/auth/me','/api/workspaces/'].includes(path))return !query.length;
+      if(['/api/auth/csrf','/api/auth/me','/api/auth/options','/api/workspaces/'].includes(path))return !query.length;
       const positive=value=>/^[1-9]\d*$/.test(value)&&Number.isSafeInteger(Number(value));
       let match=/^\/api\/workspaces\/([1-9]\d*)\/insights\/$/.exec(path);
       if(match)return positive(match[1])&&!query.length;

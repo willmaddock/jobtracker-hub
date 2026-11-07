@@ -172,6 +172,33 @@
     background:#33415530;font-size:12px;}
   .workspace-preview.warn{border-color:#7a5a1e80;background:#7a5a1e14;}
   .workspace-preview.block{border-color:#7a2e2e80;background:#7a2e2e14;}
+  /* Sign-in / account screens (Django web build). Theme tokens only, so dark and light both work. */
+  .auth-card{width:440px;max-width:92vw;padding:32px;border-radius:14px;border:1px solid var(--border);background:var(--panel);
+    box-shadow:var(--card-shadow);display:flex;flex-direction:column;gap:14px;max-height:calc(100vh - 32px);overflow-y:auto;}
+  .auth-card > h1{margin:0;font-size:26px;font-weight:700;color:var(--text-strong);}
+  .auth-card > p,.auth-card > form > p,.auth-card > div > p{margin:0;font-size:14px;line-height:1.5;color:var(--text-soft);}
+  .auth-card > form > h2,.auth-card > div > h2{margin:0;font-size:20px;font-weight:700;color:var(--text-strong);}
+  .auth-card > form{display:flex;flex-direction:column;gap:14px;}
+  .auth-card > label,.auth-card > form > label{display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:600;color:var(--text);}
+  .auth-card label.auth-check{flex-direction:row;align-items:center;gap:8px;font-weight:500;}
+  .auth-input,.auth-card > label > select{width:100%;height:44px;padding:0 14px;font:inherit;font-size:15px;color:var(--text);
+    background:var(--bg);border:1.5px solid var(--border);border-radius:8px;}
+  .auth-input:focus,.auth-card > label > select:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px #3B82F633;}
+  .auth-code-row{display:flex;gap:10px;justify-content:space-between;}
+  .auth-code-box{min-width:0;padding:0;text-align:center;font-size:22px;font-weight:600;}
+  .auth-menu{position:absolute;top:52px;right:0;width:290px;z-index:20;padding:8px;border-radius:14px;border:1px solid var(--border);
+    background:var(--panel);box-shadow:0 12px 32px rgba(0,0,0,.35);}
+  .auth-menu-head{display:flex;align-items:center;gap:12px;padding:10px 12px;margin-bottom:4px;border-bottom:1px solid var(--border);word-break:break-all;}
+  .auth-menu-item{display:flex;flex-direction:column;justify-content:center;align-items:flex-start;width:100%;min-height:44px;padding:8px 12px;
+    border:0;border-radius:8px;background:none;color:var(--text);font:inherit;font-size:14px;text-align:left;cursor:pointer;}
+  .auth-menu-item:hover:not(:disabled){background:var(--bg);}
+  .auth-menu-item small{font-size:12px;color:var(--text-soft);}
+  .auth-menu-item.danger{color:var(--red-text);}
+  .auth-code{text-align:center;font-size:24px;font-weight:600;letter-spacing:.35em;font-variant-numeric:tabular-nums;}
+  .auth-card > form > .btn,.auth-card > .btn{min-height:44px;font-size:15px;border-radius:8px;}
+  .auth-card > form > .btn.auth-link{min-height:36px;padding:4px 0;border:0;background:none;color:var(--accent-soft);
+    font-size:14px;text-align:left;}
+  .auth-card > form > .btn.auth-link:hover{text-decoration:underline;transform:none;}
   .workspace-preview-path{font-size:10.5px;color:var(--text-mute);word-break:break-all;margin-bottom:6px;}
   .workspace-preview-headline{color:var(--text);margin-bottom:2px;font-weight:600;}
   .workspace-preview-sub{color:var(--text-soft);line-height:1.4;}
@@ -8393,7 +8420,36 @@ function EmailCodeSettings({client, onAuthFailure}) {
   </section>;
 }
 
-function ProfileMenu({user, busy, onSecurity, onSignOut}) {
+function CodeBoxes({value, onChange, length = 6, disabled}) {
+  const refs = useRef([]);
+  const digits = value.replace(/\D/g, "").slice(0, length).split("").filter(Boolean);
+  const put = (str, at) => {
+    onChange(str.replace(/\D/g, "").slice(0, length));
+    setTimeout(() => { const el = refs.current[Math.max(0, Math.min(at, length - 1))]; if (el) el.focus(); }, 0);
+  };
+  return <div className="auth-code-row" role="group" aria-label="6-digit code">
+    {Array.from({length}, (_, i) => <input key={i} ref={el => { refs.current[i] = el; }} className="auth-input auth-code-box"
+      inputMode="numeric" autoComplete={i === 0 ? "one-time-code" : "off"} autoFocus={i === 0} disabled={disabled}
+      aria-label={"Digit " + (i + 1)} value={digits[i] || ""}
+      onFocus={e => e.target.select()}
+      onChange={e => {
+        const d = e.target.value.replace(/\D/g, "");
+        if (!d) return;
+        if (d.length > 1) put(d, d.length);
+        else put(digits.slice(0, i).join("") + d + digits.slice(i + 1).join(""), i + 1);
+      }}
+      onKeyDown={e => {
+        if (e.key === "Backspace") {
+          e.preventDefault();
+          if (digits[i]) put(digits.slice(0, i).join("") + digits.slice(i + 1).join(""), i);
+          else if (i > 0) put(digits.slice(0, i - 1).join("") + digits.slice(i).join(""), i - 1);
+        } else if (e.key === "ArrowLeft" && i > 0) refs.current[i - 1].focus();
+        else if (e.key === "ArrowRight" && i < length - 1) refs.current[i + 1].focus();
+      }}
+      onPaste={e => { e.preventDefault(); const t = (e.clipboardData.getData("text") || "").replace(/\D/g, ""); if (t) put(t, t.length); }} />)}
+  </div>;
+}
+function ProfileMenu({user, busy, theme, onSecurity, onSwitch, onSignOut}) {
   const [open, setOpen] = useState(false);
   const box = useRef(null);
   useEffect(() => {
@@ -8404,23 +8460,24 @@ function ProfileMenu({user, busy, onSecurity, onSignOut}) {
   }, [open]);
   const label = (user && (user.email || user.username)) || "";
   const initials = label.replace(/@.*/, "").split(/[^A-Za-z0-9]+/).filter(Boolean).slice(0, 2).map(p => p[0].toUpperCase()).join("") || "?";
-  const item = {display:"block",width:"100%",textAlign:"left",minHeight:44,padding:"0 12px",border:0,background:"none",color:"inherit",font:"inherit",borderRadius:8,cursor:"pointer"};
+  const dark = theme && theme.applied === "dark";
+  const avatar = {width:44,height:44,borderRadius:"50%",border:"2px solid var(--accent)",background:"var(--bg)",color:"var(--text)",fontWeight:600,cursor:"pointer"};
   return <div ref={box} style={{position:"relative",display:"flex",justifyContent:"flex-end"}}
       onKeyDown={e => { if (e.key === "Escape") setOpen(false); }}>
-    <button type="button" aria-label="Open profile menu" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(!open)}
-      style={{width:44,height:44,borderRadius:"50%",border:"2px solid var(--accent, #6d7cff)",background:"var(--bg)",color:"var(--text)",fontWeight:600,cursor:"pointer"}}>{initials}</button>
-    {open && <div role="menu" aria-label="Profile" style={{position:"absolute",top:50,right:0,width:280,zIndex:20,padding:8,borderRadius:14,
-        border:"1px solid var(--border)",background:"var(--bg)",boxShadow:"0 12px 32px rgba(0,0,0,.5)"}}>
-      <div style={{padding:"10px 12px",borderBottom:"1px solid var(--border)",marginBottom:4,wordBreak:"break-all"}}>
-        <div style={{fontWeight:600}}>{user && user.username}</div>
-        {user && user.email && <div style={{fontSize:13,opacity:.75}}>{user.email}</div>}
+    <button type="button" aria-label="Open profile menu" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(!open)} style={avatar}>{initials}</button>
+    {open && <div role="menu" aria-label="Profile" className="auth-menu">
+      <div className="auth-menu-head">
+        <span aria-hidden="true" style={{...avatar,display:"inline-flex",alignItems:"center",justifyContent:"center",flex:"none",cursor:"default"}}>{initials}</span>
+        <span><strong style={{display:"block"}}>{user && user.username}</strong>
+          {user && user.email && <small style={{color:"var(--text-soft)"}}>{user.email}</small>}</span>
       </div>
-      <button type="button" role="menuitem" style={item} disabled={busy} onClick={() => { setOpen(false); onSecurity(); }}>Security</button>
-      <button type="button" role="menuitem" style={item} disabled={busy} onClick={() => { setOpen(false); onSignOut(); }}>Sign out</button>
+      <button type="button" role="menuitem" className="auth-menu-item" disabled={busy} onClick={() => { setOpen(false); onSecurity(); }}>Account settings<small>Security: passkeys, emailed codes</small></button>
+      <button type="button" role="menuitem" className="auth-menu-item" disabled={busy} onClick={() => { setOpen(false); onSwitch(); }}>Switch workspace</button>
+      <button type="button" role="menuitem" className="auth-menu-item" onClick={() => theme && theme.setTheme(dark ? "light" : "dark")}>Appearance<small>{dark ? "Dark" : "Light"} (tap to switch)</small></button>
+      <button type="button" role="menuitem" className="auth-menu-item danger" disabled={busy} onClick={() => { setOpen(false); onSignOut(); }}>Sign out</button>
     </div>}
   </div>;
 }
-
 function DjangoFoundation() {
   const theme = useTheme();
   const context = useMemo(() => JTHWorkspace.createContext(), []);
@@ -8455,6 +8512,8 @@ function DjangoFoundation() {
   const [emailAddr, setEmailAddr] = useState("");
   const [recoveryCodes, setRecoveryCodes] = useState([]);
   const [saved, setSaved] = useState(false);
+  const [resendIn, setResendIn] = useState(0);
+  useEffect(() => { if (resendIn <= 0) return; const t = setTimeout(() => setResendIn(resendIn - 1), 1000); return () => clearTimeout(t); }, [resendIn]);
   const phaseRef = useRef("loading");
   useEffect(() => { phaseRef.current = phase; }, [phase]);
   const securityOpenRef = useRef(false);
@@ -8559,7 +8618,7 @@ function DjangoFoundation() {
     try {
       await client.bootstrap();
       await client.request("/api/auth/email/start", {method:"POST", body:{email: emailAddr}});
-      setCode(""); setPhase("emailcode");
+      setCode(""); setResendIn(60); setPhase("emailcode");
     } catch (e) {
       if (e && emailKnown.includes(e.code)) setError(e.message); else report(e);
     } finally { setBusy(false); }
@@ -8666,27 +8725,27 @@ function DjangoFoundation() {
     } catch (e) { report(e); } finally { setBusy(false); }
   }
   return <main className="app-shell" style={{alignItems:"center",justifyContent:"center"}}>
-    <section className="workspace-preview" style={{width:420,maxWidth:"90vw",padding:24,maxHeight:"calc(100vh - 32px)",overflowY:"auto"}}>
+    <section className="auth-card">
       <h1>JobTracker Hub</h1>
       {error && <p role="alert" className="workspace-pop-err">{error}</p>}
       {phase === "loading" ? <p role="status">Checking session…</p> : phase === "unavailable" ? <p>Session could not be verified. Refresh to continue.</p> : phase === "mfa" ?
         <form onSubmit={submitCode}>
           <h2>Two-step verification</h2>
           {emailSentTo ? <p>We emailed a 6-digit code to {emailSentTo}. It expires in 10 minutes.</p> : <p>Enter the 6-digit code from your authenticator app, or one of your recovery codes.</p>}
-          <label>Code<input className="workspace-rename-input" style={{display:"block",width:"100%"}} autoComplete="one-time-code" autoFocus required maxLength={32} value={code} onChange={e=>setCode(e.target.value)} /></label>
-          <button className="btn" disabled={busy || !code.trim()}>Verify</button>
-          {passkeyAvailable && <button type="button" className="btn" disabled={busy} onClick={signInWithPasskey}>Use a passkey (Face ID / Touch ID)</button>}
-          {emailCodeAvailable && <button type="button" className="btn" disabled={busy} onClick={sendEmailCode}>{emailSentTo ? "Send a new emailed code" : "Email me a code"}</button>}
-          {emailSentTo && <button type="button" className="btn" disabled={busy} onClick={() => { setEmailSentTo(""); setCode(""); setError(""); }}>Use my authenticator app instead</button>}
-          <button type="button" className="btn" disabled={busy} onClick={cancelCodeEntry}>Back to sign in</button>
+          <label>Code<input className="auth-input auth-code" autoComplete="one-time-code" autoFocus required maxLength={32} value={code} onChange={e=>setCode(e.target.value)} /></label>
+          <button className="btn primary" disabled={busy || !code.trim()}>Verify</button>
+          {passkeyAvailable && <button type="button" className="btn auth-link" disabled={busy} onClick={signInWithPasskey}>Use a passkey (Face ID / Touch ID)</button>}
+          {emailCodeAvailable && <button type="button" className="btn auth-link" disabled={busy} onClick={sendEmailCode}>{emailSentTo ? "Send a new emailed code" : "Email me a code"}</button>}
+          {emailSentTo && <button type="button" className="btn auth-link" disabled={busy} onClick={() => { setEmailSentTo(""); setCode(""); setError(""); }}>Use my authenticator app instead</button>}
+          <button type="button" className="btn auth-link" disabled={busy} onClick={cancelCodeEntry}>Back to sign in</button>
         </form> : phase === "emailcode" ?
         <form onSubmit={verifyEmail}>
           <h2>Check your email</h2>
           <p>We sent a 6-digit code to {emailAddr.trim()}. It expires in 10 minutes.</p>
-          <label>Code<input className="workspace-rename-input" style={{display:"block",width:"100%"}} autoComplete="one-time-code" inputMode="numeric" autoFocus required maxLength={32} value={code} onChange={e=>setCode(e.target.value)} /></label>
-          <button className="btn" disabled={busy || !code.trim()}>Verify and continue</button>
-          <button type="button" className="btn" disabled={busy} onClick={() => startEmail()}>Send a new code</button>
-          <button type="button" className="btn" disabled={busy} onClick={() => { setCode(""); setError(""); setPhase("login"); }}>Use a different email</button>
+          <CodeBoxes value={code} onChange={setCode} disabled={busy} />
+          <button className="btn primary" disabled={busy || code.length !== 6}>Verify and continue</button>
+          <button type="button" className="btn auth-link" disabled={busy || resendIn > 0} onClick={() => startEmail()}>{resendIn > 0 ? "Didn't get it? Send a new code (available in " + Math.floor(resendIn / 60) + ":" + String(resendIn % 60).padStart(2, "0") + ")" : "Didn't get it? Send a new code"}</button>
+          <button type="button" className="btn auth-link" disabled={busy} onClick={() => { setCode(""); setError(""); setPhase("login"); }}>Use a different email</button>
         </form> : phase === "enroll" ?
         <form onSubmit={confirmEnrollment}>
           <h2>Set up two-step verification</h2>
@@ -8696,45 +8755,45 @@ function DjangoFoundation() {
           <p>On this device: <a href={mfaUri}>Open in authenticator app</a></p>
           <p>Or enter this setup key manually:</p>
           <p><code style={{wordBreak:"break-all",userSelect:"all"}}>{mfaSecret.replace(/(.{4})/g, "$1 ").trim()}</code></p>
-          <label>6-digit code<input className="workspace-rename-input" style={{display:"block",width:"100%"}} autoComplete="one-time-code" inputMode="numeric" autoFocus required maxLength={8} value={code} onChange={e=>setCode(e.target.value)} /></label>
-          <button className="btn" disabled={busy || !code.trim()}>Confirm and continue</button>
-          <button type="button" className="btn" disabled={busy} onClick={signOut}>Sign out</button>
+          <label>6-digit code<input className="auth-input auth-code" autoComplete="one-time-code" inputMode="numeric" autoFocus required maxLength={8} value={code} onChange={e=>setCode(e.target.value)} /></label>
+          <button className="btn primary" disabled={busy || !code.trim()}>Confirm and continue</button>
+          <button type="button" className="btn auth-link" disabled={busy} onClick={signOut}>Sign out</button>
         </form> : phase === "recovery" ?
         <div>
           <h2>Save your recovery codes</h2>
           <p>Each code works once if you lose your authenticator. They are shown only now. Store them somewhere safe, such as a password manager.</p>
           <ul style={{columns:2,fontFamily:"monospace",userSelect:"all"}}>{recoveryCodes.map(c => <li key={c}>{c}</li>)}</ul>
           <button className="btn" type="button" onClick={() => { try { navigator.clipboard.writeText(recoveryCodes.join("\n")); } catch (_) {} }}>Copy codes</button>
-          <label style={{display:"block"}}><input type="checkbox" checked={saved} onChange={e=>setSaved(e.target.checked)} /> I have saved these codes</label>
-          <button className="btn" disabled={busy || !saved} onClick={finishEnrollment}>Continue</button>
+          <label className="auth-check"><input type="checkbox" checked={saved} onChange={e=>setSaved(e.target.checked)} /> I have saved these codes</label>
+          <button className="btn primary" disabled={busy || !saved} onClick={finishEnrollment}>Continue</button>
         </div> : phase === "login" && options && options.email_signin && loginMode === "email" ?
         <form onSubmit={startEmail}>
           <h2>Welcome to JobTracker Hub</h2>
           <p>{options.signup_open ? "Sign in or create an account to see your pipeline." : "Sign in to see your pipeline."}</p>
-          <label>Email address<input className="workspace-rename-input" style={{display:"block",width:"100%"}} type="email" autoComplete="email" autoFocus required placeholder="you@example.com" value={emailAddr} onChange={e=>setEmailAddr(e.target.value)} /></label>
-          <button className="btn" disabled={busy || !emailAddr.trim()}>Continue with email</button>
+          <label>Email address<input className="auth-input" type="email" autoComplete="email" autoFocus required placeholder="you@example.com" value={emailAddr} onChange={e=>setEmailAddr(e.target.value)} /></label>
+          <button className="btn primary" disabled={busy || !emailAddr.trim()}>Continue with email</button>
           <p>We will email you a 6-digit code. No password to remember.</p>
-          <button type="button" className="btn" disabled={busy} onClick={() => { setError(""); setLoginMode("password"); }}>Use a username and password</button>
+          <button type="button" className="btn auth-link" disabled={busy} onClick={() => { setError(""); setLoginMode("password"); }}>Use a username and password</button>
         </form> : phase === "login" ?
         <form onSubmit={signIn}>
           <p>{options && options.email_signin ? "Sign in with your username and password." : "Sign in with your administrator-provided account."}</p>
-          <label>Username<input className="workspace-rename-input" style={{display:"block",width:"100%"}} autoComplete="username" required value={username} onChange={e=>setUsername(e.target.value)} /></label>
-          <label>Password<input className="workspace-rename-input" style={{display:"block",width:"100%"}} type="password" autoComplete="current-password" required value={password} onChange={e=>setPassword(e.target.value)} /></label>
-          <button className="btn" disabled={busy}>Sign in</button>
-          {options && options.email_signin && <button type="button" className="btn" disabled={busy} onClick={() => { setError(""); setLoginMode("email"); }}>Sign in with an emailed code instead</button>}
+          <label>Username<input className="auth-input" autoComplete="username" required value={username} onChange={e=>setUsername(e.target.value)} /></label>
+          <label>Password<input className="auth-input" type="password" autoComplete="current-password" required value={password} onChange={e=>setPassword(e.target.value)} /></label>
+          <button className="btn primary" disabled={busy}>Sign in</button>
+          {options && options.email_signin && <button type="button" className="btn auth-link" disabled={busy} onClick={() => { setError(""); setLoginMode("email"); }}>Sign in with an emailed code instead</button>}
         </form> : <>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12}}>
-            <p>Signed in as {user && user.username}</p>
-            <ProfileMenu user={user} busy={busy} onSecurity={() => setSecurityOpen(true)} onSignOut={signOut} />
+            <p>Signed in as {user && (user.email || user.username)}</p>
+            <ProfileMenu user={user} busy={busy} theme={theme} onSecurity={() => setSecurityOpen(true)} onSwitch={() => { const el = document.getElementById("auth-workspace-select"); if (el) el.focus(); }} onSignOut={signOut} />
           </div>
-          <label>Workspace<select aria-label="Workspace" value={selected ? selected.id : ""} disabled={busy} onChange={e=> { window.location.hash = e.target.value ? "/workspaces/" + e.target.value : ""; }}>
+          <label>Workspace<select id="auth-workspace-select" aria-label="Workspace" value={selected ? selected.id : ""} disabled={busy} onChange={e=> { window.location.hash = e.target.value ? "/workspaces/" + e.target.value : ""; }}>
             <option value="">Select a workspace</option>
             {workspaces.map(w=><option key={w.id} value={w.id}>{w.name}</option>)}
           </select></label>
           {!workspaces.length && <p>No workspaces yet. Create one to continue.</p>}
           <form onSubmit={createWorkspace}>
             <label>New workspace name<input className="workspace-rename-input" required value={name} onChange={e=>setName(e.target.value)} /></label>
-            <button className="btn" disabled={busy || !name.trim()}>Create workspace</button>
+            <button className="btn primary" disabled={busy || !name.trim()}>Create workspace</button>
           </form>
           {selected && <p role="status">{connected ? "Connected to " + selected.name + "." : "Checking workspace connection…"}</p>}
           {selected && connected && <button className="btn" disabled={evidenceOpen} onClick={() => {context.invalidate();setApplicationsOpen(false);setReviewsOpen(false);setCategoriesOpen(false);setEvidenceOpen(true);}}>Extraction evidence</button>}
