@@ -1,6 +1,6 @@
 # MFA and account security design
 
-Status: **decisions taken by the project owner's delegation; stage 1 (primitives) implemented.**
+Status: **decisions taken by the project owner's delegation; stages 1 (primitives) and 2 (models, key, service) implemented.**
 Not yet recorded in `DJANGO_MIGRATION_DECISIONS.md`.
 
 ## Decisions
@@ -27,8 +27,9 @@ Not yet recorded in `DJANGO_MIGRATION_DECISIONS.md`.
 
 ## Stages
 1. **Primitives** (`accounts/totp.py`, tests against RFC vectors). *Done.*
-2. Models and migration: `MfaDevice` (encrypted secret, confirmed flag, last step), recovery codes;
-   `MFA_ENCRYPTION_KEY` admission in `prod.py` and its tests.
+2. Models and migration: `MfaDevice` (encrypted secret, confirmed flag, last step, failure counter,
+   lock), `MfaRecoveryCode`; `accounts/mfa.py` service; `MFA_ENCRYPTION_KEY` admission in `prod.py`
+   (a fourth distinct Fernet key) and its tests. *Done (pending first test run).*
 3. Login flow endpoints, enforcement (DRF permission plus admin guard), throttling, tests.
 4. Frontend: sign-in code step, enrolment (QR + recovery codes), settings, admin MFA reset.
 5. Product admin role and user management.

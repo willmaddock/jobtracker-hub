@@ -1,6 +1,7 @@
 """Fresh-process configuration admission; no databases, credentials or services."""
 import ast
 import base64
+import itertools
 import json
 import os
 from pathlib import Path
@@ -10,7 +11,7 @@ import tempfile
 from django.test import SimpleTestCase
 
 BACKEND = Path(__file__).resolve().parents[1]
-KEY_NAMES = ('GMAIL_TOKEN_ENCRYPTION_KEY', 'MICROSOFT_TOKEN_ENCRYPTION_KEY', 'IMAP_TOKEN_ENCRYPTION_KEY')
+KEY_NAMES = ('GMAIL_TOKEN_ENCRYPTION_KEY', 'MICROSOFT_TOKEN_ENCRYPTION_KEY', 'IMAP_TOKEN_ENCRYPTION_KEY', 'MFA_ENCRYPTION_KEY')
 DB_NAMES = ('DJANGO_DB_NAME', 'DJANGO_DB_USER', 'DJANGO_DB_PASSWORD', 'DJANGO_DB_HOST', 'DJANGO_DB_PORT')
 
 # Read committed source literals only, never .env or stored credentials. This also
@@ -237,7 +238,7 @@ class ProductionSettingsTests(SimpleTestCase):
                           self.valid[name][:-1], self.valid[name]+'\n', *[defaults[n] for n in KEY_NAMES]):
                 with self.subTest(name=name,value=value):
                     self.refusal(removed=(name,) if value is None else (), changes={} if value is None else {name:value})
-        for a,b in ((KEY_NAMES[0],KEY_NAMES[1]),(KEY_NAMES[1],KEY_NAMES[2]),(KEY_NAMES[0],KEY_NAMES[2])):
+        for a,b in itertools.combinations(KEY_NAMES,2):
             self.refusal(changes={b:self.valid[a]}, message='Production configuration requires distinct provider encryption keys.')
         # Noncanonical pad bits decode to the same bytes but must not be accepted.
         value=self.valid[KEY_NAMES[0]]

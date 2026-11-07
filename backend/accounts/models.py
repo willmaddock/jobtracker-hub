@@ -43,3 +43,30 @@ class Workspace(models.Model):
 
     def __str__(self) -> str:
         return f"{self.name} ({self.owner})"
+
+
+class MfaDevice(models.Model):
+    """A user's authenticator-app (TOTP) enrolment. See docs/MFA_DESIGN.md.
+
+    The secret is stored only as a Fernet token (accounts.mfa handles encryption). It is
+    never returned by any API after enrolment starts, and is not shown in the admin.
+    ``confirmed_at`` stays null until the user proves their app works with a first code.
+    """
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="mfa_device")
+    secret_encrypted = models.TextField()
+    confirmed_at = models.DateTimeField(null=True, blank=True)
+    last_used_step = models.BigIntegerField(null=True, blank=True)
+    failed_attempts = models.PositiveSmallIntegerField(default=0)
+    locked_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self) -> str:
+        return f"MFA for {self.user_id} ({'confirmed' if self.confirmed_at else 'pending'})"
+
+
+class MfaRecoveryCode(models.Model):
+    """One single-use recovery code, stored only as a salted hash."""
+    device = models.ForeignKey(MfaDevice, on_delete=models.CASCADE, related_name="recovery_codes")
+    code_hash = models.CharField(max_length=255)
+    used_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)

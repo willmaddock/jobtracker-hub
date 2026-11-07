@@ -252,6 +252,16 @@ IMAP_TOKEN_ENCRYPTION_KEY = os.environ.get(
     'IMAP_TOKEN_ENCRYPTION_KEY', 'FKMi8JI8yo6UB7lC3PoLor_kuv2SAWF5l_rrD0WsoiA='
 )
 
+# MFA (docs/MFA_DESIGN.md). Encrypts each user's TOTP secret at rest. A fourth, distinct
+# Fernet key: production refuses this development fallback (prod.py), requires it, and
+# requires it to differ from the three provider keys. Rotating it invalidates every
+# enrolled authenticator, so users would have to be reset and re-enrol.
+MFA_ENCRYPTION_KEY = os.environ.get(
+    'MFA_ENCRYPTION_KEY', '677OQZpNhrBbieGggrHUIRBlQwXRQNE0PeRbby0pcQ8='
+)
+MFA_ISSUER = 'JobTracker Hub'  # shown in the authenticator app
+MFA_LOCKOUT_THRESHOLD = 10  # consecutive bad codes before an operator must reset the account
+
 
 # Celery / background task scheduling (Phase 10 -- closes the "no
 # background task runner" gap docs/DJANGO_MIGRATION_PLAN.md's Phase 9

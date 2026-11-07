@@ -92,6 +92,7 @@ _development_keys = {
     "fXjaJnCzcqV7qdtv8krT14nLUD6QBFScd6jZf5hzVGg=",
     "Pkn_45gin4M7zHTs1htox81DGuwAV7ADpMKtZpQqd-4=",
     "FKMi8JI8yo6UB7lC3PoLor_kuv2SAWF5l_rrD0WsoiA=",
+    "677OQZpNhrBbieGggrHUIRBlQwXRQNE0PeRbby0pcQ8=",
 }
 
 
@@ -116,7 +117,8 @@ def _provider_key(name):
 GMAIL_TOKEN_ENCRYPTION_KEY, _gmail_bytes = _provider_key("GMAIL_TOKEN_ENCRYPTION_KEY")
 MICROSOFT_TOKEN_ENCRYPTION_KEY, _microsoft_bytes = _provider_key("MICROSOFT_TOKEN_ENCRYPTION_KEY")
 IMAP_TOKEN_ENCRYPTION_KEY, _imap_bytes = _provider_key("IMAP_TOKEN_ENCRYPTION_KEY")
-if len({_gmail_bytes, _microsoft_bytes, _imap_bytes}) != 3:
+MFA_ENCRYPTION_KEY, _mfa_bytes = _provider_key("MFA_ENCRYPTION_KEY")
+if len({_gmail_bytes, _microsoft_bytes, _imap_bytes, _mfa_bytes}) != 4:
     raise ImproperlyConfigured("Production configuration requires distinct provider encryption keys.") from None
 
 _hosts = _required("DJANGO_ALLOWED_HOSTS", opaque=True)
