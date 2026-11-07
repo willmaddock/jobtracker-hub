@@ -144,6 +144,14 @@ result = {
 '''
 
 
+WEBAUTHN_SETTINGS = '''
+import django
+django.setup()
+from django.conf import settings
+result = {"rp_id": settings.WEBAUTHN_RP_ID, "origin": settings.WEBAUTHN_ORIGIN}
+'''
+
+
 class ProductionSettingsTests(SimpleTestCase):
     databases = set()
 
@@ -492,3 +500,34 @@ result = {
         completed, data = self.run_child(MFA_SETTINGS, changes={'DJANGO_BEHIND_TLS_PROXY': 'true'})
         self.assertEqual(completed.returncode, 0, data)
         self.assertEqual(data['result']['proxies'], 1)
+
+    def test_passkeys_are_off_unless_both_values_are_set(self):
+        completed, data = self.run_child(WEBAUTHN_SETTINGS)
+        self.assertEqual(completed.returncode, 0, data)
+        self.assertEqual(data['result'], {'rp_id': '', 'origin': ''})  # base development values never leak in
+
+    def test_passkeys_settings_accepted_when_consistent(self):
+        for rp_id, origin in (('example.test', 'https://example.test'),
+                              ('example.test', 'https://app.example.test'),
+                              ('localhost', 'https://localhost:8443')):
+            completed, data = self.run_child(WEBAUTHN_SETTINGS, changes={'WEBAUTHN_RP_ID': rp_id, 'WEBAUTHN_ORIGIN': origin})
+            self.assertEqual(completed.returncode, 0, data)
+            self.assertEqual(data['result'], {'rp_id': rp_id, 'origin': origin})
+
+    def test_passkeys_settings_refuse_inconsistent_values(self):
+        bad = (
+            {'WEBAUTHN_RP_ID': 'example.test'},
+            {'WEBAUTHN_ORIGIN': 'https://example.test'},
+            {'WEBAUTHN_RP_ID': 'example.test', 'WEBAUTHN_ORIGIN': 'http://example.test'},
+            {'WEBAUTHN_RP_ID': 'example.test', 'WEBAUTHN_ORIGIN': 'https://example.test/'},
+            {'WEBAUTHN_RP_ID': 'example.test', 'WEBAUTHN_ORIGIN': 'https://example.test/app'},
+            {'WEBAUTHN_RP_ID': 'example.test', 'WEBAUTHN_ORIGIN': 'https://other.test'},
+            {'WEBAUTHN_RP_ID': 'example.test', 'WEBAUTHN_ORIGIN': 'https://evilexample.test'},
+            {'WEBAUTHN_RP_ID': 'example.test', 'WEBAUTHN_ORIGIN': 'https://user@example.test'},
+            {'WEBAUTHN_RP_ID': 'example.test', 'WEBAUTHN_ORIGIN': 'https://example.test:notaport'},
+            {'WEBAUTHN_RP_ID': 'https://example.test', 'WEBAUTHN_ORIGIN': 'https://example.test'},
+            {'WEBAUTHN_RP_ID': 'Example.test', 'WEBAUTHN_ORIGIN': 'https://example.test'},
+        )
+        for changes in bad:
+            with self.subTest(changes=changes):
+                self.refusal(changes=changes, message='Production configuration has invalid WEBAUTHN_ORIGIN.')

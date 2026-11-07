@@ -13,7 +13,7 @@ class WorkspaceAdmin(admin.ModelAdmin):
     search_fields = ("name", "owner__username", "owner__email")
 
 
-from .models import MfaDevice  # noqa: E402
+from .models import MfaDevice, PasskeyCredential  # noqa: E402
 
 
 @admin.register(MfaDevice)
@@ -27,6 +27,20 @@ class MfaDeviceAdmin(admin.ModelAdmin):
     search_fields = ("user__username", "user__email")
     exclude = ("secret_encrypted", "last_used_step")
     readonly_fields = ("user", "confirmed_at", "failed_attempts", "locked_at", "created_at")
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(PasskeyCredential)
+class PasskeyCredentialAdmin(admin.ModelAdmin):
+    """Operator view: list and remove passkeys. Keys and credential ids are never displayed."""
+    list_display = ("name", "device", "created_at", "last_used_at")
+    exclude = ("credential_id", "public_key", "sign_count")
+    readonly_fields = ("device", "name", "created_at", "last_used_at")
 
     def has_add_permission(self, request):
         return False

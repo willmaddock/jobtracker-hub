@@ -60,3 +60,13 @@ class LoginSerializer(serializers.Serializer):
 class MfaCodeSerializer(serializers.Serializer):
     """An authenticator code or recovery code; length-bounded, never echoed back."""
     code = serializers.CharField(max_length=32, trim_whitespace=True, style={"input_type": "password"})
+
+
+class PasskeyCredentialSerializer(serializers.Serializer):
+    """The browser's WebAuthn response as JSON; structure is checked by the WebAuthn library."""
+    credential = serializers.DictField()
+
+
+class PasskeyRegisterSerializer(PasskeyCredentialSerializer):
+    name = serializers.CharField(max_length=80, required=False, allow_blank=True, trim_whitespace=True)
+

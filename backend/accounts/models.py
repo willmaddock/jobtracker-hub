@@ -70,3 +70,23 @@ class MfaRecoveryCode(models.Model):
     code_hash = models.CharField(max_length=255)
     used_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+
+
+class PasskeyCredential(models.Model):
+    """A WebAuthn passkey (Face ID, Touch ID, security key) usable as the second sign-in step.
+
+    Belongs to the user's confirmed MfaDevice, so it can only exist next to the authenticator
+    app and recovery codes, and an operator MFA reset (which deletes the device) removes it.
+    ``credential_id`` is base64url text; the public key is not secret but is never shown.
+    """
+    device = models.ForeignKey(MfaDevice, on_delete=models.CASCADE, related_name="passkeys")
+    credential_id = models.CharField(max_length=512, unique=True)
+    public_key = models.BinaryField()
+    sign_count = models.PositiveBigIntegerField(default=0)
+    name = models.CharField(max_length=80)
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+
+    def __str__(self) -> str:
+        return f"Passkey {self.name!r} for device {self.device_id}"
+

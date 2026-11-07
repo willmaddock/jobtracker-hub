@@ -1,6 +1,10 @@
 from django.urls import path
 from rest_framework.routers import DefaultRouter
 
+from .passkey_views import (
+    PasskeyDetailView, PasskeyListView, PasskeyRegisterOptionsView, PasskeyRegisterVerifyView,
+    PasskeySignInOptionsView, PasskeySignInVerifyView,
+)
 from .views import (
     CsrfView, LoginView, LogoutView, MeView, MfaEnrollBeginView, MfaEnrollConfirmView,
     MfaStatusView, MfaVerifyView, WorkspaceViewSet,
@@ -18,4 +22,10 @@ urlpatterns = [
     path("auth/mfa/status", MfaStatusView.as_view(), name="auth-mfa-status"),
     path("auth/mfa/enroll/begin", MfaEnrollBeginView.as_view(), name="auth-mfa-enroll-begin"),
     path("auth/mfa/enroll/confirm", MfaEnrollConfirmView.as_view(), name="auth-mfa-enroll-confirm"),
+    path("auth/mfa/passkey/options", PasskeySignInOptionsView.as_view(), name="auth-mfa-passkey-options"),
+    path("auth/mfa/passkey/verify", PasskeySignInVerifyView.as_view(), name="auth-mfa-passkey-verify"),
+    path("account/passkeys/", PasskeyListView.as_view(), name="account-passkeys"),
+    path("account/passkeys/register/options", PasskeyRegisterOptionsView.as_view(), name="account-passkey-register-options"),
+    path("account/passkeys/register/verify", PasskeyRegisterVerifyView.as_view(), name="account-passkey-register-verify"),
+    path("account/passkeys/<int:pk>/", PasskeyDetailView.as_view(), name="account-passkey-detail"),
 ] + router.urls

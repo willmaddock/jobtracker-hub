@@ -264,6 +264,14 @@ MFA_ISSUER = 'JobTracker Hub'  # shown in the authenticator app
 MFA_LOCKOUT_THRESHOLD = 10  # consecutive bad codes before an operator must reset the account
 # Off here so development and the existing test suite are unchanged; production forces it on.
 MFA_REQUIRED = False
+
+# Passkeys (WebAuthn). The relying-party id is the site's domain and the origin its exact
+# https origin; both are fixed by configuration, never taken from a request. Development
+# defaults suit runserver; production reads WEBAUTHN_RP_ID / WEBAUTHN_ORIGIN and leaves
+# passkeys switched off when they are unset (config/settings/prod.py).
+WEBAUTHN_RP_NAME = 'JobTracker Hub'
+WEBAUTHN_RP_ID = 'localhost'
+WEBAUTHN_ORIGIN = 'http://localhost:8000'
 AUTH_THROTTLE_RATES = {}  # scope -> "N/period"; empty = unthrottled (see accounts/throttles.py)
 
 

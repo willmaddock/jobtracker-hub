@@ -8257,6 +8257,93 @@ function CategoryPanel({client, context, workspaceId, onClose, onAuthFailure}) {
   </section>;
 }
 
+// ---- WebAuthn (passkey) helpers: the server speaks base64url JSON, the browser wants buffers ----
+function b64uToBuf(value) {
+  const pad = "=".repeat((4 - value.length % 4) % 4);
+  const raw = atob((value + pad).replace(/-/g, "+").replace(/_/g, "/"));
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out.buffer;
+}
+function bufToB64u(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let raw = "";
+  for (let i = 0; i < bytes.length; i++) raw += String.fromCharCode(bytes[i]);
+  return btoa(raw).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+const passkeysSupported = () => typeof window.PublicKeyCredential === "function" && !!navigator.credentials;
+function allowList(list) {
+  return (list || []).map(c => ({type: c.type || "public-key", id: b64uToBuf(c.id), transports: c.transports}));
+}
+async function getPasskeyAssertion(opts) {
+  const cred = await navigator.credentials.get({publicKey: {
+    challenge: b64uToBuf(opts.challenge), rpId: opts.rpId, timeout: opts.timeout,
+    userVerification: opts.userVerification || "required", allowCredentials: allowList(opts.allowCredentials)}});
+  return {id: cred.id, rawId: bufToB64u(cred.rawId), type: cred.type,
+    authenticatorAttachment: cred.authenticatorAttachment || undefined, clientExtensionResults: {},
+    response: {clientDataJSON: bufToB64u(cred.response.clientDataJSON), authenticatorData: bufToB64u(cred.response.authenticatorData),
+      signature: bufToB64u(cred.response.signature),
+      userHandle: cred.response.userHandle ? bufToB64u(cred.response.userHandle) : undefined}};
+}
+async function createPasskey(opts) {
+  const cred = await navigator.credentials.create({publicKey: {
+    challenge: b64uToBuf(opts.challenge), rp: opts.rp,
+    user: {id: b64uToBuf(opts.user.id), name: opts.user.name, displayName: opts.user.displayName},
+    pubKeyCredParams: opts.pubKeyCredParams, timeout: opts.timeout, attestation: "none",
+    authenticatorSelection: opts.authenticatorSelection, excludeCredentials: allowList(opts.excludeCredentials)}});
+  return {id: cred.id, rawId: bufToB64u(cred.rawId), type: cred.type,
+    authenticatorAttachment: cred.authenticatorAttachment || undefined, clientExtensionResults: {},
+    response: {clientDataJSON: bufToB64u(cred.response.clientDataJSON), attestationObject: bufToB64u(cred.response.attestationObject),
+      transports: cred.response.getTransports ? cred.response.getTransports() : undefined}};
+}
+
+function SecurityPanel({client, onClose, onAuthFailure}) {
+  const [info, setInfo] = useState(null);
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  async function load() {
+    try { setInfo(await client.request("/api/account/passkeys/")); } catch (e) { onAuthFailure(e); }
+  }
+  useEffect(() => { load(); }, []);
+  async function add(event) {
+    event.preventDefault(); setBusy(true); setMessage("");
+    try {
+      const opts = await client.request("/api/account/passkeys/register/options", {method:"POST"});
+      const credential = await createPasskey(opts);
+      await client.request("/api/account/passkeys/register/verify", {method:"POST", body:{credential, name}});
+      setName(""); setMessage("Passkey added."); await load();
+    } catch (e) {
+      if (e && e.name === "NotAllowedError") setMessage("Passkey setup was cancelled.");
+      else if (e && e.name === "InvalidStateError") setMessage("This device already has a passkey for this account.");
+      else if (e && e.code === "passkey_limit_reached") setMessage(e.message);
+      else if (e && (e.code === "passkey_invalid" || e.code === "passkey_challenge_invalid")) setMessage("That passkey could not be added. Try again.");
+      else onAuthFailure(e);
+    } finally { setBusy(false); }
+  }
+  async function remove(id) {
+    setBusy(true); setMessage("");
+    try { await client.request("/api/account/passkeys/" + id + "/", {method:"DELETE"}); setMessage("Passkey removed."); await load(); }
+    catch (e) { onAuthFailure(e); } finally { setBusy(false); }
+  }
+  return <section aria-label="Security">
+    <h2>Security</h2>
+    <p>Two-step verification is on. Recovery codes and your authenticator app always work as a backup.</p>
+    {message && <p role="status">{message}</p>}
+    {!info ? <p role="status">Loading…</p> : !info.available ? <p>Passkeys are not available on this server.</p> : <>
+      <h3>Passkeys</h3>
+      {info.passkeys.length === 0 ? <p>No passkeys yet.</p> : <ul>{info.passkeys.map(p =>
+        <li key={p.id}>{p.name}{p.last_used_at ? " (last used " + new Date(p.last_used_at).toLocaleDateString() + ")" : " (not used yet)"}{" "}
+          <button className="btn" disabled={busy} onClick={() => remove(p.id)}>Remove</button></li>)}</ul>}
+      {passkeysSupported() ? <form onSubmit={add}>
+        <label>Name this passkey<input className="workspace-rename-input" style={{display:"block",width:"100%"}} maxLength={80} placeholder="MacBook Touch ID" value={name} onChange={e=>setName(e.target.value)} /></label>
+        <button className="btn" disabled={busy}>Add a passkey (Face ID / Touch ID)</button>
+      </form> : <p>This browser does not support passkeys.</p>}
+    </>}
+    <button className="btn" onClick={onClose}>Close</button>
+  </section>;
+}
+
 function DjangoFoundation() {
   const theme = useTheme();
   const context = useMemo(() => JTHWorkspace.createContext(), []);
@@ -8282,6 +8369,8 @@ function DjangoFoundation() {
   const [mfaSecret, setMfaSecret] = useState("");
   const [mfaUri, setMfaUri] = useState("");
   const [mfaQr, setMfaQr] = useState("");
+  const [passkeyAvailable, setPasskeyAvailable] = useState(false);
+  const [securityOpen, setSecurityOpen] = useState(false);
   const [recoveryCodes, setRecoveryCodes] = useState([]);
   const [saved, setSaved] = useState(false);
   const phaseRef = useRef("loading");
@@ -8297,7 +8386,7 @@ function DjangoFoundation() {
     context.invalidate(); context.setActor(null); client.clearCsrf();
     identity.current = null; setUser(null); setWorkspaces([]);
     setSelected(null); setConnected(false); setPassword(""); setName("");
-    setCode(""); setMfaSecret(""); setMfaUri(""); setMfaQr(""); setRecoveryCodes([]); setSaved(false);
+    setCode(""); setMfaSecret(""); setMfaUri(""); setMfaQr(""); setRecoveryCodes([]); setSaved(false); setPasskeyAvailable(false); setSecurityOpen(false);
   }
   function report(e) {
     if (["stale_response", "aborted"].includes(e.code)) return;
@@ -8331,7 +8420,7 @@ function DjangoFoundation() {
     let list;
     try { list = await client.request("/api/workspaces/"); }
     catch (e) {
-      if (e.code === "mfa_required") { setCode(""); setPhase("mfa"); return; }
+      if (e.code === "mfa_required") { setCode(""); setPasskeyAvailable(false); setPhase("mfa"); return; }
       if (e.code === "mfa_enrollment_required") {
         setCode("");
         const begun = await client.request("/api/auth/mfa/enroll/begin", {method:"POST"});
@@ -8369,7 +8458,7 @@ function DjangoFoundation() {
     try {
       await client.bootstrap();
       const nextUser = await client.request("/api/auth/login", {method:"POST", body:{username,password}});
-      if (nextUser.mfa_required) { setCode(""); setPhase("mfa"); return; } // password accepted, no session yet
+      if (nextUser.mfa_required) { setCode(""); setPasskeyAvailable(!!nextUser.passkey_available && passkeysSupported()); setPhase("mfa"); return; } // password accepted, no session yet
       await client.bootstrap(); // Django rotates the CSRF secret on login.
       if (channel.current) channel.current.postMessage("changed");
       await establish(nextUser);
@@ -8388,6 +8477,23 @@ function DjangoFoundation() {
       else if (e.code === "mfa_invalid_code") setError("That code was not accepted. Check the code and try again.");
       else report(e);
     } finally { setCode(""); setBusy(false); }
+  }
+  async function signInWithPasskey() {
+    setBusy(true); setError("");
+    try {
+      const opts = await client.request("/api/auth/mfa/passkey/options", {method:"POST"});
+      const credential = await getPasskeyAssertion(opts);
+      const nextUser = await client.request("/api/auth/mfa/passkey/verify", {method:"POST", body:{credential}});
+      await client.bootstrap(); // the session was created or rotated by verification
+      if (channel.current) channel.current.postMessage("changed");
+      setCode(""); await establish(nextUser);
+    } catch (e) {
+      if (e && e.name === "NotAllowedError") setError("Passkey sign-in was cancelled. You can try again or use a code.");
+      else if (e && e.code === "mfa_session_expired") { setCode(""); setPhase("login"); setError("That sign-in expired. Sign in again."); }
+      else if (e && e.code === "mfa_locked") { setCode(""); setError(e.message); }
+      else if (e && (e.code === "passkey_invalid" || e.code === "passkey_challenge_invalid")) setError("That passkey was not accepted. Try again or use a code.");
+      else report(e);
+    } finally { setBusy(false); }
   }
   async function confirmEnrollment(event) {
     event.preventDefault(); setBusy(true); setError("");
@@ -8445,6 +8551,7 @@ function DjangoFoundation() {
           <p>Enter the 6-digit code from your authenticator app, or one of your recovery codes.</p>
           <label>Code<input className="workspace-rename-input" style={{display:"block",width:"100%"}} autoComplete="one-time-code" autoFocus required maxLength={32} value={code} onChange={e=>setCode(e.target.value)} /></label>
           <button className="btn" disabled={busy || !code.trim()}>Verify</button>
+          {passkeyAvailable && <button type="button" className="btn" disabled={busy} onClick={signInWithPasskey}>Use a passkey (Face ID / Touch ID)</button>}
           <button type="button" className="btn" disabled={busy} onClick={cancelCodeEntry}>Back to sign in</button>
         </form> : phase === "enroll" ?
         <form onSubmit={confirmEnrollment}>
@@ -8496,6 +8603,8 @@ function DjangoFoundation() {
           {selected && connected && <button className="btn" disabled={categoriesOpen} onClick={()=>{context.invalidate();setEvidenceOpen(false);setApplicationsOpen(false);setReviewsOpen(false);setCategoriesOpen(true);}}>Categories</button>}
           {selected && connected && categoriesOpen && <CategoryPanel key={user.id+":"+selected.id} client={client} context={context} workspaceId={selected.id}
             onClose={()=>setCategoriesOpen(false)} onAuthFailure={report} />}
+          <button className="btn" disabled={securityOpen} onClick={() => setSecurityOpen(true)}>Security</button>
+          {securityOpen && <SecurityPanel key={user.id} client={client} onClose={() => setSecurityOpen(false)} onAuthFailure={report} />}
           <button className="btn" disabled={busy} onClick={signOut}>Sign out</button>
         </>}
       {error && <button className="btn" disabled={busy} onClick={checkSession}>Refresh session and workspaces</button>}

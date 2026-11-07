@@ -16,6 +16,8 @@ x-app: &app
     DJANGO_SETTINGS_MODULE: config.settings.prod
     DJANGO_ALLOWED_HOSTS: localhost
     DJANGO_BEHIND_TLS_PROXY: "true"
+    WEBAUTHN_RP_ID: localhost
+    WEBAUTHN_ORIGIN: https://localhost:8443
     DJANGO_DB_HOST: db
     DJANGO_DB_PORT: "5432"
     DJANGO_DB_NAME: jobtracker

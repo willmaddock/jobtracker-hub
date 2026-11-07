@@ -171,6 +171,32 @@ MFA_REQUIRED = True
 AUTH_THROTTLE_RATES = {"auth_login": "10/min", "mfa": "10/min"}
 REST_FRAMEWORK = {**REST_FRAMEWORK, "NUM_PROXIES": 1 if _proxy == "true" else 0}
 
+# Passkeys are enabled only when both values are set, and must describe the same site: the
+# origin is exactly https://<host>[:port] and its host is the relying-party id or a subdomain.
+# Unset (the default) disables passkeys; the base-settings development values never apply here.
+_rp_id = os.environ.get("WEBAUTHN_RP_ID", "")
+_origin = os.environ.get("WEBAUTHN_ORIGIN", "")
+WEBAUTHN_RP_ID = ""
+WEBAUTHN_ORIGIN = ""
+if _rp_id or _origin:
+    from urllib.parse import urlsplit as _urlsplit
+    try:
+        _parts = _urlsplit(_origin)
+        _host_name = _parts.hostname or ""
+        _parts.port  # raises ValueError for a malformed port
+        _webauthn_valid = bool(
+            _rp_id and _origin and not _controlled(_rp_id) and not _controlled(_origin)
+            and _rp_id == _rp_id.strip().lower() and not any(c in _rp_id for c in "/:@?# ")
+            and _parts.scheme == "https" and not _parts.username and not _parts.password
+            and _parts.path == "" and not _parts.query and not _parts.fragment
+            and (_host_name == _rp_id or _host_name.endswith("." + _rp_id))
+        )
+    except ValueError:
+        _webauthn_valid = False
+    if not _webauthn_valid:
+        _invalid("WEBAUTHN_ORIGIN")
+    WEBAUTHN_RP_ID, WEBAUTHN_ORIGIN = _rp_id, _origin
+
 # Static files for /admin/ (the operational/onboarding tool): WhiteNoise serves the
 # output of `collectstatic` (run at image build). Unhashed storage so the build does
 # not need production secrets. Inserted directly after SecurityMiddleware.

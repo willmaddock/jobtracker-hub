@@ -45,3 +45,12 @@ actions, and audit-log export.
 - `accounts.middleware.MfaEnforcementMiddleware` refuses `/api/*` (except `/api/auth/*`, `/api/health`) and `/admin/` to any session not marked verified, so Django's own admin login is no bypass. Admin sessions redirect to `/`, where the app must show the code prompt.
 - Login and code endpoints are throttled per client IP (10/min in production); the per-account lockout in `accounts.mfa` remains the stronger control. The per-process cache makes the IP limit per worker until a shared cache (Redis) is configured.
 - Operator reset: delete the user's row under Admin > Mfa devices. Secrets and codes are never displayed.
+
+## Stage 6: passkeys (WebAuthn)
+
+- A passkey is an additional second factor, offered at the code prompt and managed under Security. It can only be added after the authenticator app and recovery codes exist, and passkey rows belong to that MFA record, so an operator reset removes them with it.
+- User verification (Face ID, Touch ID, device PIN) is required on every registration and sign-in. Attestation is not requested.
+- Challenges are stored in the server session, single use, and expire after 5 minutes. The relying-party id and origin come from `WEBAUTHN_RP_ID` / `WEBAUTHN_ORIGIN`, never from the request. Production validates they describe the same https site; unset disables passkeys.
+- Signature counters are stored and checked by the library. A locked account refuses passkeys as it refuses codes. At most 10 passkeys per account.
+- All library calls live in `accounts/passkeys.py`. Changing the site's domain invalidates registered passkeys.
+
