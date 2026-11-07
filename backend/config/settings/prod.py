@@ -164,6 +164,13 @@ else:
 USE_X_FORWARDED_HOST = False
 USE_X_FORWARDED_PORT = False
 
+# MFA is mandatory in production and cannot be switched off by configuration
+# (docs/MFA_DESIGN.md). Sign-in and code-entry attempts are rate limited per client IP;
+# behind the trusted proxy the client IP is the last X-Forwarded-For hop.
+MFA_REQUIRED = True
+AUTH_THROTTLE_RATES = {"auth_login": "10/min", "mfa": "10/min"}
+REST_FRAMEWORK = {**REST_FRAMEWORK, "NUM_PROXIES": 1 if _proxy == "true" else 0}
+
 # Static files for /admin/ (the operational/onboarding tool): WhiteNoise serves the
 # output of `collectstatic` (run at image build). Unhashed storage so the build does
 # not need production secrets. Inserted directly after SecurityMiddleware.

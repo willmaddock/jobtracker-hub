@@ -59,8 +59,14 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from django.conf import settings
+
+from . import mfa, mfa_session
 from .models import Workspace
-from .serializers import LoginSerializer, UserSerializer, WorkspaceSerializer, WorkspaceWriteSerializer
+from .serializers import (
+    LoginSerializer, MfaCodeSerializer, UserSerializer, WorkspaceSerializer, WorkspaceWriteSerializer,
+)
+from .throttles import LoginThrottle, MfaThrottle
 
 
 @method_decorator(never_cache, name="dispatch")
@@ -76,6 +82,7 @@ class CsrfView(APIView):
 @method_decorator(never_cache, name="dispatch")
 class LoginView(APIView):
     permission_classes = [AllowAny]
+    throttle_classes = [LoginThrottle]
 
     def post(self, request):
         serializer = LoginSerializer(data=request.data)
@@ -90,8 +97,18 @@ class LoginView(APIView):
                 {"code": "invalid_credentials", "detail": "Invalid username or password."},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
+        if mfa.is_enrolled(user):
+            # Password alone never creates a session for an enrolled user.
+            mfa_session.start_pending(request, user)
+            return Response({"mfa_required": True})
+        mfa_session.clear_pending(request)
         login(request, user)
-        return Response(UserSerializer(user).data)
+        data = UserSerializer(user).data
+        if settings.MFA_REQUIRED:
+            # Signed in but unverified: only enrolment and logout work until a code is confirmed.
+            return Response({**data, "mfa_enrollment_required": True})
+        mfa_session.mark_verified(request)
+        return Response(data)
 
 
 class LogoutView(APIView):
@@ -145,3 +162,91 @@ class WorkspaceViewSet(
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(WorkspaceSerializer(workspace).data)
+
+
+def _mfa_error(code, detail, http_status):
+    return Response({"code": code, "detail": detail}, status=http_status)
+
+
+def _complete_login(request, user):
+    """Finish a verified login: create/rotate the session, then mark it verified."""
+    if request.user.is_authenticated and request.user.pk == user.pk:
+        request.session.cycle_key()
+    else:
+        login(request, user)
+    mfa_session.clear_pending(request)
+    mfa_session.mark_verified(request)
+
+
+@method_decorator(csrf_protect, name="dispatch")
+@method_decorator(never_cache, name="dispatch")
+class MfaVerifyView(APIView):
+    """Second step of sign-in: an authenticator code or an unused recovery code."""
+    permission_classes = [AllowAny]
+    throttle_classes = [MfaThrottle]
+
+    def post(self, request):
+        serializer = MfaCodeSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = mfa_session.pending_user(request)
+        if user is None and request.user.is_authenticated:
+            user = request.user  # password-only session (e.g. Django admin login) completing verification
+        if user is None:
+            return _mfa_error("mfa_session_expired", "Sign in again.", status.HTTP_401_UNAUTHORIZED)
+        try:
+            method = mfa.verify_code(user, serializer.validated_data["code"])
+        except mfa.NotEnrolled:
+            return _mfa_error("mfa_not_enrolled", "Multi-factor authentication is not set up.", status.HTTP_400_BAD_REQUEST)
+        except mfa.Locked:
+            return _mfa_error("mfa_locked", "Too many incorrect codes. Ask an administrator to reset your account.", status.HTTP_403_FORBIDDEN)
+        except mfa.InvalidCode:
+            return _mfa_error("mfa_invalid_code", "That code is not valid.", status.HTTP_401_UNAUTHORIZED)
+        _complete_login(request, user)
+        return Response({
+            **UserSerializer(user).data,
+            "mfa_method": method,
+            "recovery_codes_remaining": mfa.remaining_recovery_codes(user),
+        })
+
+
+@method_decorator(never_cache, name="dispatch")
+class MfaStatusView(APIView):
+    def get(self, request):
+        return Response({
+            "enrolled": mfa.is_enrolled(request.user),
+            "required": settings.MFA_REQUIRED,
+            "verified": mfa_session.is_verified(request),
+            "recovery_codes_remaining": mfa.remaining_recovery_codes(request.user),
+        })
+
+
+@method_decorator(never_cache, name="dispatch")
+class MfaEnrollBeginView(APIView):
+    throttle_classes = [MfaThrottle]
+
+    def post(self, request):
+        try:
+            secret, uri = mfa.begin_enrollment(request.user)
+        except mfa.AlreadyEnrolled:
+            return _mfa_error("mfa_already_enrolled", "Multi-factor authentication is already set up.", status.HTTP_409_CONFLICT)
+        return Response({"secret": secret, "otpauth_uri": uri})
+
+
+@method_decorator(never_cache, name="dispatch")
+class MfaEnrollConfirmView(APIView):
+    throttle_classes = [MfaThrottle]
+
+    def post(self, request):
+        serializer = MfaCodeSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            codes = mfa.confirm_enrollment(request.user, serializer.validated_data["code"])
+        except mfa.NotEnrolled:
+            return _mfa_error("mfa_not_started", "Start setup first.", status.HTTP_400_BAD_REQUEST)
+        except mfa.AlreadyEnrolled:
+            return _mfa_error("mfa_already_enrolled", "Multi-factor authentication is already set up.", status.HTTP_409_CONFLICT)
+        except mfa.InvalidCode:
+            return _mfa_error("mfa_invalid_code", "That code is not valid.", status.HTTP_400_BAD_REQUEST)
+        request.session.cycle_key()
+        mfa_session.mark_verified(request)
+        return Response({"recovery_codes": codes})

@@ -60,6 +60,7 @@ MIDDLEWARE = [
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
+    'accounts.middleware.MfaEnforcementMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
@@ -261,6 +262,9 @@ MFA_ENCRYPTION_KEY = os.environ.get(
 )
 MFA_ISSUER = 'JobTracker Hub'  # shown in the authenticator app
 MFA_LOCKOUT_THRESHOLD = 10  # consecutive bad codes before an operator must reset the account
+# Off here so development and the existing test suite are unchanged; production forces it on.
+MFA_REQUIRED = False
+AUTH_THROTTLE_RATES = {}  # scope -> "N/period"; empty = unthrottled (see accounts/throttles.py)
 
 
 # Celery / background task scheduling (Phase 10 -- closes the "no

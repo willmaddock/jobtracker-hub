@@ -130,6 +130,20 @@ result = {
 '''
 
 
+# --- MFA enforcement is forced on in production (docs/MFA_DESIGN.md) ---
+MFA_SETTINGS = '''
+import django
+django.setup()
+from django.conf import settings
+mw = list(settings.MIDDLEWARE)
+result = {
+    "required": settings.MFA_REQUIRED, "rates": settings.AUTH_THROTTLE_RATES,
+    "proxies": settings.REST_FRAMEWORK.get("NUM_PROXIES"),
+    "after_auth": mw.index("accounts.middleware.MfaEnforcementMiddleware") > mw.index("django.contrib.auth.middleware.AuthenticationMiddleware"),
+}
+'''
+
+
 class ProductionSettingsTests(SimpleTestCase):
     databases = set()
 
@@ -460,3 +474,21 @@ result = {
         self.assertTrue(r['wn_after_security'])
         self.assertEqual(r['mailer'], {'BACKEND': 'django.core.mail.backends.smtp.EmailBackend'})
         self.assertEqual(r['deploy_errors'], [])
+
+    def test_mfa_is_mandatory_and_throttled_in_production(self):
+        completed, data = self.run_child(MFA_SETTINGS)
+        self.assertEqual(completed.returncode, 0, data)
+        r = data['result']
+        self.assertIs(r['required'], True)
+        self.assertEqual(r['rates'], {'auth_login': '10/min', 'mfa': '10/min'})
+        self.assertTrue(r['after_auth'])
+        self.assertEqual(r['proxies'], 0)  # no trusted proxy unless explicitly declared
+
+    def test_mfa_cannot_be_disabled_by_environment_and_proxy_sets_client_ip_hops(self):
+        for name in ('MFA_REQUIRED', 'DJANGO_MFA_REQUIRED'):
+            completed, data = self.run_child(MFA_SETTINGS, changes={name: 'false'})
+            self.assertEqual(completed.returncode, 0, data)
+            self.assertIs(data['result']['required'], True)
+        completed, data = self.run_child(MFA_SETTINGS, changes={'DJANGO_BEHIND_TLS_PROXY': 'true'})
+        self.assertEqual(completed.returncode, 0, data)
+        self.assertEqual(data['result']['proxies'], 1)

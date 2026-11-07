@@ -55,3 +55,8 @@ class UserSerializer(serializers.ModelSerializer):
 class LoginSerializer(serializers.Serializer):
     username = serializers.CharField()
     password = serializers.CharField(trim_whitespace=False, style={"input_type": "password"})
+
+
+class MfaCodeSerializer(serializers.Serializer):
+    """An authenticator code or recovery code; length-bounded, never echoed back."""
+    code = serializers.CharField(max_length=32, trim_whitespace=True, style={"input_type": "password"})

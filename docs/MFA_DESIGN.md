@@ -37,3 +37,11 @@ Not yet recorded in `DJANGO_MIGRATION_DECISIONS.md`.
 ## Explicitly not covered yet
 Passkeys, trusted-device ("remember this browser") cookies, step-up re-authentication for sensitive
 actions, and audit-log export.
+
+## Stage 3: login flow, enforcement, throttling
+
+- `POST /api/auth/login` returns `{"mfa_required": true}` for an enrolled user and creates **no** session; the password is parked in a 5-minute server-side pending marker. `POST /api/auth/mfa/verify` (code or recovery code) creates the session.
+- With `MFA_REQUIRED` (forced on in production, off in dev/tests) an unenrolled user gets a restricted session (`mfa_enrollment_required`) that can only enrol or log out.
+- `accounts.middleware.MfaEnforcementMiddleware` refuses `/api/*` (except `/api/auth/*`, `/api/health`) and `/admin/` to any session not marked verified, so Django's own admin login is no bypass. Admin sessions redirect to `/`, where the app must show the code prompt.
+- Login and code endpoints are throttled per client IP (10/min in production); the per-account lockout in `accounts.mfa` remains the stronger control. The per-process cache makes the IP limit per worker until a shared cache (Redis) is configured.
+- Operator reset: delete the user's row under Admin > Mfa devices. Secrets and codes are never displayed.
