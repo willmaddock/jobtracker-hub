@@ -1,3 +1,8 @@
+> **Branch note (`feature/django-templates-app`):** on this branch,
+> [docs/DJANGO_TEMPLATES_PLAN.md](docs/DJANGO_TEMPLATES_PLAN.md) overrides the rules below
+> where they conflict (UI rebuild as templates, no per-slice Status updates). Everything
+> else here still applies.
+
 # Repository instructions for coding agents
 
 ## Read first and establish evidence
