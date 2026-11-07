@@ -1241,7 +1241,7 @@ document.querySelector('#run').onclick = async function () {
       assert(doc.querySelector('select[aria-label="Workspace"]').value==='','singleton selected automatically');
       const select=doc.querySelector('select[aria-label="Workspace"]');select.value='3';select.dispatchEvent(new win.Event('change',{bubbles:true}));
       await wait(()=>text().includes('Connected to C.'),'Bob C');await click('Extraction evidence');
-      await wait(()=>text().includes('No retained sources in this Workspace.'),'Bob panel');win.__fixtureFoundationAction='logout';await click('Sign out');
+      await wait(()=>text().includes('No retained sources in this Workspace.'),'Bob panel');win.__fixtureFoundationAction='logout';doc.querySelector('button[aria-label="Open profile menu"]').click();await new Promise(r=>setTimeout(r,0));await click('Sign out');
       await wait(()=>text().includes('Sign in with your administrator-provided account.'),'logout');
       assert(!doc.querySelector('[data-testid="extraction-evidence-panel"]'),'logout evidence remained');
     });

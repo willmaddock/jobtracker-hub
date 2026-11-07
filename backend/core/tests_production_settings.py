@@ -152,6 +152,20 @@ result = {"rp_id": settings.WEBAUTHN_RP_ID, "origin": settings.WEBAUTHN_ORIGIN}
 '''
 
 
+EMAIL_CODE_SETTINGS = '''
+import django
+django.setup()
+from django.conf import settings
+from django.core.checks import run_checks
+result = {"enabled": settings.MFA_EMAIL_CODES_ENABLED, "from": settings.MFA_EMAIL_FROM,
+          "signin": [settings.EMAIL_SIGNIN_ENABLED, settings.EMAIL_SIGNUP_OPEN, settings.EMAIL_SIGNIN_SATISFIES_MFA],
+          "mailer": settings.MAILERS["default"],
+          "deploy_errors": [m.id for m in run_checks(include_deployment_checks=True) if m.level >= 40]}
+'''
+EMAIL_CODES_ON = {'MFA_EMAIL_CODES_ENABLED': 'true', 'MFA_EMAIL_FROM': 'no-reply@example.test',
+                  'EMAIL_SMTP_HOST': 'smtp.example.test'}
+
+
 class ProductionSettingsTests(SimpleTestCase):
     databases = set()
 
@@ -488,7 +502,7 @@ result = {
         self.assertEqual(completed.returncode, 0, data)
         r = data['result']
         self.assertIs(r['required'], True)
-        self.assertEqual(r['rates'], {'auth_login': '10/min', 'mfa': '10/min'})
+        self.assertEqual(r['rates'], {'auth_login': '10/min', 'mfa': '10/min', 'email_signin': '10/min'})
         self.assertTrue(r['after_auth'])
         self.assertEqual(r['proxies'], 0)  # no trusted proxy unless explicitly declared
 
@@ -531,3 +545,57 @@ result = {
         for changes in bad:
             with self.subTest(changes=changes):
                 self.refusal(changes=changes, message='Production configuration has invalid WEBAUTHN_ORIGIN.')
+
+    def test_email_codes_are_off_by_default(self):
+        completed, data = self.run_child(EMAIL_CODE_SETTINGS)
+        self.assertEqual(completed.returncode, 0, data)
+        self.assertEqual(data['result']['enabled'], False)
+        self.assertEqual(data['result']['from'], '')
+        self.assertEqual(data['result']['mailer'], {'BACKEND': 'django.core.mail.backends.smtp.EmailBackend'})
+        completed, data = self.run_child(EMAIL_CODE_SETTINGS, changes={'MFA_EMAIL_CODES_ENABLED': 'false', 'MFA_EMAIL_FROM': 'x@example.test'})
+        self.assertEqual(completed.returncode, 0, data)
+        self.assertEqual((data['result']['enabled'], data['result']['from']), (False, ''))  # stray values never apply
+
+    def test_email_codes_enabled_builds_a_tls_smtp_mailer(self):
+        completed, data = self.run_child(EMAIL_CODE_SETTINGS, changes=EMAIL_CODES_ON)
+        self.assertEqual(completed.returncode, 0, data)
+        r = data['result']
+        self.assertEqual((r['enabled'], r['from']), (True, 'no-reply@example.test'))
+        self.assertEqual(r['mailer']['OPTIONS'], {'host': 'smtp.example.test', 'port': 587, 'use_tls': True, 'timeout': 10})
+        self.assertEqual(r['deploy_errors'], [])
+        completed, data = self.run_child(EMAIL_CODE_SETTINGS, changes={
+            **EMAIL_CODES_ON, 'EMAIL_SMTP_PORT': '2587', 'EMAIL_SMTP_TLS': 'false',
+            'EMAIL_SMTP_USER': 'smtp-user', 'EMAIL_SMTP_PASSWORD': 'smtp-password-fixture'})
+        self.assertEqual(completed.returncode, 0, data)
+        self.assertEqual(data['result']['mailer']['OPTIONS'], {
+            'host': 'smtp.example.test', 'port': 2587, 'use_tls': False, 'timeout': 10,
+            'username': 'smtp-user', 'password': 'smtp-password-fixture'})
+
+    def test_email_codes_refuse_incomplete_or_invalid_configuration(self):
+        for removed in ('MFA_EMAIL_FROM', 'EMAIL_SMTP_HOST'):
+            with self.subTest(missing=removed):
+                self.refusal(changes=EMAIL_CODES_ON, removed=(removed,),
+                             message=f'Production configuration requires {removed}.')
+        bad = (
+            ('MFA_EMAIL_CODES_ENABLED', 'yes'), ('MFA_EMAIL_FROM', 'not-an-address'), ('EMAIL_SMTP_HOST', 'bad host!'),
+            ('EMAIL_SMTP_PORT', '0'), ('EMAIL_SMTP_PORT', '70000'), ('EMAIL_SMTP_PORT', 'abc'), ('EMAIL_SMTP_TLS', 'maybe'),
+            ('EMAIL_SMTP_USER', 'only-a-user'), ('EMAIL_SMTP_PASSWORD', 'only-a-password'),
+        )
+        for name, value in bad:
+            with self.subTest(name=name, value=value):
+                changes = {**EMAIL_CODES_ON, name: value}
+                shown = 'EMAIL_SMTP_USER' if name == 'EMAIL_SMTP_PASSWORD' else name
+                self.refusal(changes=changes, message=f'Production configuration has invalid {shown}.')
+
+    def test_email_signin_is_off_by_default_and_needs_the_mail_settings(self):
+        completed, data = self.run_child(EMAIL_CODE_SETTINGS)
+        self.assertEqual(completed.returncode, 0, data)
+        self.assertEqual(data['result']['signin'], [False, False, False])
+        completed, data = self.run_child(EMAIL_CODE_SETTINGS, changes={
+            **EMAIL_CODES_ON, 'EMAIL_SIGNIN_ENABLED': 'true', 'EMAIL_SIGNUP_OPEN': 'true'})
+        self.assertEqual(completed.returncode, 0, data)
+        self.assertEqual(data['result']['signin'], [True, True, False])
+        self.refusal(changes={'EMAIL_SIGNIN_ENABLED': 'true'}, message='Production configuration has invalid EMAIL_SIGNIN_ENABLED.')
+        for name in ('EMAIL_SIGNIN_ENABLED', 'EMAIL_SIGNUP_OPEN', 'EMAIL_SIGNIN_SATISFIES_MFA'):
+            with self.subTest(name=name):
+                self.refusal(changes={**EMAIL_CODES_ON, name: 'yes'}, message=f'Production configuration has invalid {name}.')

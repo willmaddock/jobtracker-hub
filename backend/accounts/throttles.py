@@ -24,3 +24,7 @@ class LoginThrottle(_AuthThrottle):
 
 class MfaThrottle(_AuthThrottle):
     scope = "mfa"
+
+
+class EmailSignInThrottle(_AuthThrottle):
+    scope = "email_signin"

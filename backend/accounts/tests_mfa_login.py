@@ -41,7 +41,7 @@ class TwoStepLoginTests(HttpMixin, TestCase):
     def test_password_alone_creates_no_session(self):
         response = self.login()
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"mfa_required": True, "passkey_available": False})
+        self.assertEqual(response.json(), {"mfa_required": True, "passkey_available": False, "email_code_available": False})
         self.assertEqual(self.client.get("/api/auth/me").status_code, 401)
         self.assertEqual(self.client.get("/api/workspaces/").status_code, 401)
 
@@ -103,7 +103,7 @@ class TwoStepLoginTests(HttpMixin, TestCase):
         self.login()
         self.post("/api/auth/mfa/verify", {"code": self.codes[1]})
         self.post("/api/auth/logout")
-        self.assertEqual(self.login().json(), {"mfa_required": True, "passkey_available": False})
+        self.assertEqual(self.login().json(), {"mfa_required": True, "passkey_available": False, "email_code_available": False})
         self.assertEqual(self.client.get("/api/workspaces/").status_code, 401)
 
     def test_bad_input_is_validated(self):

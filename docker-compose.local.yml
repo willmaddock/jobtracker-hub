@@ -18,6 +18,14 @@ x-app: &app
     DJANGO_BEHIND_TLS_PROXY: "true"
     WEBAUTHN_RP_ID: localhost
     WEBAUTHN_ORIGIN: https://localhost:8443
+    MFA_EMAIL_CODES_ENABLED: "true"
+    MFA_EMAIL_FROM: no-reply@localhost.test
+    EMAIL_SIGNIN_ENABLED: "true"        # sign in / sign up with an emailed code
+    EMAIL_SIGNUP_OPEN: "true"           # an unknown address creates an account
+    EMAIL_SIGNIN_SATISFIES_MFA: "true"  # the emailed code is enough for accounts with no authenticator app
+    EMAIL_SMTP_HOST: mailpit      # local mail catcher; read mail at http://localhost:8025
+    EMAIL_SMTP_PORT: "1025"
+    EMAIL_SMTP_TLS: "false"
     DJANGO_DB_HOST: db
     DJANGO_DB_PORT: "5432"
     DJANGO_DB_NAME: jobtracker
@@ -29,6 +37,7 @@ x-app: &app
   depends_on:
     db: {condition: service_healthy}
     redis: {condition: service_started}
+    mailpit: {condition: service_started}
 
 services:
   db:
@@ -45,6 +54,10 @@ services:
 
   redis:
     image: redis:7
+
+  mailpit:
+    image: axllent/mailpit   # catches the emailed sign-in codes; nothing leaves your machine
+    ports: ["127.0.0.1:8025:8025"]
 
   s3mock:
     image: adobe/s3mock   # S3-compatible mock; keeps data in a temp dir inside the container

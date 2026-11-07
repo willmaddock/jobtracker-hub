@@ -26,7 +26,7 @@ class MfaDeviceAdmin(admin.ModelAdmin):
     list_filter = ("locked_at",)
     search_fields = ("user__username", "user__email")
     exclude = ("secret_encrypted", "last_used_step")
-    readonly_fields = ("user", "confirmed_at", "failed_attempts", "locked_at", "created_at")
+    readonly_fields = ("user", "confirmed_at", "failed_attempts", "locked_at", "email_codes_address", "created_at")
 
     def has_add_permission(self, request):
         return False

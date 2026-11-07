@@ -5,8 +5,9 @@ Not yet recorded in `DJANGO_MIGRATION_DECISIONS.md`.
 
 ## Decisions
 1. **Method:** authenticator-app TOTP (RFC 6238; SHA-1, 6 digits, 30 s, +/-1 step) plus 10
-   single-use recovery codes. Passkeys (WebAuthn) are a later addition. **SMS and email codes are
-   deliberately excluded** (SIM-swap and mailbox-takeover risk, and the product sends no email).
+   single-use recovery codes. Passkeys (WebAuthn) are a later addition. **SMS and email codes were
+   originally excluded** (SIM-swap and mailbox-takeover risk, and the product sent no email). Stage 7
+   adds emailed codes as an optional, opt-in, off-by-default fallback; see its section for the trade-off.
 2. **Who:** every account, including operators/admins. No opt-out in production.
 3. **Enrolment:** a user who has never enrolled can sign in with their password, but every product
    API except enrolment and logout answers `mfa_enrollment_required` until a code is confirmed.
@@ -54,3 +55,35 @@ actions, and audit-log export.
 - Signature counters are stored and checked by the library. A locked account refuses passkeys as it refuses codes. At most 10 passkeys per account.
 - All library calls live in `accounts/passkeys.py`. Changing the site's domain invalidates registered passkeys.
 
+## Stage 7: emailed codes (optional, off by default)
+
+- **Trade-off, accepted deliberately:** an emailed code is weaker than an authenticator app or passkey, because anyone who controls the mailbox and knows the password can sign in. It is therefore a per-user opt-in on top of the authenticator app, and the operator switch is off unless `MFA_EMAIL_CODES_ENABLED=true`. Leave it off in production unless the fallback is needed; recovery codes and passkeys already cover a lost authenticator.
+- **Enabling:** from Security (verified session only), after the authenticator app and recovery codes exist. A code is emailed to the account's address and must be entered back. The confirmed address is stored on the MFA record, so later edits to the profile email never redirect codes. An operator MFA reset removes it with the rest.
+- **Sign-in:** the code prompt offers "Email me a code" when the user has opted in. The code completes the same pending login as an authenticator code or passkey.
+- **Code rules:** six digits, stored only as a salted keyed hash (HMAC-SHA256 with `SECRET_KEY`), valid 10 minutes, single use, 5 guesses per code, 60 s between emails, at most 5 emails an hour per account. A newer code replaces older ones. Enrolment codes cannot sign in.
+- **Lockout:** wrong emailed sign-in codes count toward the same account lockout as authenticator codes, and a locked account gets no email and no acceptance.
+- **Mail delivery:** production needs `MFA_EMAIL_FROM` and an SMTP relay (`EMAIL_SMTP_HOST`, port, TLS, credentials; for AWS SES, its SMTP endpoint and SMTP credentials). Enabling with any of that missing or malformed refuses to start. A send failure leaves no usable code and tells the user to try later. Locally, the compose stack runs Mailpit; read mail at http://localhost:8025.
+- **Still not covered:** SMS codes (needs a texting provider and US carrier registration).
+
+## Stage 8: passwordless sign-in and sign-up by emailed code (proposed by the project owner, 2026-11-06)
+
+Surfaced for review, not a silent rewrite: this changes decision 1 above ("SMS and email codes are
+deliberately excluded") and decision 2 ("no opt-out in production"), which stage 7 already softened for the
+*second* step. Stage 8 lets an emailed code be the *first* step, replacing the password.
+
+* **Where:** `accounts/email_signin.py`, `email_signin_views.py`; endpoints `GET /api/auth/options`,
+  `POST /api/auth/email/start`, `POST /api/auth/email/verify`. New table `SignInCode`.
+* **Off by default.** `EMAIL_SIGNIN_ENABLED` (and a mail sender) turns it on; `EMAIL_SIGNUP_OPEN` lets an unknown
+  address create an account (with one empty workspace, "My job search"); production reads the same names from
+  the environment and refuses to start if sign-in is on without mail settings.
+* **No downgrade.** An account with an authenticator app is still asked for it after the emailed code. Staff and
+  superuser accounts without an authenticator cannot use it at all.
+* **MFA_REQUIRED decision (open):** with `MFA_REQUIRED=true` and `EMAIL_SIGNIN_SATISFIES_MFA=false` (the default),
+  an account with no authenticator is signed in but must enrol one, so passwordless sign-in does nothing for
+  ordinary users. Setting `EMAIL_SIGNIN_SATISFIES_MFA=true` accepts the emailed code as the only factor for
+  accounts that have no authenticator. The local compose file sets it to true; production does not unless the
+  operator does. Accepting this is a security trade-off: control of the mailbox is control of the account.
+* **No account enumeration:** the start endpoint answers and rate-limits identically whether or not the address
+  can sign in. Codes: 6 digits, keyed salted hash, 10 minutes, single use, 5 guesses, 60 s resend, 5 emails/hour
+  per address, plus a per-IP throttle (`email_signin`).
+* **Not in stage 8:** Google and Apple sign-in, phone/SMS, importing existing local data, account deletion.

@@ -58,6 +58,9 @@ class MfaDevice(models.Model):
     last_used_step = models.BigIntegerField(null=True, blank=True)
     failed_attempts = models.PositiveSmallIntegerField(default=0)
     locked_at = models.DateTimeField(null=True, blank=True)
+    # Address that emailed sign-in codes go to; empty means the user has not turned them on.
+    # It is the address confirmed at enablement, so later edits to User.email never redirect codes.
+    email_codes_address = models.EmailField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self) -> str:
@@ -90,3 +93,33 @@ class PasskeyCredential(models.Model):
     def __str__(self) -> str:
         return f"Passkey {self.name!r} for device {self.device_id}"
 
+
+
+class EmailCode(models.Model):
+    """One emailed one-time code, stored only as a salted keyed hash (see accounts.email_codes)."""
+    PURPOSE_ENABLE = "enable"
+    PURPOSE_SIGNIN = "signin"
+
+    device = models.ForeignKey(MfaDevice, on_delete=models.CASCADE, related_name="email_codes")
+    purpose = models.CharField(max_length=10)
+    address = models.EmailField()
+    code_hash = models.CharField(max_length=160)
+    attempts = models.PositiveSmallIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    used_at = models.DateTimeField(null=True, blank=True)
+
+
+class SignInCode(models.Model):
+    """One emailed sign-in code for an address, stored only as a salted keyed hash.
+
+    Not tied to a user: the address may not have an account yet (see accounts.email_signin).
+    A row with ``used_at`` set from the start records a request for an address that may not
+    sign in, so cooldowns behave the same for every address.
+    """
+    address = models.EmailField(db_index=True)
+    code_hash = models.CharField(max_length=160)
+    attempts = models.PositiveSmallIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    used_at = models.DateTimeField(null=True, blank=True)

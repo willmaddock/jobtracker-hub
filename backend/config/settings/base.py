@@ -272,6 +272,17 @@ MFA_REQUIRED = False
 WEBAUTHN_RP_NAME = 'JobTracker Hub'
 WEBAUTHN_RP_ID = 'localhost'
 WEBAUTHN_ORIGIN = 'http://localhost:8000'
+# Emailed sign-in codes (optional second step; weaker than an authenticator app or passkey).
+# Off unless enabled AND a sender address is set; each user must also opt in under Security.
+MFA_EMAIL_CODES_ENABLED = False
+MFA_EMAIL_FROM = ''
+# Passwordless sign-in and sign-up by emailed code (accounts/email_signin.py, docs/MFA_DESIGN.md
+# stage 8). Needs MFA_EMAIL_FROM. SIGNUP_OPEN lets an unknown address create an account.
+# SATISFIES_MFA lets the emailed code count as the only factor for an account with no authenticator
+# app, even when MFA_REQUIRED is on; an account that has one is always still asked for it.
+EMAIL_SIGNIN_ENABLED = False
+EMAIL_SIGNUP_OPEN = False
+EMAIL_SIGNIN_SATISFIES_MFA = False
 AUTH_THROTTLE_RATES = {}  # scope -> "N/period"; empty = unthrottled (see accounts/throttles.py)
 
 

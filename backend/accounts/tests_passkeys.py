@@ -177,7 +177,7 @@ class SignInTests(PasskeyMixin, TestCase):
         self.assertion = {"id": CRED_ID, "rawId": CRED_ID, "type": "public-key", "response": {}}
 
     def start(self):
-        self.assertEqual(self.login().json(), {"mfa_required": True, "passkey_available": True})
+        self.assertEqual(self.login().json(), {"mfa_required": True, "passkey_available": True, "email_code_available": False})
         response = self.post("/api/auth/mfa/passkey/options")
         self.assertEqual(response.status_code, 200, response.content)
         return response.json()
@@ -252,7 +252,7 @@ class SignInTests(PasskeyMixin, TestCase):
 
     def test_user_without_passkeys(self):
         make_enrolled("carol")
-        self.assertEqual(self.login("carol").json(), {"mfa_required": True, "passkey_available": False})
+        self.assertEqual(self.login("carol").json(), {"mfa_required": True, "passkey_available": False, "email_code_available": False})
         response = self.post("/api/auth/mfa/passkey/options")
         self.assertEqual((response.status_code, response.json()["code"]), (400, "passkey_not_registered"))
 
@@ -263,7 +263,7 @@ class SignInTests(PasskeyMixin, TestCase):
 
     @override_settings(WEBAUTHN_RP_ID="", WEBAUTHN_ORIGIN="")
     def test_login_hides_passkeys_when_unavailable(self):
-        self.assertEqual(self.login().json(), {"mfa_required": True, "passkey_available": False})
+        self.assertEqual(self.login().json(), {"mfa_required": True, "passkey_available": False, "email_code_available": False})
 
 
 @override_settings(**PASSKEY_SETTINGS)

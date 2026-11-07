@@ -168,7 +168,7 @@ USE_X_FORWARDED_PORT = False
 # (docs/MFA_DESIGN.md). Sign-in and code-entry attempts are rate limited per client IP;
 # behind the trusted proxy the client IP is the last X-Forwarded-For hop.
 MFA_REQUIRED = True
-AUTH_THROTTLE_RATES = {"auth_login": "10/min", "mfa": "10/min"}
+AUTH_THROTTLE_RATES = {"auth_login": "10/min", "mfa": "10/min", "email_signin": "10/min"}
 REST_FRAMEWORK = {**REST_FRAMEWORK, "NUM_PROXIES": 1 if _proxy == "true" else 0}
 
 # Passkeys are enabled only when both values are set, and must describe the same site: the
@@ -209,6 +209,63 @@ STORAGES["staticfiles"] = {"BACKEND": "whitenoise.storage.CompressedStaticFilesS
 # backend would silently drop mail and fails `check --deploy` (mail.E001). Use SMTP with
 # no OPTIONS so any future send fails loudly until a real mail service is configured.
 MAILERS = {"default": {"BACKEND": "django.core.mail.backends.smtp.EmailBackend"}}
+
+# Emailed sign-in codes: off unless MFA_EMAIL_CODES_ENABLED=true. Enabling requires a sender
+# address and an SMTP relay (for AWS SES, its SMTP endpoint and SMTP credentials); a half-set
+# configuration refuses to start rather than silently sending nothing. TLS defaults on.
+_email_codes = os.environ.get("MFA_EMAIL_CODES_ENABLED", "")
+if _email_codes not in ("", "true", "false"):
+    _invalid("MFA_EMAIL_CODES_ENABLED")
+MFA_EMAIL_CODES_ENABLED = False
+MFA_EMAIL_FROM = ""
+if _email_codes == "true":
+    from django.core.exceptions import ValidationError as _ValidationError
+    from django.core.validators import validate_email as _validate_email
+    _from = _required("MFA_EMAIL_FROM")
+    _bad_from = False
+    try:
+        _validate_email(_from)
+    except _ValidationError:
+        _bad_from = True  # raised below, outside the handler, so no exception context is chained
+    if _bad_from:
+        _invalid("MFA_EMAIL_FROM")
+    _smtp_host = _required("EMAIL_SMTP_HOST")
+    _bad_host = False
+    try:
+        _smtp_host = _host(_smtp_host)
+    except ValueError:
+        _bad_host = True
+    if _bad_host:
+        _invalid("EMAIL_SMTP_HOST")
+    _smtp_port = os.environ.get("EMAIL_SMTP_PORT", "587")
+    if not (_smtp_port.isascii() and _smtp_port.isdigit() and 1 <= int(_smtp_port) <= 65535):
+        _invalid("EMAIL_SMTP_PORT")
+    _smtp_tls = os.environ.get("EMAIL_SMTP_TLS", "true")
+    if _smtp_tls not in ("true", "false"):
+        _invalid("EMAIL_SMTP_TLS")
+    _smtp_user = os.environ.get("EMAIL_SMTP_USER", "")
+    _smtp_password = os.environ.get("EMAIL_SMTP_PASSWORD", "")
+    if bool(_smtp_user) != bool(_smtp_password) or _controlled(_smtp_user) or _controlled(_smtp_password):
+        _invalid("EMAIL_SMTP_USER")
+    _smtp_options = {"host": _smtp_host, "port": int(_smtp_port), "use_tls": _smtp_tls == "true", "timeout": 10}
+    if _smtp_user:
+        _smtp_options.update(username=_smtp_user, password=_smtp_password)
+    MAILERS = {"default": {"BACKEND": "django.core.mail.backends.smtp.EmailBackend", "OPTIONS": _smtp_options}}
+    MFA_EMAIL_CODES_ENABLED = True
+    MFA_EMAIL_FROM = _from
+
+# Passwordless email sign-in (stage 8). Each switch is "true" or "false"/unset. Sign-in needs the
+# same mail settings as emailed codes, so a half-set configuration refuses to start.
+EMAIL_SIGNIN_ENABLED = False
+EMAIL_SIGNUP_OPEN = False
+EMAIL_SIGNIN_SATISFIES_MFA = False
+for _name in ("EMAIL_SIGNIN_ENABLED", "EMAIL_SIGNUP_OPEN", "EMAIL_SIGNIN_SATISFIES_MFA"):
+    _value = os.environ.get(_name, "")
+    if _value not in ("", "true", "false"):
+        _invalid(_name)
+    globals()[_name] = _value == "true"
+if EMAIL_SIGNIN_ENABLED and not MFA_EMAIL_FROM:
+    _invalid("EMAIL_SIGNIN_ENABLED")  # needs MFA_EMAIL_CODES_ENABLED=true and its mail settings
 
 # File storage — Phase 4. Overrides base.py's plain-filesystem
 # STORAGES["default"] with S3 (or any S3-compatible endpoint, e.g.

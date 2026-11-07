@@ -8317,6 +8317,7 @@ function SecurityPanel({client, onClose, onAuthFailure}) {
       if (e && e.name === "NotAllowedError") setMessage("Passkey setup was cancelled.");
       else if (e && e.name === "InvalidStateError") setMessage("This device already has a passkey for this account.");
       else if (e && e.code === "passkey_limit_reached") setMessage(e.message);
+      else if (e && e.code === "mfa_not_enrolled") setMessage("Passkeys are added on top of an authenticator app, and setting one up is not available from this screen yet.");
       else if (e && (e.code === "passkey_invalid" || e.code === "passkey_challenge_invalid")) setMessage("That passkey could not be added. Try again.");
       else onAuthFailure(e);
     } finally { setBusy(false); }
@@ -8340,8 +8341,84 @@ function SecurityPanel({client, onClose, onAuthFailure}) {
         <button className="btn" disabled={busy}>Add a passkey (Face ID / Touch ID)</button>
       </form> : <p>This browser does not support passkeys.</p>}
     </>}
+    <EmailCodeSettings client={client} onAuthFailure={onAuthFailure} />
     <button className="btn" onClick={onClose}>Close</button>
   </section>;
+}
+
+function EmailCodeSettings({client, onAuthFailure}) {
+  const [info, setInfo] = useState(null);
+  const [code, setCode] = useState("");
+  const [sentTo, setSentTo] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  async function load() {
+    try { setInfo(await client.request("/api/account/mfa/email/")); } catch (e) { onAuthFailure(e); }
+  }
+  useEffect(() => { load(); }, []);
+  if (!info || !info.available) return null;
+  const known = ["email_address_missing", "email_code_wait", "email_code_send_failed", "email_code_invalid", "email_codes_unavailable"];
+  async function begin() {
+    setBusy(true); setMessage("");
+    try { const r = await client.request("/api/account/mfa/email/begin", {method:"POST"}); setSentTo(r.sent_to); setCode(""); }
+    catch (e) { if (e && known.includes(e.code)) setMessage(e.message); else onAuthFailure(e); }
+    finally { setBusy(false); }
+  }
+  async function confirm(event) {
+    event.preventDefault(); setBusy(true); setMessage("");
+    try { await client.request("/api/account/mfa/email/confirm", {method:"POST", body:{code}}); setSentTo(""); setCode(""); setMessage("Emailed codes are on."); await load(); }
+    catch (e) { if (e && known.includes(e.code)) setMessage(e.message); else onAuthFailure(e); }
+    finally { setBusy(false); }
+  }
+  async function turnOff() {
+    setBusy(true); setMessage("");
+    try { await client.request("/api/account/mfa/email/", {method:"DELETE"}); setMessage("Emailed codes are off."); await load(); }
+    catch (e) { onAuthFailure(e); } finally { setBusy(false); }
+  }
+  return <section aria-label="Emailed codes">
+    <h3>Emailed codes</h3>
+    <p>An optional extra way to sign in. It is less secure than your authenticator app or a passkey: anyone who can read your email and knows your password could sign in.</p>
+    {message && <p role="status">{message}</p>}
+    {info.enabled ? <>
+      <p>On. Codes are sent to {info.address}.</p>
+      <button className="btn" disabled={busy} onClick={turnOff}>Turn off emailed codes</button>
+    </> : !info.has_email_on_file ? <p>Your account has no email address, so this cannot be turned on. Ask an administrator to add one.</p>
+    : !(sentTo || info.pending_address) ? <button className="btn" disabled={busy} onClick={begin}>Turn on emailed codes</button>
+    : <form onSubmit={confirm}>
+        <p>We emailed a code to {sentTo || info.pending_address}. Enter it to finish turning this on.</p>
+        <label>Code<input className="workspace-rename-input" style={{display:"block",width:"100%"}} autoComplete="one-time-code" required maxLength={32} value={code} onChange={e=>setCode(e.target.value)} /></label>
+        <button className="btn" disabled={busy || !code.trim()}>Confirm</button>
+        <button type="button" className="btn" disabled={busy} onClick={begin}>Send a new code</button>
+      </form>}
+  </section>;
+}
+
+function ProfileMenu({user, busy, onSecurity, onSignOut}) {
+  const [open, setOpen] = useState(false);
+  const box = useRef(null);
+  useEffect(() => {
+    if (!open) return;
+    const away = e => { if (box.current && !box.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", away);
+    return () => document.removeEventListener("mousedown", away);
+  }, [open]);
+  const label = (user && (user.email || user.username)) || "";
+  const initials = label.replace(/@.*/, "").split(/[^A-Za-z0-9]+/).filter(Boolean).slice(0, 2).map(p => p[0].toUpperCase()).join("") || "?";
+  const item = {display:"block",width:"100%",textAlign:"left",minHeight:44,padding:"0 12px",border:0,background:"none",color:"inherit",font:"inherit",borderRadius:8,cursor:"pointer"};
+  return <div ref={box} style={{position:"relative",display:"flex",justifyContent:"flex-end"}}
+      onKeyDown={e => { if (e.key === "Escape") setOpen(false); }}>
+    <button type="button" aria-label="Open profile menu" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(!open)}
+      style={{width:44,height:44,borderRadius:"50%",border:"2px solid var(--accent, #6d7cff)",background:"var(--bg)",color:"var(--text)",fontWeight:600,cursor:"pointer"}}>{initials}</button>
+    {open && <div role="menu" aria-label="Profile" style={{position:"absolute",top:50,right:0,width:280,zIndex:20,padding:8,borderRadius:14,
+        border:"1px solid var(--border)",background:"var(--bg)",boxShadow:"0 12px 32px rgba(0,0,0,.5)"}}>
+      <div style={{padding:"10px 12px",borderBottom:"1px solid var(--border)",marginBottom:4,wordBreak:"break-all"}}>
+        <div style={{fontWeight:600}}>{user && user.username}</div>
+        {user && user.email && <div style={{fontSize:13,opacity:.75}}>{user.email}</div>}
+      </div>
+      <button type="button" role="menuitem" style={item} disabled={busy} onClick={() => { setOpen(false); onSecurity(); }}>Security</button>
+      <button type="button" role="menuitem" style={item} disabled={busy} onClick={() => { setOpen(false); onSignOut(); }}>Sign out</button>
+    </div>}
+  </div>;
 }
 
 function DjangoFoundation() {
@@ -8370,15 +8447,23 @@ function DjangoFoundation() {
   const [mfaUri, setMfaUri] = useState("");
   const [mfaQr, setMfaQr] = useState("");
   const [passkeyAvailable, setPasskeyAvailable] = useState(false);
+  const [emailCodeAvailable, setEmailCodeAvailable] = useState(false);
+  const [emailSentTo, setEmailSentTo] = useState("");
   const [securityOpen, setSecurityOpen] = useState(false);
+  const [options, setOptions] = useState(null);
+  const [loginMode, setLoginMode] = useState("email");
+  const [emailAddr, setEmailAddr] = useState("");
   const [recoveryCodes, setRecoveryCodes] = useState([]);
   const [saved, setSaved] = useState(false);
   const phaseRef = useRef("loading");
   useEffect(() => { phaseRef.current = phase; }, [phase]);
+  const securityOpenRef = useRef(false);
+  useEffect(() => { securityOpenRef.current = securityOpen; }, [securityOpen]);
   // While a code prompt, enrolment or the one-time recovery codes are on screen, background
   // session re-checks (window focus, hash change) must not run: they would restart enrolment
   // or discard the prompt, e.g. when the user switches to their authenticator app and back.
-  const holdsMfaScreen = () => ["mfa", "enroll", "recovery"].includes(phaseRef.current);
+  // Also hold while Security is open: a focus refresh would rebuild the screen and lose a half-finished step.
+  const holdsMfaScreen = () => ["mfa", "enroll", "recovery", "emailcode"].includes(phaseRef.current) || securityOpenRef.current;
 
   function clearIdentity() {
     setEvidenceOpen(false); setApplicationsOpen(false); setReviewsOpen(false);setCategoriesOpen(false);
@@ -8386,7 +8471,7 @@ function DjangoFoundation() {
     context.invalidate(); context.setActor(null); client.clearCsrf();
     identity.current = null; setUser(null); setWorkspaces([]);
     setSelected(null); setConnected(false); setPassword(""); setName("");
-    setCode(""); setMfaSecret(""); setMfaUri(""); setMfaQr(""); setRecoveryCodes([]); setSaved(false); setPasskeyAvailable(false); setSecurityOpen(false);
+    setCode(""); setMfaSecret(""); setMfaUri(""); setMfaQr(""); setRecoveryCodes([]); setSaved(false); setPasskeyAvailable(false); setEmailCodeAvailable(false); setEmailSentTo(""); setSecurityOpen(false);
   }
   function report(e) {
     if (["stale_response", "aborted"].includes(e.code)) return;
@@ -8420,7 +8505,7 @@ function DjangoFoundation() {
     let list;
     try { list = await client.request("/api/workspaces/"); }
     catch (e) {
-      if (e.code === "mfa_required") { setCode(""); setPasskeyAvailable(false); setPhase("mfa"); return; }
+      if (e.code === "mfa_required") { setCode(""); setPasskeyAvailable(false); setEmailCodeAvailable(false); setEmailSentTo(""); setPhase("mfa"); return; }
       if (e.code === "mfa_enrollment_required") {
         setCode("");
         const begun = await client.request("/api/auth/mfa/enroll/begin", {method:"POST"});
@@ -8442,6 +8527,9 @@ function DjangoFoundation() {
     } catch (e) { report(e); if (!["stale_response", "aborted"].includes(e.code)) setPhase(e.code === "authentication_required" ? "login" : "unavailable"); }
   }
   useEffect(() => {
+    client.request("/api/auth/options").then(setOptions).catch(() => setOptions({email_signin:false, signup_open:false}));
+  }, []);
+  useEffect(() => {
     checkSession();
     const focus = () => { if (!holdsMfaScreen()) checkSession(); };
     const changed = () => { if (!holdsMfaScreen()) checkSession(); };
@@ -8458,16 +8546,40 @@ function DjangoFoundation() {
     try {
       await client.bootstrap();
       const nextUser = await client.request("/api/auth/login", {method:"POST", body:{username,password}});
-      if (nextUser.mfa_required) { setCode(""); setPasskeyAvailable(!!nextUser.passkey_available && passkeysSupported()); setPhase("mfa"); return; } // password accepted, no session yet
+      if (nextUser.mfa_required) { setCode(""); setPasskeyAvailable(!!nextUser.passkey_available && passkeysSupported()); setEmailCodeAvailable(!!nextUser.email_code_available); setEmailSentTo(""); setPhase("mfa"); return; } // password accepted, no session yet
       await client.bootstrap(); // Django rotates the CSRF secret on login.
       if (channel.current) channel.current.postMessage("changed");
       await establish(nextUser);
     } catch (e) { report(e); } finally { setPassword(""); setBusy(false); }
   }
+  const emailKnown = ["email_invalid", "email_code_wait", "email_code_send_failed", "email_signin_unavailable", "email_code_invalid"];
+  async function startEmail(event) {
+    if (event) event.preventDefault();
+    setBusy(true); setError("");
+    try {
+      await client.bootstrap();
+      await client.request("/api/auth/email/start", {method:"POST", body:{email: emailAddr}});
+      setCode(""); setPhase("emailcode");
+    } catch (e) {
+      if (e && emailKnown.includes(e.code)) setError(e.message); else report(e);
+    } finally { setBusy(false); }
+  }
+  async function verifyEmail(event) {
+    event.preventDefault(); setBusy(true); setError("");
+    try {
+      const nextUser = await client.request("/api/auth/email/verify", {method:"POST", body:{email: emailAddr, code}});
+      if (nextUser.mfa_required) { setCode(""); setPasskeyAvailable(!!nextUser.passkey_available && passkeysSupported()); setEmailCodeAvailable(false); setEmailSentTo(""); setPhase("mfa"); return; } // mailbox accepted; the authenticator app is still required
+      await client.bootstrap(); // Django rotates the CSRF secret on login.
+      if (channel.current) channel.current.postMessage("changed");
+      setCode(""); await establish(nextUser);
+    } catch (e) {
+      if (e && emailKnown.includes(e.code)) setError(e.message); else report(e);
+    } finally { setCode(""); setBusy(false); }
+  }
   async function submitCode(event) {
     event.preventDefault(); setBusy(true); setError("");
     try {
-      const nextUser = await client.request("/api/auth/mfa/verify", {method:"POST", body:{code}});
+      const nextUser = await client.request(emailSentTo ? "/api/auth/mfa/email/verify" : "/api/auth/mfa/verify", {method:"POST", body:{code}});
       await client.bootstrap(); // the session was created or rotated by verification
       if (channel.current) channel.current.postMessage("changed");
       setCode(""); await establish(nextUser);
@@ -8475,8 +8587,20 @@ function DjangoFoundation() {
       if (e.code === "mfa_session_expired") { setCode(""); setPhase("login"); setError("That sign-in expired. Sign in again."); }
       else if (e.code === "mfa_locked") { setCode(""); setError(e.message); }
       else if (e.code === "mfa_invalid_code") setError("That code was not accepted. Check the code and try again.");
+      else if (e.code === "email_code_invalid") setError("That emailed code was not accepted or has expired. Check it, or ask for a new one.");
       else report(e);
     } finally { setCode(""); setBusy(false); }
+  }
+  async function sendEmailCode() {
+    setBusy(true); setError("");
+    try {
+      const sent = await client.request("/api/auth/mfa/email/send", {method:"POST"});
+      setCode(""); setEmailSentTo(sent.sent_to);
+    } catch (e) {
+      if (e && e.code === "mfa_session_expired") { setCode(""); setPhase("login"); setError("That sign-in expired. Sign in again."); }
+      else if (e && ["mfa_locked", "email_code_wait", "email_code_send_failed", "email_codes_not_enabled", "email_codes_unavailable"].includes(e.code)) setError(e.message);
+      else report(e);
+    } finally { setBusy(false); }
   }
   async function signInWithPasskey() {
     setBusy(true); setError("");
@@ -8548,11 +8672,21 @@ function DjangoFoundation() {
       {phase === "loading" ? <p role="status">Checking session…</p> : phase === "unavailable" ? <p>Session could not be verified. Refresh to continue.</p> : phase === "mfa" ?
         <form onSubmit={submitCode}>
           <h2>Two-step verification</h2>
-          <p>Enter the 6-digit code from your authenticator app, or one of your recovery codes.</p>
+          {emailSentTo ? <p>We emailed a 6-digit code to {emailSentTo}. It expires in 10 minutes.</p> : <p>Enter the 6-digit code from your authenticator app, or one of your recovery codes.</p>}
           <label>Code<input className="workspace-rename-input" style={{display:"block",width:"100%"}} autoComplete="one-time-code" autoFocus required maxLength={32} value={code} onChange={e=>setCode(e.target.value)} /></label>
           <button className="btn" disabled={busy || !code.trim()}>Verify</button>
           {passkeyAvailable && <button type="button" className="btn" disabled={busy} onClick={signInWithPasskey}>Use a passkey (Face ID / Touch ID)</button>}
+          {emailCodeAvailable && <button type="button" className="btn" disabled={busy} onClick={sendEmailCode}>{emailSentTo ? "Send a new emailed code" : "Email me a code"}</button>}
+          {emailSentTo && <button type="button" className="btn" disabled={busy} onClick={() => { setEmailSentTo(""); setCode(""); setError(""); }}>Use my authenticator app instead</button>}
           <button type="button" className="btn" disabled={busy} onClick={cancelCodeEntry}>Back to sign in</button>
+        </form> : phase === "emailcode" ?
+        <form onSubmit={verifyEmail}>
+          <h2>Check your email</h2>
+          <p>We sent a 6-digit code to {emailAddr.trim()}. It expires in 10 minutes.</p>
+          <label>Code<input className="workspace-rename-input" style={{display:"block",width:"100%"}} autoComplete="one-time-code" inputMode="numeric" autoFocus required maxLength={32} value={code} onChange={e=>setCode(e.target.value)} /></label>
+          <button className="btn" disabled={busy || !code.trim()}>Verify and continue</button>
+          <button type="button" className="btn" disabled={busy} onClick={() => startEmail()}>Send a new code</button>
+          <button type="button" className="btn" disabled={busy} onClick={() => { setCode(""); setError(""); setPhase("login"); }}>Use a different email</button>
         </form> : phase === "enroll" ?
         <form onSubmit={confirmEnrollment}>
           <h2>Set up two-step verification</h2>
@@ -8573,14 +8707,26 @@ function DjangoFoundation() {
           <button className="btn" type="button" onClick={() => { try { navigator.clipboard.writeText(recoveryCodes.join("\n")); } catch (_) {} }}>Copy codes</button>
           <label style={{display:"block"}}><input type="checkbox" checked={saved} onChange={e=>setSaved(e.target.checked)} /> I have saved these codes</label>
           <button className="btn" disabled={busy || !saved} onClick={finishEnrollment}>Continue</button>
-        </div> : phase === "login" ?
+        </div> : phase === "login" && options && options.email_signin && loginMode === "email" ?
+        <form onSubmit={startEmail}>
+          <h2>Welcome to JobTracker Hub</h2>
+          <p>{options.signup_open ? "Sign in or create an account to see your pipeline." : "Sign in to see your pipeline."}</p>
+          <label>Email address<input className="workspace-rename-input" style={{display:"block",width:"100%"}} type="email" autoComplete="email" autoFocus required placeholder="you@example.com" value={emailAddr} onChange={e=>setEmailAddr(e.target.value)} /></label>
+          <button className="btn" disabled={busy || !emailAddr.trim()}>Continue with email</button>
+          <p>We will email you a 6-digit code. No password to remember.</p>
+          <button type="button" className="btn" disabled={busy} onClick={() => { setError(""); setLoginMode("password"); }}>Use a username and password</button>
+        </form> : phase === "login" ?
         <form onSubmit={signIn}>
-          <p>Sign in with your administrator-provided account.</p>
+          <p>{options && options.email_signin ? "Sign in with your username and password." : "Sign in with your administrator-provided account."}</p>
           <label>Username<input className="workspace-rename-input" style={{display:"block",width:"100%"}} autoComplete="username" required value={username} onChange={e=>setUsername(e.target.value)} /></label>
           <label>Password<input className="workspace-rename-input" style={{display:"block",width:"100%"}} type="password" autoComplete="current-password" required value={password} onChange={e=>setPassword(e.target.value)} /></label>
           <button className="btn" disabled={busy}>Sign in</button>
+          {options && options.email_signin && <button type="button" className="btn" disabled={busy} onClick={() => { setError(""); setLoginMode("email"); }}>Sign in with an emailed code instead</button>}
         </form> : <>
-          <p>Signed in as {user && user.username}</p>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12}}>
+            <p>Signed in as {user && user.username}</p>
+            <ProfileMenu user={user} busy={busy} onSecurity={() => setSecurityOpen(true)} onSignOut={signOut} />
+          </div>
           <label>Workspace<select aria-label="Workspace" value={selected ? selected.id : ""} disabled={busy} onChange={e=> { window.location.hash = e.target.value ? "/workspaces/" + e.target.value : ""; }}>
             <option value="">Select a workspace</option>
             {workspaces.map(w=><option key={w.id} value={w.id}>{w.name}</option>)}
@@ -8603,9 +8749,7 @@ function DjangoFoundation() {
           {selected && connected && <button className="btn" disabled={categoriesOpen} onClick={()=>{context.invalidate();setEvidenceOpen(false);setApplicationsOpen(false);setReviewsOpen(false);setCategoriesOpen(true);}}>Categories</button>}
           {selected && connected && categoriesOpen && <CategoryPanel key={user.id+":"+selected.id} client={client} context={context} workspaceId={selected.id}
             onClose={()=>setCategoriesOpen(false)} onAuthFailure={report} />}
-          <button className="btn" disabled={securityOpen} onClick={() => setSecurityOpen(true)}>Security</button>
           {securityOpen && <SecurityPanel key={user.id} client={client} onClose={() => setSecurityOpen(false)} onAuthFailure={report} />}
-          <button className="btn" disabled={busy} onClick={signOut}>Sign out</button>
         </>}
       {error && <button className="btn" disabled={busy} onClick={checkSession}>Refresh session and workspaces</button>}
     </section>

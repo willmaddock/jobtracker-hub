@@ -61,7 +61,7 @@ from rest_framework.views import APIView
 
 from django.conf import settings
 
-from . import mfa, mfa_session, passkeys
+from . import email_codes, mfa, mfa_session, passkeys
 from .models import Workspace
 from .serializers import (
     LoginSerializer, MfaCodeSerializer, UserSerializer, WorkspaceSerializer, WorkspaceWriteSerializer,
@@ -100,7 +100,11 @@ class LoginView(APIView):
         if mfa.is_enrolled(user):
             # Password alone never creates a session for an enrolled user.
             mfa_session.start_pending(request, user)
-            return Response({"mfa_required": True, "passkey_available": passkeys.has_passkeys(user)})
+            return Response({
+                "mfa_required": True,
+                "passkey_available": passkeys.has_passkeys(user),
+                "email_code_available": email_codes.has_email_codes(user),
+            })
         mfa_session.clear_pending(request)
         login(request, user)
         data = UserSerializer(user).data
