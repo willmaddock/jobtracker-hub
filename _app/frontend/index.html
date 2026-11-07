@@ -8792,7 +8792,7 @@ function DjangoFoundation() {
           </select></label>
           {!workspaces.length && <p>No workspaces yet. Create one to continue.</p>}
           <form onSubmit={createWorkspace}>
-            <label>New workspace name<input className="workspace-rename-input" required value={name} onChange={e=>setName(e.target.value)} /></label>
+            <label>New workspace name<input className="auth-input" required value={name} onChange={e=>setName(e.target.value)} /></label>
             <button className="btn primary" disabled={busy || !name.trim()}>Create workspace</button>
           </form>
           {selected && <p role="status">{connected ? "Connected to " + selected.name + "." : "Checking workspace connection…"}</p>}
