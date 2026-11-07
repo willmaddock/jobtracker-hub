@@ -19,6 +19,7 @@ from django.urls import include, path
 from core.frontend import index, asset
 
 urlpatterns = [
+    path('app/', include('web.urls')),
     path('', index, name='frontend'),
     path('<str:name>', asset, name='frontend-asset'),
     path('admin/', admin.site.urls),

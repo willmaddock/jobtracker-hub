@@ -1,6 +1,6 @@
 # Django templates branch: plan
 
-**Status:** proposed draft, needs owner approval before any code.
+**Status:** approved by the owner on 2026-11-07 (plan, screen order and shell mockups). Commits and pushes still need the owner's go-ahead.
 **Branch:** `feature/django-templates-app`, created from `feature/email-signin-theme`.
 **Written from:** the uploaded zip of `feature/email-signin-theme` (no `.git` in the zip, so the commit was not checked).
 
@@ -111,7 +111,11 @@ is the reference for the rest.
 
 ### Changelog
 
-_(none yet)_
+- 2026-11-07, step 1 (partial): new `backend/web/` app with base layout, theme tokens,
+  sidebar, tracker menu, sign out and a read-only Pipeline page at `/app/`. The MFA
+  middleware now also guards `/app/`. Anonymous visitors go to `/` until the template
+  sign-in pages exist. Tests: `web.tests` (8 pass). Not yet done: template sign-in pages,
+  workspace create, Pipeline filters, detail panel and Kanban.
 
 ## 10. Out of scope for now
 

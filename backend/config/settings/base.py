@@ -46,6 +46,7 @@ INSTALLED_APPS = [
     'postings',
     'documents',
     'core',
+    'web',
 ]
 
 # Must be set before the first makemigrations — swapping the user
@@ -65,6 +66,10 @@ MIDDLEWARE = [
 ]
 
 ROOT_URLCONF = 'config.urls'
+
+# Server-rendered pages send anonymous visitors to the existing sign-in at "/" until the
+# template sign-in pages exist (docs/DJANGO_TEMPLATES_PLAN.md section 8, step 1).
+LOGIN_URL = '/'
 
 TEMPLATES = [
     {

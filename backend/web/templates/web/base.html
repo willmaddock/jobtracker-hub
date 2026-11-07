@@ -1,0 +1,42 @@
+{% load static %}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}JobTracker Hub{% endblock %}</title>
+  <link rel="stylesheet" href="{% static 'web/app.css' %}">
+  <script src="{% static 'web/theme.js' %}"></script>
+</head>
+<body>
+<div class="shell">
+  <aside class="side" aria-label="Main navigation">
+    <details class="ws-menu">
+      <summary class="ws"><span class="av">{{ workspace.name|slice:":1"|upper }}</span><span>{{ workspace.name }}</span></summary>
+      <div class="menu">
+        <div class="mh">Trackers</div>
+        {% for w in workspaces %}
+          <a class="mi{% if w.pk == workspace.pk %} cur{% endif %}" href="{% url 'web:pipeline' w.pk %}">{{ w.name }}</a>
+        {% endfor %}
+      </div>
+    </details>
+    <nav class="nav">
+      {% for item in nav %}
+        {% if item.ready %}
+          <a class="ni{% if item.active %} on{% endif %}" href="{% url 'web:pipeline' workspace.pk %}"{% if item.active %} aria-current="page"{% endif %}>{{ item.label }}</a>
+        {% else %}
+          <span class="ni off" title="Coming soon">{{ item.label }}</span>
+        {% endif %}
+      {% endfor %}
+    </nav>
+    <div class="sp"></div>
+    <form method="post" action="{% url 'web:sign-out' %}">{% csrf_token %}<button class="ni" type="submit">Sign out</button></form>
+  </aside>
+  <div class="main">
+    <header class="top">
+      <button class="btn" type="button" id="theme-toggle" aria-label="Toggle dark mode">Theme</button>
+    </header>
+    <main class="page">{% block content %}{% endblock %}</main>
+  </div>
+</div>
+</body>
+</html>

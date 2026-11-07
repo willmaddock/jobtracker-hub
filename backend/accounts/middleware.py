@@ -17,7 +17,8 @@ _OPEN_EXACT = {"/api/health"}
 def _guarded(path: str) -> bool:
     if path in _OPEN_EXACT or path.startswith(_OPEN_PREFIXES):
         return False
-    return path.startswith("/api/") or path == "/admin" or path.startswith("/admin/")
+    return (path.startswith("/api/") or path == "/admin" or path.startswith("/admin/")
+            or path == "/app" or path.startswith("/app/"))
 
 
 class MfaEnforcementMiddleware:

@@ -1,0 +1,18 @@
+{% extends "web/base.html" %}
+{% block title %}Pipeline · JobTracker Hub{% endblock %}
+{% block content %}
+<h1>Pipeline</h1>
+<p class="sub">{{ total }} application{{ total|pluralize }} shown</p>
+<div class="stats">
+  {% for s in stats %}<div class="stat"><b>{{ s.count }}</b><span>{{ s.status }}</span></div>{% endfor %}
+</div>
+{% if applications %}
+<ul class="rows">
+  {% for a in applications %}
+    <li class="row"><span class="pill">{{ a.get_status_display }}</span><b>{{ a.company }}</b><small>{{ a.role_label }}</small></li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="sub">No applications yet.</p>
+{% endif %}
+{% endblock %}
