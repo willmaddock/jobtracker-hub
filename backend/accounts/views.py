@@ -164,6 +164,19 @@ class WorkspaceViewSet(
         return Response(WorkspaceSerializer(workspace).data)
 
 
+def _qr_svg(uri: str) -> str:
+    """The enrolment URI as a self-contained SVG (white background so any scanner reads it)."""
+    import io
+
+    import segno
+
+    buffer = io.BytesIO()
+    segno.make(uri, error="m").save(
+        buffer, kind="svg", scale=5, border=4, dark="#000000", light="#ffffff", xmldecl=False, nl=False,
+    )
+    return buffer.getvalue().decode("utf-8")
+
+
 def _mfa_error(code, detail, http_status):
     return Response({"code": code, "detail": detail}, status=http_status)
 
@@ -229,7 +242,7 @@ class MfaEnrollBeginView(APIView):
             secret, uri = mfa.begin_enrollment(request.user)
         except mfa.AlreadyEnrolled:
             return _mfa_error("mfa_already_enrolled", "Multi-factor authentication is already set up.", status.HTTP_409_CONFLICT)
-        return Response({"secret": secret, "otpauth_uri": uri})
+        return Response({"secret": secret, "otpauth_uri": uri, "qr_svg": _qr_svg(uri)})
 
 
 @method_decorator(never_cache, name="dispatch")

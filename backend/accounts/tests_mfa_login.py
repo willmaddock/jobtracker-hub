@@ -133,6 +133,8 @@ class EnforcementTests(HttpMixin, TestCase):
         self.assertEqual(begin.status_code, 200)
         secret = begin.json()["secret"]
         self.assertTrue(begin.json()["otpauth_uri"].startswith("otpauth://totp/"))
+        self.assertTrue(begin.json()["qr_svg"].lstrip().startswith("<svg"))
+        self.assertNotIn(secret, begin.json()["qr_svg"])  # image carries modules, never the text key
         self.assertEqual(self.post("/api/auth/mfa/enroll/confirm", {"code": "000000"}).status_code, 400)
         self.assertEqual(self.client.get("/api/workspaces/").status_code, 403)
 

@@ -8278,6 +8278,18 @@ function DjangoFoundation() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
+  const [code, setCode] = useState("");
+  const [mfaSecret, setMfaSecret] = useState("");
+  const [mfaUri, setMfaUri] = useState("");
+  const [mfaQr, setMfaQr] = useState("");
+  const [recoveryCodes, setRecoveryCodes] = useState([]);
+  const [saved, setSaved] = useState(false);
+  const phaseRef = useRef("loading");
+  useEffect(() => { phaseRef.current = phase; }, [phase]);
+  // While a code prompt, enrolment or the one-time recovery codes are on screen, background
+  // session re-checks (window focus, hash change) must not run: they would restart enrolment
+  // or discard the prompt, e.g. when the user switches to their authenticator app and back.
+  const holdsMfaScreen = () => ["mfa", "enroll", "recovery"].includes(phaseRef.current);
 
   function clearIdentity() {
     setEvidenceOpen(false); setApplicationsOpen(false); setReviewsOpen(false);setCategoriesOpen(false);
@@ -8285,6 +8297,7 @@ function DjangoFoundation() {
     context.invalidate(); context.setActor(null); client.clearCsrf();
     identity.current = null; setUser(null); setWorkspaces([]);
     setSelected(null); setConnected(false); setPassword(""); setName("");
+    setCode(""); setMfaSecret(""); setMfaUri(""); setMfaQr(""); setRecoveryCodes([]); setSaved(false);
   }
   function report(e) {
     if (["stale_response", "aborted"].includes(e.code)) return;
@@ -8313,7 +8326,20 @@ function DjangoFoundation() {
     sessionWasAuthenticated.current = true;
     if (changedUser) history.replaceState(null, "", location.pathname + location.search);
     setUser(nextUser); setPassword(""); setName("");
-    const list = await client.request("/api/workspaces/");
+    // No extra request on the normal path: the server refuses product data to a session that has
+    // not completed two-step verification, and that refusal says which screen to show.
+    let list;
+    try { list = await client.request("/api/workspaces/"); }
+    catch (e) {
+      if (e.code === "mfa_required") { setCode(""); setPhase("mfa"); return; }
+      if (e.code === "mfa_enrollment_required") {
+        setCode("");
+        const begun = await client.request("/api/auth/mfa/enroll/begin", {method:"POST"});
+        setMfaSecret(begun.secret); setMfaUri(begun.otpauth_uri); setMfaQr(begun.qr_svg || ""); setPhase("enroll");
+        return;
+      }
+      throw e;
+    }
     setWorkspaces(list); setPhase("ready");
     await selectRoute(list);
   }
@@ -8328,8 +8354,8 @@ function DjangoFoundation() {
   }
   useEffect(() => {
     checkSession();
-    const focus = () => checkSession();
-    const changed = () => checkSession();
+    const focus = () => { if (!holdsMfaScreen()) checkSession(); };
+    const changed = () => { if (!holdsMfaScreen()) checkSession(); };
     window.addEventListener("focus", focus);
     window.addEventListener("hashchange", changed);
     if (window.BroadcastChannel) {
@@ -8343,10 +8369,51 @@ function DjangoFoundation() {
     try {
       await client.bootstrap();
       const nextUser = await client.request("/api/auth/login", {method:"POST", body:{username,password}});
+      if (nextUser.mfa_required) { setCode(""); setPhase("mfa"); return; } // password accepted, no session yet
       await client.bootstrap(); // Django rotates the CSRF secret on login.
       if (channel.current) channel.current.postMessage("changed");
       await establish(nextUser);
     } catch (e) { report(e); } finally { setPassword(""); setBusy(false); }
+  }
+  async function submitCode(event) {
+    event.preventDefault(); setBusy(true); setError("");
+    try {
+      const nextUser = await client.request("/api/auth/mfa/verify", {method:"POST", body:{code}});
+      await client.bootstrap(); // the session was created or rotated by verification
+      if (channel.current) channel.current.postMessage("changed");
+      setCode(""); await establish(nextUser);
+    } catch (e) {
+      if (e.code === "mfa_session_expired") { setCode(""); setPhase("login"); setError("That sign-in expired. Sign in again."); }
+      else if (e.code === "mfa_locked") { setCode(""); setError(e.message); }
+      else if (e.code === "mfa_invalid_code") setError("That code was not accepted. Check the code and try again.");
+      else report(e);
+    } finally { setCode(""); setBusy(false); }
+  }
+  async function confirmEnrollment(event) {
+    event.preventDefault(); setBusy(true); setError("");
+    try {
+      const done = await client.request("/api/auth/mfa/enroll/confirm", {method:"POST", body:{code}});
+      await client.bootstrap();
+      setRecoveryCodes(done.recovery_codes); setSaved(false); setCode(""); setMfaSecret(""); setMfaUri(""); setMfaQr("");
+      setPhase("recovery");
+    } catch (e) {
+      if (e.code === "mfa_invalid_code") setError("That code was not accepted. Check the code and try again.");
+      else report(e);
+    } finally { setCode(""); setBusy(false); }
+  }
+  async function finishEnrollment() {
+    setBusy(true); setError("");
+    try {
+      setRecoveryCodes([]); // drop the plaintext codes from memory once acknowledged
+      await establish(user);
+    } catch (e) { report(e); } finally { setBusy(false); }
+  }
+  async function cancelCodeEntry() {
+    setBusy(true);
+    // A password-only session (e.g. arriving from the Django admin) must really end; a pending
+    // sign-in has no session, so logout answering 401 is expected and ignored.
+    try { await client.request("/api/auth/logout", {method:"POST"}); } catch (_) {}
+    clearIdentity(); sessionWasAuthenticated.current = false; setError(""); setPhase("login"); setBusy(false);
   }
   async function signOut() {
     setEvidenceOpen(false); setApplicationsOpen(false); setReviewsOpen(false);setCategoriesOpen(false);
@@ -8372,7 +8439,34 @@ function DjangoFoundation() {
     <section className="workspace-preview" style={{width:420,maxWidth:"90vw",padding:24,maxHeight:"calc(100vh - 32px)",overflowY:"auto"}}>
       <h1>JobTracker Hub</h1>
       {error && <p role="alert" className="workspace-pop-err">{error}</p>}
-      {phase === "loading" ? <p role="status">Checking session…</p> : phase === "unavailable" ? <p>Session could not be verified. Refresh to continue.</p> : phase === "login" ?
+      {phase === "loading" ? <p role="status">Checking session…</p> : phase === "unavailable" ? <p>Session could not be verified. Refresh to continue.</p> : phase === "mfa" ?
+        <form onSubmit={submitCode}>
+          <h2>Two-step verification</h2>
+          <p>Enter the 6-digit code from your authenticator app, or one of your recovery codes.</p>
+          <label>Code<input className="workspace-rename-input" style={{display:"block",width:"100%"}} autoComplete="one-time-code" autoFocus required maxLength={32} value={code} onChange={e=>setCode(e.target.value)} /></label>
+          <button className="btn" disabled={busy || !code.trim()}>Verify</button>
+          <button type="button" className="btn" disabled={busy} onClick={cancelCodeEntry}>Back to sign in</button>
+        </form> : phase === "enroll" ?
+        <form onSubmit={confirmEnrollment}>
+          <h2>Set up two-step verification</h2>
+          <p>Your account requires an authenticator app (Google Authenticator, 1Password, Apple Passwords or similar). Add this account, then enter the 6-digit code it shows.</p>
+          {mfaQr && <><p>On another device, scan this with your authenticator app:</p>
+            <img alt="Setup QR code" width="200" height="200" style={{background:"#fff",borderRadius:8}} src={"data:image/svg+xml;utf8," + encodeURIComponent(mfaQr)} /></>}
+          <p>On this device: <a href={mfaUri}>Open in authenticator app</a></p>
+          <p>Or enter this setup key manually:</p>
+          <p><code style={{wordBreak:"break-all",userSelect:"all"}}>{mfaSecret.replace(/(.{4})/g, "$1 ").trim()}</code></p>
+          <label>6-digit code<input className="workspace-rename-input" style={{display:"block",width:"100%"}} autoComplete="one-time-code" inputMode="numeric" autoFocus required maxLength={8} value={code} onChange={e=>setCode(e.target.value)} /></label>
+          <button className="btn" disabled={busy || !code.trim()}>Confirm and continue</button>
+          <button type="button" className="btn" disabled={busy} onClick={signOut}>Sign out</button>
+        </form> : phase === "recovery" ?
+        <div>
+          <h2>Save your recovery codes</h2>
+          <p>Each code works once if you lose your authenticator. They are shown only now. Store them somewhere safe, such as a password manager.</p>
+          <ul style={{columns:2,fontFamily:"monospace",userSelect:"all"}}>{recoveryCodes.map(c => <li key={c}>{c}</li>)}</ul>
+          <button className="btn" type="button" onClick={() => { try { navigator.clipboard.writeText(recoveryCodes.join("\n")); } catch (_) {} }}>Copy codes</button>
+          <label style={{display:"block"}}><input type="checkbox" checked={saved} onChange={e=>setSaved(e.target.checked)} /> I have saved these codes</label>
+          <button className="btn" disabled={busy || !saved} onClick={finishEnrollment}>Continue</button>
+        </div> : phase === "login" ?
         <form onSubmit={signIn}>
           <p>Sign in with your administrator-provided account.</p>
           <label>Username<input className="workspace-rename-input" style={{display:"block",width:"100%"}} autoComplete="username" required value={username} onChange={e=>setUsername(e.target.value)} /></label>

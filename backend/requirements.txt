@@ -78,3 +78,7 @@ gunicorn==23.0.0
 
 # Serves collectstatic output (admin CSS/JS) in production (prod.py middleware).
 whitenoise==6.12.0
+
+# MFA enrolment QR code (docs/MFA_DESIGN.md). Pure Python, no dependencies; renders the
+# otpauth:// URI as an inline SVG so users scan instead of typing the setup key.
+segno==1.6.6
