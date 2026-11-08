@@ -86,3 +86,11 @@ segno==1.6.6
 # Passkeys (WebAuthn) as an MFA step. All use is confined to accounts/passkeys.py.
 webauthn>=2.5,<3
 
+
+# Gateway mode (JTH_GATEWAY=true): the original app that runs privately for each signed-in user.
+fastapi>=0.115
+uvicorn>=0.30
+python-multipart>=0.0.9
+Send2Trash>=1.8
+mammoth>=1.8
+fpdf2>=2.7

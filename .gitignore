@@ -82,4 +82,4 @@ celerybeat.pid
 .pytest_cache/
 .coverage
 htmlcov/
-.mypy_cache/
+.mypy_cache/jth-data/

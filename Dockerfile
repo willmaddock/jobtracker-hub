@@ -19,7 +19,7 @@ COPY backend/requirements.txt backend/requirements.txt
 RUN pip install -r backend/requirements.txt
 
 COPY backend backend
-COPY _app/frontend _app/frontend
+COPY _app _app
 
 # Collect admin/static assets for WhiteNoise (prod.py). Dev settings are used only
 # here because they need no production secrets; STATIC_ROOT comes from base.py.
@@ -34,4 +34,4 @@ EXPOSE 8000
 # Web by default. Override the command for other roles (see docs/DEPLOYMENT.md):
 #   celery -A config worker -l info
 #   celery -A config beat -l info -s /tmp/celerybeat-schedule
-CMD ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "3", "--access-logfile", "-"]
+CMD ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "3", "--timeout", "300", "--access-logfile", "-"]

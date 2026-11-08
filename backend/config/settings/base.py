@@ -47,6 +47,7 @@ INSTALLED_APPS = [
     'documents',
     'core',
     'web',
+    'gateway',
 ]
 
 # Must be set before the first makemigrations — swapping the user
@@ -343,3 +344,20 @@ CELERY_BEAT_SCHEDULE = {
         'schedule': 900.0,  # every 15 minutes
     },
 }
+
+
+# --- Gateway: Django sign-in (email code + MFA) in front of the original JobTracker app ---------
+# When on, "/" serves the original UI after sign-in and every /api/* request that is not an
+# auth/account route is forwarded to the signed-in user's own private copy of the original app
+# (see backend/gateway/). Each user gets separate folders and databases under JTH_DATA_DIR.
+def _env_flag(name, default=False):
+    value = os.environ.get(name)
+    return default if value is None else value.strip().lower() == "true"
+
+JTH_GATEWAY = _env_flag("JTH_GATEWAY")
+JTH_DATA_DIR = Path(os.environ.get("JTH_DATA_DIR") or (BASE_DIR.parent / "jth-data"))
+JTH_APP_SOURCE = BASE_DIR.parent / "_app"
+JTH_IDLE_MINUTES = int(os.environ.get("JTH_IDLE_MINUTES", "30"))
+JTH_MAX_UPLOAD_MB = int(os.environ.get("JTH_MAX_UPLOAD_MB", "512"))
+# Single-machine use only: lets superusers link a folder on THIS computer in place (no upload).
+JTH_ALLOW_LOCAL_LINK = _env_flag("JTH_ALLOW_LOCAL_LINK")

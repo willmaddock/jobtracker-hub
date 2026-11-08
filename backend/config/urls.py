@@ -11,14 +11,16 @@ Class-based views
     1. Add an import:  from other_app.views import Home
     2. Add a URL to urlpatterns:  path('', Home.as_view(), name='home')
 Including another URLconf
-    1. Import the include() function: from django.urls import include, path
+    1. Import the include() function: from django.conf import settings
+from django.urls import include, path
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
 from django.contrib import admin
+from django.conf import settings
 from django.urls import include, path
 from core.frontend import index, asset
 
-urlpatterns = [
+_foundation_urlpatterns = [
     path('app/', include('web.urls')),
     path('', index, name='frontend'),
     path('<str:name>', asset, name='frontend-asset'),
@@ -30,3 +32,15 @@ urlpatterns = [
     path('api/', include('documents.urls')),
     path('api/', include('email_sync.urls')),
 ]
+
+if settings.JTH_GATEWAY:
+    from gateway.views import index as gateway_index
+    urlpatterns = [
+        path('app/', include('web.urls')),
+        path('', gateway_index, name='frontend'),
+        path('<str:name>', asset, name='frontend-asset'),
+        path('admin/', admin.site.urls),
+        path('', include('gateway.urls')),
+    ]
+else:
+    urlpatterns = _foundation_urlpatterns

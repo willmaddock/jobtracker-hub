@@ -8586,7 +8586,7 @@ function DjangoFoundation() {
     } catch (e) { report(e); if (!["stale_response", "aborted"].includes(e.code)) setPhase(e.code === "authentication_required" ? "login" : "unavailable"); }
   }
   useEffect(() => {
-    client.request("/api/auth/options").then(setOptions).catch(() => setOptions({email_signin:false, signup_open:false}));
+    fetch("/api/auth/options", {credentials:"same-origin", cache:"no-store", headers:{Accept:"application/json"}}).then(r => r.ok ? r.json() : Promise.reject(new Error("options"))).then(setOptions).catch(() => setOptions({email_signin:false, signup_open:false}));
   }, []);
   useEffect(() => {
     checkSession();
