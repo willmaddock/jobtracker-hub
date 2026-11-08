@@ -143,7 +143,7 @@ def proxy(request, path):
     except ValueError:
         return _json("Bad Content-Length.", 400)
     if length > settings.JTH_MAX_UPLOAD_MB * 1024 * 1024:
-        return _json("Upload too large.", 413)
+        return _json(f"Upload too large (the limit is {settings.JTH_MAX_UPLOAD_MB} MB).", 413)
 
     try:
         try:

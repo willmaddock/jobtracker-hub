@@ -117,6 +117,15 @@ class GatewayProxyTests(TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertEqual(SEEN[0]["body"], b'{"a": 1}')
 
+    @override_settings(JTH_MAX_UPLOAD_MB=1)
+    def test_oversized_upload_is_refused_and_names_the_limit(self):
+        self.client.force_login(self.user)
+        r = self.client.post("/api/applications/new", data=b"x" * (1024 * 1024 + 1),
+                             content_type="application/octet-stream", HTTP_SEC_FETCH_SITE="same-origin")
+        self.assertEqual(r.status_code, 413)
+        self.assertIn("limit is 1 MB", r.json()["detail"])
+        self.assertEqual(SEEN, [])  # refused before anything reached the private app
+
     def test_status_reports_not_packaged_to_the_browser(self):
         self.client.force_login(self.user)
         self.assertEqual(self.client.get("/api/status").json()["packaged"], False)
