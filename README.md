@@ -47,6 +47,21 @@ python manage.py createsuperuser
 
 Without `.env`, dev behaves as before: no public signup, accounts are created in `/admin/`.
 
+## Try it locally
+
+1. Start the server (steps above) and open **http://localhost:8000**.
+2. Enter any email and click **Continue with email**. This creates the account; there is no
+   separate registration form.
+3. Look in the terminal running `runserver` for a line containing a 6-digit code (nothing is
+   emailed in dev), and enter it.
+4. Set up an authenticator app (scan the QR code), enter its code, and save the recovery codes.
+5. You are now in the JobTracker UI. To get back in later, sign in with the same email.
+
+Need an admin or username/password account instead? Run `python manage.py createsuperuser`.
+
+If you see no sign-up option, you probably skipped `cp .env.example .env`; without it there is
+no public signup and accounts are created in `/admin/`.
+
 ## Docker (production-like, local)
 
 ```bash
@@ -63,8 +78,17 @@ for real deployments.
 ## Tests
 
 ```bash
-cd backend && python manage.py test
+cd backend
+python manage.py test accounts applications core documents email_sync gateway postings web
 ```
+
+Name the apps rather than running a bare `manage.py test`: `config/settings/test_postgres.py` is a
+harness-only module (see `tests/backend/`) that fails to import during plain test discovery.
+Some tests intentionally feed bad PDFs or trigger a 500, so lines like `invalid pdf header` or
+`Internal Server Error` in the output are expected.
+
+Gateway tests that exercise the `/` route depend on `JTH_GATEWAY`; if one fails, try
+`JTH_GATEWAY=true python manage.py test gateway`.
 
 ## Notes
 

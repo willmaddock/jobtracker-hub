@@ -1,18 +1,105 @@
 {% extends "web/base.html" %}
 {% block title %}Pipeline · JobTracker Hub{% endblock %}
+{% block topbar %}
+<header class="top">
+  <form class="search" method="get" role="search">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
+    <input id="search-input" name="q" value="{{ q }}" placeholder="Search {{ total }} application{{ total|pluralize }}… (⌘K)" aria-label="Search applications">
+    <input type="hidden" name="view" value="{{ view }}"><input type="hidden" name="sort" value="{{ sort }}">
+    {% if show_archived %}<input type="hidden" name="archived" value="1">{% endif %}
+  </form>
+  <span class="sp"></span>
+  <button class="btn" type="button" id="theme-toggle" aria-label="Toggle dark mode"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M20 14A8 8 0 019.5 4 8 8 0 1020 14z"/></svg></button>
+  <span class="btn pri off" title="Coming soon">+ New application</span>
+</header>
+{% endblock %}
 {% block content %}
-<h1>Pipeline</h1>
-<p class="sub">{{ total }} application{{ total|pluralize }} shown</p>
+<div><h1>Pipeline</h1><div class="sub">{{ shown_count }} of {{ total }} application{{ total|pluralize }} shown</div></div>
 <div class="stats">
   {% for s in stats %}<div class="stat"><b>{{ s.count }}</b><span>{{ s.status }}</span></div>{% endfor %}
 </div>
-{% if applications %}
-<ul class="rows">
-  {% for a in applications %}
-    <li class="row"><span class="pill">{{ a.shown_status_label }}</span><b>{{ a.company }}</b><small>{{ a.role_label }}</small></li>
-  {% endfor %}
-</ul>
+<div class="bar">
+  <div class="tog"><a class="{% if view == 'list' %}on{% endif %}" href="{{ list_href }}">List</a><a class="{% if view == 'kanban' %}on{% endif %}" href="{{ kanban_href }}">Kanban (drag cards to move)</a></div>
+  {% for c in chips %}<a class="chip{% if c.on %} on{% endif %}" href="{{ c.href }}">{{ c.status }}</a>{% endfor %}
+  <form method="get">
+    <input type="hidden" name="view" value="{{ view }}">{% if q %}<input type="hidden" name="q" value="{{ q }}">{% endif %}{% for s in status_filter %}<input type="hidden" name="status" value="{{ s }}">{% endfor %}
+    <label class="chk">Sort by
+      <select name="sort" id="sort-select" aria-label="Sort by">{% for key, label in sorts %}<option value="{{ key }}"{% if key == sort %} selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+    <label class="chk"><input type="checkbox" name="archived" value="1"{% if show_archived %} checked{% endif %} onchange="this.form.submit()"> Show archived</label>
+  </form>
+</div>
+
+{% if not rows %}
+  <div class="empty">{% if total %}No applications match these filters.{% else %}No applications yet.{% endif %}</div>
+{% elif view == "kanban" %}
+  <div class="kb">
+    {% for col in columns %}
+      <div class="col" data-status="{{ col.status }}" style="--c:{{ col.color }}">
+        <div class="ch">{{ col.status|capfirst }} · <b>{{ col.cards|length }}</b></div>
+        {% for a in col.cards %}
+          <div class="kc" draggable="true" data-id="{{ a.id }}" data-status="{{ a.effective_status }}">
+            <a href="{{ a.href }}"><b>{{ a.effective_company }}</b><small>{{ a.role_label }}</small>{% if a.days_since_activity is not None %}<small>{{ a.days_since_activity }}d</small>{% endif %}</a>
+            <form method="post" action="{% url 'web:application-action' workspace.pk a.id 'status' %}">{% csrf_token %}
+              <input type="hidden" name="next" value="{{ back }}"><input type="hidden" name="status" value="">
+              <select name="status_move" aria-label="Move {{ a.effective_company }}">
+                <option value="">Move to…</option>
+                {% for s in statuses %}{% if s != a.effective_status %}<option value="{{ s }}">{{ s|capfirst }}</option>{% endif %}{% endfor %}
+              </select>
+            </form>
+          </div>
+        {% empty %}<div class="drop">Drop a card here.</div>{% endfor %}
+      </div>
+    {% endfor %}
+  </div>
 {% else %}
-<p class="sub">No applications yet.</p>
+  <div class="split">
+    <div class="list">
+      {% for a in rows %}
+        <a class="row{% if selected and a.id == selected.id %} on{% endif %}" href="{{ a.href }}"{% if selected and a.id == selected.id %} aria-current="true"{% endif %}>
+          <span class="pill {{ a.effective_status }}">{{ a.effective_status|capfirst }}</span>
+          <b>{{ a.effective_company }}</b><small>{{ a.role_label }}</small>
+          {% if a.days_since_activity is not None %}<small>{{ a.days_since_activity }}d since {% if a.date_applied %}date applied{% else %}last activity{% endif %}</small>{% endif %}
+        </a>
+      {% endfor %}
+    </div>
+    {% if selected %}
+    <div class="stack">
+      <div class="card">
+        <div class="eyebrow">{{ selected.effective_company }}</div>
+        <div class="title">{{ selected.role_label }}</div>
+        <div class="sub">{% if selected.date_applied %}Applied {{ selected.date_applied|date:"Y-m-d" }}{% else %}Date applied not known{% endif %}{% if selected.activity_override %} • Activity reset {{ selected.activity_override|date:"Y-m-d" }}{% endif %}</div>
+        <div class="actions">
+          <form method="post" action="{% url 'web:application-action' workspace.pk selected.id 'status' %}">{% csrf_token %}
+            <input type="hidden" name="next" value="{{ back }}">
+            <select name="status" aria-label="Status" onchange="this.form.submit()">
+              <option value="">(auto — {{ selected.status }})</option>
+              {% for s in statuses %}<option value="{{ s }}"{% if selected.manual_status == s %} selected{% endif %}>{{ s|capfirst }}</option>{% endfor %}
+            </select>
+          </form>
+          <form method="post" action="{% url 'web:application-action' workspace.pk selected.id 'follow-up' %}">{% csrf_token %}<input type="hidden" name="next" value="{{ back }}"><button class="btn pri" type="submit">Follow Up (+7d)</button></form>
+          <form method="post" action="{% url 'web:application-action' workspace.pk selected.id 'reset-clock' %}">{% csrf_token %}<input type="hidden" name="next" value="{{ back }}"><button class="btn" type="submit" title="Keeps date applied as-is and resets the days-quiet countdown to 0.">Reset Activity Clock</button></form>
+        </div>
+      </div>
+      <div class="eyebrow soft">Application detail</div>
+      <div class="card stack" style="gap:20px">
+        <div class="dg">
+          <div><span>Company</span><b>{{ selected.effective_company }}</b></div>
+          <div><span>Job title</span><b>{{ selected.role_label }}</b></div>
+          <div><span>Status</span><b>{{ selected.effective_status }}</b></div>
+          <div><span>Date applied</span><b>{{ selected.date_applied|date:"Y-m-d"|default:"unknown" }}</b></div>
+          <div><span>Days since activity</span><b>{% if selected.days_since_activity is not None %}{{ selected.days_since_activity }}d{% else %}unknown{% endif %}</b></div>
+        </div>
+        {% if selected.next_action %}<div class="dg"><div><span>Next action</span><b>{{ selected.next_action }}{% if selected.next_action_date %} · {{ selected.next_action_date|date:"Y-m-d" }}{% endif %}</b></div></div>{% endif %}
+        <div>
+          <div class="eyebrow soft" style="margin-bottom:10px">Timeline</div>
+          {% if selected.history %}
+          <ul class="tl">{% for h in selected.history %}<li><i></i><span><b>{{ h.status|capfirst }}</b> — {{ h.source }}, {{ h.changed_at|date:"Y-m-d" }}</span></li>{% endfor %}</ul>
+          {% else %}<div class="sub">No status changes recorded yet.</div>{% endif %}
+        </div>
+        {% if selected.notes %}<div><div class="eyebrow soft" style="margin-bottom:6px">Notes</div><div style="white-space:pre-wrap">{{ selected.notes }}</div></div>{% endif %}
+      </div>
+    </div>
+    {% endif %}
+  </div>
 {% endif %}
 {% endblock %}
