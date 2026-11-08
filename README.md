@@ -20,6 +20,15 @@ protects the account with MFA, then runs a private copy of that app for each use
 
 ## Quick start (no Docker, SQLite)
 
+Get the code (skip if you already have it):
+
+```bash
+git clone -b feature/gateway https://github.com/willmaddock/jobtracker-hub.git
+cd jobtracker-hub
+```
+
+First time only (if another server is already running, stop it with Ctrl+C so port 8000 is free):
+
 ```bash
 cd backend
 python3 -m venv .venv
@@ -47,6 +56,20 @@ python manage.py createsuperuser
 
 Without `.env`, dev behaves as before: no public signup, accounts are created in `/admin/`.
 
+## Starting it again later
+
+Setup is a one-time job. From then on, just activate the venv and start the server. Do **not**
+re-run `cp .env.example .env`: it overwrites your `backend/.env` and any settings you changed
+(for example `JTH_MAX_UPLOAD_MB`).
+
+```bash
+cd backend
+source .venv/bin/activate
+python manage.py runserver
+```
+
+Settings in `.env` are read at startup, so stop (Ctrl+C) and restart after editing it.
+
 ## Try it locally
 
 1. Start the server (steps above) and open **http://localhost:8000**.
@@ -64,7 +87,7 @@ no public signup and accounts are created in `/admin/`.
 
 ## Importing an existing tracker
 
-In the JobTracker UI, open the tracker menu and choose **Bring in a Copy**, then pick a `.zip`
+In the JobTracker UI, open the tracker menu and choose **Bring in a Copy**, then **Import a Copy** in the dialog and pick a `.zip`
 export of your tracker folder (a zip keeps notes and statuses; a plain folder upload can't).
 Imports larger than 512 MB are rejected with `Upload too large`. Raise `JTH_MAX_UPLOAD_MB` in
 `backend/.env` (it is 1024 in `.env.example`) and restart `runserver`; the setting is read at startup.
