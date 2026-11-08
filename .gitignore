@@ -82,4 +82,7 @@ celerybeat.pid
 .pytest_cache/
 .coverage
 htmlcov/
-.mypy_cache/jth-data/
+.mypy_cache/
+
+# --- Gateway runtime data ---
+jth-data/
