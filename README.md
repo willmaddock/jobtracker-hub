@@ -62,6 +62,14 @@ Need an admin or username/password account instead? Run `python manage.py create
 If you see no sign-up option, you probably skipped `cp .env.example .env`; without it there is
 no public signup and accounts are created in `/admin/`.
 
+## Importing an existing tracker
+
+In the JobTracker UI, open the tracker menu and choose **Bring in a Copy**, then pick a `.zip`
+export of your tracker folder (a zip keeps notes and statuses; a plain folder upload can't).
+Imports larger than 512 MB are rejected with `Upload too large`. Raise `JTH_MAX_UPLOAD_MB` in
+`backend/.env` (it is 1024 in `.env.example`) and restart `runserver`; the setting is read at startup.
+Behind nginx or another proxy, raise its body-size limit to match.
+
 ## Docker (production-like, local)
 
 ```bash
@@ -95,4 +103,6 @@ Gateway tests that exercise the `/` route depend on `JTH_GATEWAY`; if one fails,
 - Production forces MFA on for every account (`config/settings/prod.py`). In production, emailed
   sign-in needs a real SMTP relay; see `deploy/env.example`.
 - Rotating `MFA_ENCRYPTION_KEY` forces everyone to re-enrol MFA.
-- Data lives in the database and uploaded documents (S3 in production), not in a local folder.
+- In gateway mode, each user's trackers and uploaded documents live on the server's disk under
+  `jth-data/` (gitignored; override with `JTH_DATA_DIR`). In the non-gateway Django app, data lives
+  in the database and S3 in production.
