@@ -133,9 +133,13 @@ class GatewayIndexTests(TestCase):
         r = self.client.get("/")
         self.assertContains(r, "window.JTH_DJANGO = true;")
 
+    def test_anonymous_is_not_marked_as_gateway_app(self):
+        self.assertNotContains(self.client.get("/"), "window.JTH_GATEWAY")
+
     def test_signed_in_gets_original_app(self):
         user = get_user_model().objects.create_user(username="u2", password="pw-not-used-12345")
         self.client.force_login(user)
         r = self.client.get("/")
         self.assertNotContains(r, "window.JTH_DJANGO = true;")
-        self.assertContains(r, "Sign out of JobTracker Hub")
+        self.assertContains(r, "window.JTH_GATEWAY = true;")
+        self.assertNotContains(r, "Sign out of JobTracker Hub")  # no floating button any more

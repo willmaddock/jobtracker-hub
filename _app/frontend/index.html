@@ -708,6 +708,9 @@ const ICON_PATHS = {
   insights:  `<path ${ICON_STROKE} d="M3.5 20.5h17"/><path ${ICON_STROKE} d="M5 20.5V13m5.4 7.5V8.5m5.4 12V11m5.4 9.5V5"/>`,
   manage:    `<path ${ICON_STROKE} d="M14.7 6.3a3.8 3.8 0 1 1-5.4 5.4L4 17v3h3l5.3-5.3a3.8 3.8 0 1 1 5.4-5.4l-3-3Z"/>`,
   settings:  `<circle cx="12" cy="12" r="3" ${ICON_STROKE}/><path ${ICON_STROKE} d="M19.4 13.8a1.7 1.7 0 0 0 .34 1.87l.06.06a2.06 2.06 0 1 1-2.9 2.9l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56v.17a2.06 2.06 0 1 1-4.12 0v-.09a1.7 1.7 0 0 0-1.11-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2.06 2.06 0 1 1-2.9-2.9l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.03H4.6a2.06 2.06 0 1 1 0-4.12h.09a1.7 1.7 0 0 0 1.56-1.11 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2.06 2.06 0 1 1 2.9-2.9l.06.06a1.7 1.7 0 0 0 1.87.34h.08a1.7 1.7 0 0 0 1.03-1.56V4.6a2.06 2.06 0 1 1 4.12 0v.09a1.7 1.7 0 0 0 1.03 1.56h.08a1.7 1.7 0 0 0 1.87-.34l.06-.06a2.06 2.06 0 1 1 2.9 2.9l-.06.06a1.7 1.7 0 0 0-.34 1.87v.08a1.7 1.7 0 0 0 1.56 1.03h.17a2.06 2.06 0 1 1 0 4.12h-.09a1.7 1.7 0 0 0-1.56 1.03Z"/>`,
+  // gateway account controls (paths from the app-shell mockup)
+  security:  `<path ${ICON_STROKE} d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/>`,
+  signout:   `<path ${ICON_STROKE} d="M9 4H5a2 2 0 00-2 2v12a2 2 0 002 2h4M16 8l4 4-4 4M20 12H9"/>`,
   // misc actions
   close:     `<path ${ICON_STROKE} d="M6 6l12 12M18 6 6 18"/>`,
   edit:      `<path ${ICON_STROKE} d="M4 20h4L18.5 9.5a2.1 2.1 0 0 0-3-3L5 17v3Z"/>`,
@@ -1796,6 +1799,96 @@ function ConfirmModal({title, message, confirmLabel, danger, onConfirm, onCancel
   ), document.body);
 }
 
+/* =========================== GATEWAY ACCOUNT ===========================
+   Only active when the page is served by the Django gateway (window.JTH_GATEWAY === true, set in
+   backend/gateway/views.py). Desktop and plain-server runs have no account, so none of this shows.
+   The tracker menu, the rail and Settings all just call openGatewaySecurity() / gatewaySignOut();
+   the single GatewayAccountHost mounted in App owns the Security modal. */
+const GATEWAY_OPEN_SECURITY = "jth-open-security";
+const isGateway = () => window.JTH_GATEWAY === true;
+function openGatewaySecurity(){ window.dispatchEvent(new Event(GATEWAY_OPEN_SECURITY)); }
+async function gatewaySignOut(){
+  try {
+    const j = await fetch("/api/auth/csrf", {credentials:"same-origin"}).then(r => r.json());
+    await fetch("/api/auth/logout", {method:"POST", credentials:"same-origin", headers:{"X-CSRFToken": j.csrfToken}});
+  } catch (e) { /* reload either way: the server decides whether the session is still valid */ }
+  location.reload();
+}
+function useGatewayUser(){
+  const [user, setUser] = useState(null);
+  useEffect(() => {
+    if (!isGateway()) return;
+    let live = true;
+    fetch("/api/auth/me", {credentials:"same-origin", cache:"no-store", headers:{Accept:"application/json"}})
+      .then(r => r.ok ? r.json() : null).then(u => { if (live) setUser(u); }).catch(() => {});
+    return () => { live = false; };
+  }, []);
+  return user;
+}
+
+// Rows at the bottom of the tracker menu (WorkspacePopover): who is signed in, Security, Sign out.
+function GatewayAccountMenu({onClose}){
+  const user = useGatewayUser();
+  if (!isGateway()) return null;
+  const who = user && (user.email || user.username);
+  return (
+    <>
+      <div className="workspace-pop-divider" />
+      <div className="workspace-pop-title">Signed in as</div>
+      {who && <div style={{padding:"0 10px 6px", fontSize:12.5, color:"var(--text-soft)", wordBreak:"break-all"}}>{who}</div>}
+      <div style={{display:"flex", flexDirection:"column", gap:6, padding:"2px 6px 6px"}}>
+        <button className="btn small" onClick={() => { onClose(); openGatewaySecurity(); }}>
+          <Icon name="security" size={13} style={{marginRight:6, verticalAlign:"-2px"}}/>Security (MFA, passkeys)
+        </button>
+        <button className="btn small danger-outline" onClick={gatewaySignOut}>
+          <Icon name="signout" size={13} style={{marginRight:6, verticalAlign:"-2px"}}/>Sign out
+        </button>
+      </div>
+    </>
+  );
+}
+
+// Mounted once in App. Builds its own API client (same pattern as DjangoFoundation) and shows the
+// existing SecurityPanel -- passkeys and emailed codes. First-time MFA enrolment stays in the
+// sign-in flow, so this is management only.
+function GatewayAccountHost(){
+  const [open, setOpen] = useState(false);
+  const [ready, setReady] = useState(false);
+  const [error, setError] = useState("");
+  const client = useMemo(() => JTHApi.createClient({context: JTHWorkspace.createContext()}), []);
+  useEffect(() => {
+    if (!isGateway()) return;
+    const on = () => setOpen(true);
+    window.addEventListener(GATEWAY_OPEN_SECURITY, on);
+    return () => window.removeEventListener(GATEWAY_OPEN_SECURITY, on);
+  }, []);
+  useEffect(() => {
+    if (!open) { setReady(false); setError(""); return; }
+    let live = true;
+    client.bootstrap().then(() => { if (live) setReady(true); })
+      .catch(e => { if (live) setError(e.message || "Could not open Security."); });
+    const onKey = e => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("keydown", onKey);
+    return () => { live = false; document.removeEventListener("keydown", onKey); };
+  }, [open, client]);
+  if (!open) return null;
+  const onAuthFailure = e => {
+    if (e && ["authentication_required", "mfa_required", "mfa_enrollment_required"].includes(e.code)) location.reload();
+    else setError((e && e.message) || "Something went wrong.");
+  };
+  // Backdrop click deliberately does not close: a half-finished passkey or emailed-code step would be lost.
+  return ReactDOM.createPortal((
+    <div className="modal-backdrop" style={{zIndex:95}}>
+      <div className="modal" role="dialog" aria-label="Sign-in security" style={{position:"relative", maxWidth:520, maxHeight:"85vh", overflowY:"auto"}}>
+        <button className="close-x" aria-label="Close" onClick={() => setOpen(false)}>{<Icon name="close"/>}</button>
+        {error && <p role="alert" style={{color:"var(--danger, #EF4444)", fontSize:12.5}}>{error}</p>}
+        {ready ? <SecurityPanel client={client} onClose={() => setOpen(false)} onAuthFailure={onAuthFailure} />
+               : !error && <p role="status">Loading…</p>}
+      </div>
+    </div>
+  ), document.body);
+}
+
 function WorkspacePopover({onClose, anchorRef, packaged, statusInfo, anchor}){
   const [data, setData] = useState(null);   // {active, workspaces:[...]}
   const [err, setErr] = useState(null);
@@ -2018,6 +2111,7 @@ function WorkspacePopover({onClose, anchorRef, packaged, statusInfo, anchor}){
       <div className="workspace-pop-divider" />
       <TrackerCreationActions layout="popover" packaged={packaged} onError={setErr}
         existingWorkspaces={data ? data.workspaces : null} onSwitchWorkspace={doSwitch} />
+      <GatewayAccountMenu onClose={onClose} />
       {confirmDelete && (() => {
         const isLinked = confirmDelete.kind === "linked";
         return (
@@ -2091,6 +2185,11 @@ function Rail({page, setPage, attentionCount, emailCount, onOpenPalette, onOpenS
         <button title={expanded ? undefined : "Settings"} aria-label="Settings" className="rail-btn" onClick={onOpenSettings}>
           {NAV_ICONS.settings}{expanded && <span className="rail-btn-label">Settings</span>}
         </button>
+        {isGateway() && (
+          <button title={expanded ? undefined : "Sign out"} aria-label="Sign out" className="rail-btn" onClick={gatewaySignOut}>
+            <Icon name="signout" size={17}/>{expanded && <span className="rail-btn-label">Sign out</span>}
+          </button>
+        )}
         <button title={expanded ? "Collapse sidebar" : "Expand sidebar"} aria-label={expanded ? "Collapse sidebar" : "Expand sidebar"} className="rail-btn rail-collapse-btn" onClick={toggleExpanded}>
           {expanded ? "\u00AB" : "\u00BB"}{expanded && <span className="rail-btn-label">Collapse</span>}
         </button>
@@ -4548,6 +4647,12 @@ function SettingsModal({onClose, onRebuild, status, themePref, themeApplied, set
         <p style={{color:"var(--text-mute)", fontSize:11, marginTop:6}}>
           System follows your OS's light/dark setting automatically (currently {themeApplied}).
         </p>
+
+        {isGateway() && <>
+          <div className="section-label">Security</div>
+          <p style={{color:"var(--text-soft)", fontSize:12.5, lineHeight:1.5}}>Manage multi-factor authentication and passkeys.</p>
+          <button className="btn" style={{marginTop:8}} onClick={() => { onClose(); openGatewaySecurity(); }}>Manage sign-in security</button>
+        </>}
 
         <div className="section-label">Index</div>
         <p style={{color:"var(--text-soft)", fontSize:12.5, lineHeight:1.5}}>
@@ -7065,6 +7170,7 @@ function App(){
           {page === "manage" && <ManagePage onRefreshApps={refreshApps} meta={meta} onCategoriesChanged={() => setDocsVersion(v => v + 1)} />}
         </div>
       </div>
+      <GatewayAccountHost />
       {settingsOpen && (
         <SettingsModal status={statusInfo} onClose={() => setSettingsOpen(false)} onRebuild={doRebuild}
           themePref={theme.pref} themeApplied={theme.applied} setTheme={theme.setTheme}

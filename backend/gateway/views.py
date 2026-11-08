@@ -43,8 +43,10 @@ _LOGIN_SNIPPET = """<script>window.JTH_DJANGO = true;
   new MutationObserver(check).observe(document.documentElement, {childList:true, subtree:true, characterData:true});
 })();</script>"""
 
-# Shown to fully signed-in people: the original app, plus session-expiry handling and Sign out.
-_APP_SNIPPET = """<script>
+# Shown to fully signed-in people: the original app, plus session-expiry handling. JTH_GATEWAY
+# tells the app it is served by the gateway, so it shows the account controls (signed-in email,
+# Security, Sign out) in its own tracker menu, rail and Settings.
+_APP_SNIPPET = """<script>window.JTH_GATEWAY = true;
 (function(){
   var f = window.fetch;
   window.fetch = function(){
@@ -53,18 +55,6 @@ _APP_SNIPPET = """<script>
       return r;
     });
   };
-  window.addEventListener("DOMContentLoaded", function(){
-    var b = document.createElement("button");
-    b.textContent = "Sign out";
-    b.setAttribute("aria-label", "Sign out of JobTracker Hub");
-    b.style.cssText = "position:fixed;right:12px;bottom:12px;z-index:2147483000;opacity:.65;font:12px system-ui;padding:4px 10px;border-radius:6px;border:1px solid #888;background:#222;color:#eee;cursor:pointer";
-    b.onclick = function(){
-      f("/api/auth/csrf", {credentials:"same-origin"}).then(function(r){ return r.json(); })
-        .then(function(j){ return f("/api/auth/logout", {method:"POST", credentials:"same-origin", headers:{"X-CSRFToken": j.csrfToken}}); })
-        .then(function(){ location.reload(); }, function(){ location.reload(); });
-    };
-    document.body.appendChild(b);
-  });
 })();</script>"""
 
 
