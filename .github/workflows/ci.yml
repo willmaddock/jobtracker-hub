@@ -31,6 +31,39 @@ jobs:
         env:
           JTH_GATEWAY: "true"
 
+  deploy-check:
+    name: Deploy check (prod settings)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      DJANGO_SETTINGS_MODULE: config.settings.prod
+      DJANGO_SECRET_KEY: ci-only-secret-key-not-used-anywhere-else-0123456789abcdef
+      DJANGO_ALLOWED_HOSTS: ci.example.com
+      DJANGO_DB_NAME: ci
+      DJANGO_DB_USER: ci
+      DJANGO_DB_PASSWORD: ci
+      DJANGO_DB_HOST: localhost
+      DJANGO_DB_PORT: "5432"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - run: pip install -r requirements.txt "psycopg[binary]==3.3.6"
+      # prod.py needs four distinct Fernet keys. These are throwaway values made for this run.
+      # Fails on errors only: security.W004 (HSTS) is deliberately deferred in prod.py.
+      - name: manage.py check --deploy
+        run: |
+          for name in GMAIL_TOKEN MICROSOFT_TOKEN IMAP_TOKEN MFA; do
+            key=$(python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
+            echo "${name}_ENCRYPTION_KEY=${key}" >> "$GITHUB_ENV"
+          done
+          python manage.py check --deploy
+
   lint:
     name: Lint (ruff)
     runs-on: ubuntu-latest
