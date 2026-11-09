@@ -4,12 +4,15 @@ Local development settings. Run with:
 (manage.py already defaults to this module — see manage.py)
 """
 import os
+import sys
 from pathlib import Path
 from dotenv import load_dotenv
 
 # Development only, before base reads environment-backed values. Never overwrite
 # values supplied by the process. Production must start in a fresh process.
-load_dotenv(Path(__file__).resolve().parent.parent.parent / '.env', override=False)
+# Skipped under `manage.py test`, so a local .env cannot change test results.
+if sys.argv[1:2] != ['test']:
+    load_dotenv(Path(__file__).resolve().parent.parent.parent / '.env', override=False)
 
 from .base import *  # noqa: E402,F401,F403
 

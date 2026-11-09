@@ -110,7 +110,8 @@ for real deployments.
 
 ```bash
 cd backend
-python manage.py test accounts applications core documents email_sync gateway postings web
+python manage.py test accounts applications core documents email_sync postings web
+JTH_GATEWAY=true python manage.py test gateway
 ```
 
 Name the apps rather than running a bare `manage.py test`: `config/settings/test_postgres.py` is a
@@ -118,8 +119,20 @@ harness-only module (see `tests/backend/`) that fails to import during plain tes
 Some tests intentionally feed bad PDFs or trigger a 500, so lines like `invalid pdf header` or
 `Internal Server Error` in the output are expected.
 
-Gateway tests that exercise the `/` route depend on `JTH_GATEWAY`; if one fails, try
-`JTH_GATEWAY=true python manage.py test gateway`.
+`manage.py test` ignores `backend/.env`, so a `.env` copied from `.env.example` (which turns on
+gateway mode, MFA and email sign-in) cannot change the results. Only the gateway tests need the
+flag, and values set in the shell are still honoured.
+
+## Checks before you commit
+
+```bash
+pip install -r requirements-dev.txt
+ruff check .          # lint (config in ruff.toml)
+pre-commit install    # optional: runs the same checks on every commit
+```
+
+GitHub Actions (`.github/workflows/ci.yml`) runs the Django tests on every push. The lint and
+legacy-app test jobs are informational for now. Styling rules are in `docs/CSS_NOTES.md`.
 
 ## Notes
 
