@@ -178,6 +178,17 @@ def _build_error_handler(request: Request, exc: BuildError):
     return JSONResponse(status_code=400, content={"detail": str(exc)})
 
 
+@app.exception_handler(ws.WorkspaceError)
+def _no_workspace(request: Request, exc: ws.WorkspaceError):
+    """A brand-new account has no tracker yet, so any route that reaches
+    _active() (via get_conns()/current_db_path()) raised WorkspaceError and
+    came back as a bare 500 (seen on GET /api/discoveries, .../documents and
+    .../dossier right after first sign-in). Routes that already catch it
+    themselves are unaffected; this covers the rest with the same 409
+    get_conns() uses for "nothing built yet"."""
+    return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+
 # Registered once here so every route that calls into domain/identity.py or
 # infrastructure/paths.py keeps returning the exact same status codes and
 # messages it always did, without a try/except at each call site. See
