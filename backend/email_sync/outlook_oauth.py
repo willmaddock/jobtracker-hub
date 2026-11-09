@@ -57,7 +57,7 @@ from django.conf import settings
 
 from .models import EmailAccount, OutlookCredential
 from .outlook_provider import OutlookProvider
-from .providers import ProviderAuthError, ProviderError, register_provider
+from .providers import ProviderAuthError, register_provider
 
 _AUTHORITY = "https://login.microsoftonline.com/common/oauth2/v2.0"
 _AUTH_URI = f"{_AUTHORITY}/authorize"

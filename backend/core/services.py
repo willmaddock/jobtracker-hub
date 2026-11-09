@@ -36,7 +36,6 @@ request body.
 from __future__ import annotations
 
 import re
-from datetime import date, datetime, timezone as dt_timezone
 
 from django.db.models import Count
 from django.utils import timezone as dj_timezone
@@ -44,7 +43,6 @@ from django.utils import timezone as dj_timezone
 from applications.models import Application, CompanyAlias
 from applications.derivation import calendar_day, effective_date
 from zoneinfo import ZoneInfo
-from documents.models import Document
 
 STATUS_ORDER = ["drafted", "applied", "interviewing", "rejected", "unknown"]
 

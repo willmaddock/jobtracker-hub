@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 from django.db import router, transaction
 from django.db.models import Count, Min, Max, Q
-from rest_framework.exceptions import APIException, NotFound
+from rest_framework.exceptions import APIException
 
 from applications.creation import lock_workspace
 from applications.message_relationships import require_eligible_source

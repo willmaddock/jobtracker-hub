@@ -21,7 +21,7 @@ from rest_framework.response import Response
 from accounts.models import Workspace
 from core.models import ApplicationRequestIntent
 from postings.models import JobPosting, PostingApplicationConversion
-from .models import Application, Override, StatusHistory
+from .models import Application, Override, StatusHistory  # noqa: F401 (tests patch creation.StatusHistory)
 from .serializers import ApplicationSerializer
 from documents.models import Category, CategoryMembership
 from core.lifecycle import lifecycle_data, require_live

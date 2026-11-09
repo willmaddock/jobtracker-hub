@@ -41,9 +41,9 @@ def _shell(request, workspace, active, attention_count=0):
     return {
         "workspace": workspace,
         "workspaces": request.user.workspaces.all(),
-        "nav": [{"key": k, "label": l, "icon": i, "ready": r, "active": k == active,
+        "nav": [{"key": k, "label": lab, "icon": i, "ready": r, "active": k == active,
                  "badge": attention_count if k == "attention" and attention_count else None}
-                for k, l, i, r in NAV],
+                for k, lab, i, r in NAV],
         "year": timezone.now().year,
     }
 
