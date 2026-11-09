@@ -4679,7 +4679,8 @@ function SettingsModal({onClose, onRebuild, status, themePref, themeApplied, set
           <Icon name="mail" size={13} style={{marginRight:5, verticalAlign:"-2px"}}/> Open Email Sync
         </button>
 
-        <DiagnosticsSection />
+        {/* The gateway refuses /api/diagnostics (it exposes server paths and logs), so don't offer it there. */}
+        {!isGateway() && <DiagnosticsSection />}
 
         <div className="modal-foot">
           <button className="btn" onClick={onClose}>Close</button>
