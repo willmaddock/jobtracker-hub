@@ -15,6 +15,9 @@ x-app: &app
   environment:
     DJANGO_SETTINGS_MODULE: config.settings.prod
     DJANGO_ALLOWED_HOSTS: localhost
+    JTH_GATEWAY: "true"       # after sign-in, serve the original app (docs/GATEWAY.md)
+    JTH_DATA_DIR: /data
+    JTH_MAX_UPLOAD_MB: "1024"
     DJANGO_BEHIND_TLS_PROXY: "true"
     WEBAUTHN_RP_ID: localhost
     WEBAUTHN_ORIGIN: https://localhost:8443
@@ -105,6 +108,7 @@ services:
       migrate: {condition: service_completed_successfully}
       minio-init: {condition: service_completed_successfully}
     expose: ["8000"]
+    volumes: [jthdata:/data]
 
   worker:
     <<: *app
@@ -127,5 +131,6 @@ services:
     depends_on: [web]
 
 volumes:
+  jthdata:
   pgdata:
   caddydata:

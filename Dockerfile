@@ -26,6 +26,9 @@ COPY _app _app
 # Runs as root so the output exists before dropping to the unprivileged user.
 RUN cd backend && DJANGO_SETTINGS_MODULE=config.settings.dev python manage.py collectstatic --noinput
 
+# Gateway mode keeps each user's private data here; a volume mounted on it inherits this ownership.
+RUN mkdir -p /data && chown app:app /data
+
 USER app
 WORKDIR /app/backend
 ENV DJANGO_SETTINGS_MODULE=config.settings.prod
