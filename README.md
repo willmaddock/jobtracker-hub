@@ -8,7 +8,7 @@ with MFA (authenticator app, recovery codes, optional passkeys). The UI is the s
 backend/      Django project (plus `gateway/`, the sign-in-then-original-app layer) (accounts + MFA, applications, documents, postings, email_sync)
 _app/frontend The React single-page UI, served by backend/core/frontend.py
 Dockerfile    Image for web / Celery worker / Celery beat
-docker-compose.yml   Production-like stack: Postgres, Redis, S3 mock, mail catcher, TLS proxy
+docker-compose.local.yml   Production-like stack: Postgres, Redis, S3 mock, mail catcher, TLS proxy
 deploy/       env.example (production variables) and local helper files
 docs/         MFA design, deployment notes, accepted decisions
 ```
