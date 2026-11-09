@@ -3,3 +3,5 @@
 #   pytest
 pytest>=8.0
 httpx>=0.27  # required by fastapi.testclient.TestClient
+ruff>=0.8  # lint: ruff check .
+pre-commit>=4.0  # optional: pre-commit install

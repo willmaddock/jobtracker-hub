@@ -1,6 +1,7 @@
 # Django migration: current status
 
-Maintained checkpoint: 2026-10-07. Authoritative branch: `django-migration`;
+Maintained checkpoint: 2026-10-07. Current working branch: `feature/gateway`, which contains
+`django-migration` (the checkpoint below was recorded on `django-migration`);
 current implementation checkpoint `dbaa85926e35466dd6be7b8e02ff625828bc73f0`
 (`Implement retained review source text inspection browser workflow`). Its parent documentation
 checkpoint is `58f3d7ee51f0781f4f27b55de6445934cb29c8b8`

@@ -1806,6 +1806,8 @@ function ConfirmModal({title, message, confirmLabel, danger, onConfirm, onCancel
    the single GatewayAccountHost mounted in App owns the Security modal. */
 const GATEWAY_OPEN_SECURITY = "jth-open-security";
 const isGateway = () => window.JTH_GATEWAY === true;
+// Server folder paths reveal the host's layout and other users' ids, so gateway mode never shows them.
+const shownPath = (p) => (isGateway() ? "" : p);
 function openGatewaySecurity(){ window.dispatchEvent(new Event(GATEWAY_OPEN_SECURITY)); }
 async function gatewaySignOut(){
   try {
@@ -2046,7 +2048,7 @@ function WorkspacePopover({onClose, anchorRef, packaged, statusInfo, anchor}){
         const hasOverrides = statusInfo.workspace.has_portable_overrides;
         const docCount = statusInfo.doc_count || 0;
         return (
-          <div className="workspace-status-card" title={statusInfo.root}>
+          <div className="workspace-status-card" title={shownPath(statusInfo.root)}>
             <div className="workspace-status-row">
               <span className="workspace-status-badge">
                 {kind === "linked" ? "LINKED FOLDER" : "JOBTRACKER-OWNED COPY"}
@@ -2058,7 +2060,7 @@ function WorkspacePopover({onClose, anchorRef, packaged, statusInfo, anchor}){
                 {hasOverrides ? <><Icon name="check" size={11} style={{marginRight:4, verticalAlign:"-1px"}}/>Notes stored with tracker</> : "Notes not saved yet"}
               </span>
             </div>
-            <div className="workspace-status-path">{statusInfo.root}</div>
+            {!isGateway() && <div className="workspace-status-path">{statusInfo.root}</div>}
           </div>
         );
       })()}
@@ -2076,7 +2078,7 @@ function WorkspacePopover({onClose, anchorRef, packaged, statusInfo, anchor}){
           ) : (
             <button
               className="workspace-row-main" disabled={busyId === w.id}
-              onClick={() => doSwitch(w.id)} title={w.root}
+              onClick={() => doSwitch(w.id)} title={shownPath(w.root)}
             >
               <span className="workspace-check">{w.id === data.active ? <Icon name="check" size={12}/> : ""}</span>
               <span className="workspace-name">{w.name}</span>
@@ -4662,7 +4664,7 @@ function SettingsModal({onClose, onRebuild, status, themePref, themeApplied, set
         </p>
         {status && (
           <p style={{color:"var(--text-mute)", fontSize:11.5, marginTop:12}}>
-            Root: <code>{status.root}</code><br/>
+            {!isGateway() && <>Root: <code>{status.root}</code><br/></>}
             Index: jobtracker.db {status.index_built ? `\u2022 ${status.doc_count} documents` : "\u2022 not built yet"}<br/>
             Overrides: overrides.db (never touched by rebuild)
           </p>
@@ -7087,7 +7089,7 @@ function App(){
   if (connError) return <ConnectionError />;
   if (!statusInfo) return <div className="center-screen"><div style={{color:"var(--text-soft)"}}>Loading…</div></div>;
   if (!statusInfo.workspace) return <NoTrackerOnboarding packaged={statusInfo.packaged} />;
-  if (!statusInfo.index_built) return <Onboarding root={statusInfo.root} onRebuild={doRebuild} statusInfo={statusInfo} packaged={!!(statusInfo && statusInfo.packaged)} />;
+  if (!statusInfo.index_built) return <Onboarding root={shownPath(statusInfo.root)} onRebuild={doRebuild} statusInfo={statusInfo} packaged={!!(statusInfo && statusInfo.packaged)} />;
 
   const attentionCount = apps.filter(a => !a.archived && !a.is_snoozed && (a.is_stale || a.next_action_due)).length;
 

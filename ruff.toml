@@ -1,0 +1,22 @@
+# Lint only (no auto-format yet): reformatting the whole repo would bury real changes.
+# Run:  ruff check .
+target-version = "py312"
+extend-exclude = ["_app/frontend", "sample-tracker", "desktop", "**/migrations"]
+
+[lint]
+# E4/E7/E9 = import, statement and syntax errors; F = pyflakes (unused names, undefined names).
+select = ["E4", "E7", "E9", "F"]
+# E731 (assigned lambdas) is a style choice used on purpose in a few services.
+ignore = ["E731"]
+
+[lint.per-file-ignores]
+# Settings modules use `from .base import *` on purpose.
+"backend/config/settings/*.py" = ["F403", "F405"]
+# Test code: one-line statements, late imports and unused fixture variables are tolerated.
+"**/tests/**" = ["E402", "E701", "E702", "F401", "F841"]
+"**/test_*.py" = ["E402", "E701", "E702", "F401", "F841"]
+"**/tests*.py" = ["E402", "E701", "E702", "F401", "F841"]
+"tests/**" = ["E402", "E701", "E702", "F401", "F841"]
+# Imports placed after the definitions they depend on, on purpose.
+"backend/email_sync/admin.py" = ["E402"]
+"backend/email_sync/urls.py" = ["E402"]
