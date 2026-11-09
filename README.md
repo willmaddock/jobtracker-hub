@@ -131,8 +131,9 @@ ruff check .          # lint (config in ruff.toml)
 pre-commit install    # optional: runs the same checks on every commit
 ```
 
-GitHub Actions (`.github/workflows/ci.yml`) runs the Django tests on every push. The lint and
-legacy-app test jobs are informational for now. Styling rules are in `docs/CSS_NOTES.md`.
+GitHub Actions (`.github/workflows/ci.yml`) runs the Django tests on every push. The lint
+job fails the build on any ruff finding; the legacy-app test job is informational for now.
+Styling rules are in `docs/CSS_NOTES.md`.
 
 ## Notes
 
