@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Written | 2026-11-08, against `feature/gateway` at `17dcef6` |
+| Written | 2026-11-08, against `feature/gateway` at `17dcef6`. Corrected the same day at `9c08122`: compose filename fixed, `django-migration` compared, templates route added (see below) |
 | Purpose | Record where the branch stands, the paths forward, and what is and is not verified, so a later audit can see why a path was chosen |
 | Method | Static reading of the repository, plus AWS and Django documentation fetched on the date above |
 | Not done | The Docker image was not built, nothing was deployed, and no AWS service was contacted. Every statement tagged **[read]** comes from reading files; **[src]** from a cited document; **[inferred]** is reasoning that has not been tested |
@@ -27,9 +27,11 @@ Two different designs currently live in one repository. They do not fit together
 2. **Likely write failure in the container.** `JTH_DATA_DIR` defaults to `<repo>/jth-data`, i.e. `/app/jth-data`, while the image runs as the non-root `app` user and `/app` is created by root. [inferred; not tested]
 3. **S3 does not cover gateway data.** The S3 settings apply to Django's own file storage. Gateway users' documents are written by the private process to local disk. [read]
 4. **More than one container cannot share users.** Each private process listens on that container's own `127.0.0.1`, and the port is recorded in a shared file. A second container reading that file would connect to its own loopback. [inferred]
-5. **Stale docs.** `README.md` and `docs/DEPLOYMENT.md` name `docker-compose.yml`; the file in the repo is `docker-compose.local.yml`. [read]
+5. **Stale docs (fixed).** `README.md` and `docs/DEPLOYMENT.md` named `docker-compose.yml`; the file in the repo is `docker-compose.local.yml`. Corrected in `9c08122`. [read]
 6. **Sign-up policy differs.** `DEPLOYMENT.md` assumes administrator-created accounts and no signup; the local compose file turns on `EMAIL_SIGNUP_OPEN` so an unknown address creates an account. [read]
-7. **Other branches ride along.** `feature/gateway` sits on top of `feature/django-templates-app` and `feature/email-signin-theme`; merging it brings their commits to `main`. The long-running `django-migration` branch described in the status docs has not been compared with this branch. [read: `git log main..feature/gateway`]
+7. **Other branches ride along.** `feature/gateway` sits on top of `feature/django-templates-app` and `feature/email-signin-theme`; merging it brings their commits to `main`. [read: `git log main..feature/gateway`]
+   The `django-migration` branch was compared on 2026-11-08 by file content (the zips carry no Git history): the four domain apps (`applications`, `documents`, `postings`, `email_sync`) and `docs/DJANGO_MIGRATION_STATUS.md` are identical, nothing appears only on `django-migration`, and the differences are additions on `feature/gateway` (sign-in, MFA, passkeys, gateway, web templates, Docker files). So `feature/gateway` contains it. Strong evidence, not proof: the 25 lines replaced in `_app/frontend/index.html` were not checked one by one. The status document still names `django-migration` as the authoritative branch and should be updated. [read]
+8. **A templates route is already approved.** `docs/DJANGO_TEMPLATES_PLAN.md` (approved 2026-11-07) builds a normal Django app with server-rendered templates instead of porting the React page, and starts fresh on the hosted instance. It departs from Decisions 2 and 8. See Option 5. [read]
 
 ## 2. External facts used (fetched 2026-11-08)
 
@@ -57,13 +59,19 @@ Two different designs currently live in one repository. They do not fit together
 ### Option 3: finish the Django migration (Design B)
 - **Shape:** the stateless container in `docs/DEPLOYMENT.md`: web, Celery worker, Celery beat, RDS, Redis, S3 behind an ALB. Express Mode is AWS's current simple path to run the container.
 - **Work needed:** the application features still have to be ported from the FastAPI app into Django (the migration docs track this slice by slice); build and test the image; staging; the open Status §10 gates (backup/restore, cutover, rollback, scale).
-- **Good for:** a real multi-user hosted product. It is the largest option and not near done.
+- **Good for:** a real multi-user hosted product. It is the largest option and not near done. Option 5 is the approved way of doing the front-end part.
 
 ### Option 4: stay local or desktop
 - Gateway mode already works on one computer, with `JTH_ALLOW_LOCAL_LINK=true` to link an existing folder in place. No hosting work.
 
+### Option 5: the templates route (approved 2026-11-07)
+- **Shape:** Option 3's hosting design, but the screens are rebuilt as Django templates, forms and views (little JavaScript, e.g. htmx), reusing the existing models, sign-in, MFA, workspace checks and tests. Start fresh on the hosted instance, no importer. Branch `feature/django-templates-app`; `backend/web/` already has a base layout, a stylesheet and a read-only Pipeline page. [read: `docs/DJANGO_TEMPLATES_PLAN.md`]
+- **Changes earlier rules:** Decisions 2 (preserve the UI) and 8 (central API client), the per-checkpoint status updates and the per-slice authorisation. The plan asks the owner to confirm each row; that has not been done.
+- **Good for:** a hosted product built screen by screen without a final big cutover.
+- **Not covered here:** provider email sync is out of scope in the plan for now.
+
 ## 4. Recommendation (not a decision)
-Option 1 if something needs to be online soon; treat Option 3 as the longer-term replacement. Skip Option 2 and App Runner. Decision owner: **William Maddock**. Record the decision in §6.
+Option 1 if something needs to be online soon. For the longer-term hosted product, Option 5 (the approved templates route) rather than a slice-by-slice port, with Option 3's hosting design underneath. Skip Option 2 and App Runner. If the project is only for a job search and portfolio, none of the migration options is needed: run locally and host a sample-data demo. Decision owner: **William Maddock**. Record the decision in §6.
 
 ## 5. Checklist before any real user
 - [ ] `manage.py check --deploy` against the production settings, output saved
@@ -75,8 +83,9 @@ Option 1 if something needs to be online soon; treat Option 3 as the longer-term
 - [ ] Backups and a restore test of the data disk or database
 - [ ] `jth_stop_backends` scheduled
 - [ ] Diagnostics row and other blocked endpoints confirmed hidden in a browser (the hide-diagnostics change is not browser-tested)
-- [ ] `README.md` and `docs/DEPLOYMENT.md` compose filename corrected; README clone line fixed at merge
-- [ ] `feature/gateway` reconciled with `main` and with `django-migration` before merge
+- [x] `README.md` and `docs/DEPLOYMENT.md` compose filename corrected (`9c08122`)
+- [ ] README clone line (`-b feature/gateway`) fixed at merge
+- [ ] `feature/gateway` reconciled with `main` before merge (`git log --oneline feature/gateway..main`); status document updated to name the branch of record
 
 ## 6. Decision log (to complete)
 | Date | Decision | Decided by | Notes |
@@ -88,5 +97,5 @@ Option 1 if something needs to be online soon; treat Option 3 as the longer-term
 ## 7. Open questions
 - Who will use the hosted copy, and how many at once?
 - Should user documents ever be on S3 in gateway mode? That needs code changes to the private app, not just settings.
-- Does the `django-migration` branch supersede gateway mode?
+- Do you confirm the templates plan's changes to Decisions 2 and 8 (and the process rules)?
 - What are the data-protection duties for hosting other people's job-search documents?
