@@ -18,3 +18,17 @@ class FrontendEntryTests(SimpleTestCase):
             response.close()
         self.assertEqual(self.client.get("/api.py").status_code, 404)
         self.assertEqual(self.client.get("/../api.py").status_code, 404)
+
+    def test_security_panel_can_set_up_the_authenticator_app(self):
+        """Passkeys and emailed codes need an authenticator app, so the Security dialog must offer to
+        set one up (users who sign in by emailed code are never prompted at login)."""
+        html = (FRONTEND / "index.html").read_text()
+        panel = html[html.index("function SecurityPanel("):html.index("function CodeBoxes(")]
+        self.assertIn("/api/auth/mfa/status", panel)
+        self.assertIn("/api/auth/mfa/enroll/begin", panel)
+        self.assertIn("/api/auth/mfa/enroll/confirm", panel)
+        self.assertIn("Set up authenticator app", panel)
+        self.assertNotIn("is not available from this screen yet", panel)
+        # "Two-step verification is on" is only shown for an enrolled account, never unconditionally.
+        self.assertEqual(panel.count("Two-step verification is on"), 1)
+        self.assertIn("enrolled ? <p>Two-step verification is on", panel)

@@ -8435,6 +8435,7 @@ async function createPasskey(opts) {
 
 function SecurityPanel({client, onClose, onAuthFailure}) {
   const [info, setInfo] = useState(null);
+  const [enrolled, setEnrolled] = useState(null);  // null = still loading; passkeys and emailed codes need an authenticator app
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -8442,6 +8443,11 @@ function SecurityPanel({client, onClose, onAuthFailure}) {
     try { setInfo(await client.request("/api/account/passkeys/")); } catch (e) { onAuthFailure(e); }
   }
   useEffect(() => { load(); }, []);
+  useEffect(() => {
+    (async () => {
+      try { setEnrolled(!!(await client.request("/api/auth/mfa/status")).enrolled); } catch (e) { onAuthFailure(e); }
+    })();
+  }, []);
   async function add(event) {
     event.preventDefault(); setBusy(true); setMessage("");
     try {
@@ -8453,7 +8459,7 @@ function SecurityPanel({client, onClose, onAuthFailure}) {
       if (e && e.name === "NotAllowedError") setMessage("Passkey setup was cancelled.");
       else if (e && e.name === "InvalidStateError") setMessage("This device already has a passkey for this account.");
       else if (e && e.code === "passkey_limit_reached") setMessage(e.message);
-      else if (e && e.code === "mfa_not_enrolled") setMessage("Passkeys are added on top of an authenticator app, and setting one up is not available from this screen yet.");
+      else if (e && e.code === "mfa_not_enrolled") setMessage("Set up an authenticator app first, using the section above.");
       else if (e && (e.code === "passkey_invalid" || e.code === "passkey_challenge_invalid")) setMessage("That passkey could not be added. Try again.");
       else onAuthFailure(e);
     } finally { setBusy(false); }
@@ -8465,9 +8471,10 @@ function SecurityPanel({client, onClose, onAuthFailure}) {
   }
   return <section aria-label="Security">
     <h2>Security</h2>
-    <p>Two-step verification is on. Recovery codes and your authenticator app always work as a backup.</p>
+    <AuthenticatorSettings client={client} onAuthFailure={onAuthFailure} enrolled={enrolled} onEnrolled={() => setEnrolled(true)} />
     {message && <p role="status">{message}</p>}
-    {!info ? <p role="status">Loading…</p> : !info.available ? <p>Passkeys are not available on this server.</p> : <>
+    {!info || enrolled === null ? <p role="status">Loading…</p> : !info.available ? <p>Passkeys are not available on this server.</p>
+    : !enrolled ? <><h3>Passkeys</h3><p>Passkeys are added on top of an authenticator app. Set one up above first.</p></> : <>
       <h3>Passkeys</h3>
       {info.passkeys.length === 0 ? <p>No passkeys yet.</p> : <ul>{info.passkeys.map(p =>
         <li key={p.id}>{p.name}{p.last_used_at ? " (last used " + new Date(p.last_used_at).toLocaleDateString() + ")" : " (not used yet)"}{" "}
@@ -8477,12 +8484,71 @@ function SecurityPanel({client, onClose, onAuthFailure}) {
         <button className="btn" disabled={busy}>Add a passkey (Face ID / Touch ID)</button>
       </form> : <p>This browser does not support passkeys.</p>}
     </>}
-    <EmailCodeSettings client={client} onAuthFailure={onAuthFailure} />
+    <EmailCodeSettings client={client} onAuthFailure={onAuthFailure} enrolled={enrolled} />
     <button className="btn" onClick={onClose}>Close</button>
   </section>;
 }
 
-function EmailCodeSettings({client, onAuthFailure}) {
+function AuthenticatorSettings({client, onAuthFailure, enrolled, onEnrolled}) {
+  const [setup, setSetup] = useState(null);       // {secret, uri, qr} while an enrolment is in progress
+  const [code, setCode] = useState("");
+  const [recovery, setRecovery] = useState([]);    // shown once, right after confirming
+  const [saved, setSaved] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  async function begin() {
+    setBusy(true); setMessage("");
+    try {
+      const r = await client.request("/api/auth/mfa/enroll/begin", {method:"POST"});
+      setSetup({secret: r.secret, uri: r.otpauth_uri, qr: r.qr_svg || ""}); setCode("");
+    } catch (e) {
+      if (e && e.code === "mfa_already_enrolled") onEnrolled(); else onAuthFailure(e);
+    } finally { setBusy(false); }
+  }
+  async function confirm(event) {
+    event.preventDefault(); setBusy(true); setMessage("");
+    try {
+      const done = await client.request("/api/auth/mfa/enroll/confirm", {method:"POST", body:{code}});
+      setRecovery(done.recovery_codes || []); setSaved(false); setSetup(null); setCode("");
+    } catch (e) {
+      if (e && e.code === "mfa_invalid_code") setMessage("That code is not valid. Wait for the next code in your app and try again.");
+      else if (e && e.code === "mfa_not_started") { setSetup(null); setMessage("That setup expired. Start again."); }
+      else if (e && e.code === "mfa_already_enrolled") onEnrolled();
+      else onAuthFailure(e);
+    } finally { setBusy(false); }
+  }
+  if (recovery.length) return <section aria-label="Recovery codes">
+    <h3>Save your recovery codes</h3>
+    <p>Each code works once if you lose your authenticator. They are shown only now. Store them somewhere safe, such as a password manager.</p>
+    <ul style={{columns:2,fontFamily:"monospace",userSelect:"all"}}>{recovery.map(c => <li key={c}>{c}</li>)}</ul>
+    <button className="btn" type="button" onClick={() => { try { navigator.clipboard.writeText(recovery.join("\n")); } catch (_) {} }}>Copy codes</button>
+    <label><input type="checkbox" checked={saved} onChange={e=>setSaved(e.target.checked)} /> I have saved these codes</label>
+    <button className="btn" disabled={!saved} onClick={() => { setRecovery([]); onEnrolled(); }}>Continue</button>
+  </section>;
+  return <section aria-label="Authenticator app">
+    <h3>Authenticator app</h3>
+    {message && <p role="status">{message}</p>}
+    {enrolled === null ? <p role="status">Loading…</p>
+    : enrolled ? <p>Two-step verification is on. Recovery codes and your authenticator app always work as a backup.</p>
+    : setup ? <form onSubmit={confirm}>
+        <p>Add this account to an authenticator app (Google Authenticator, 1Password, Apple Passwords or similar), then enter the 6-digit code it shows.</p>
+        {setup.qr && <><p>On another device, scan this:</p>
+          <img alt="Setup QR code" width="200" height="200" style={{background:"#fff",borderRadius:8}} src={"data:image/svg+xml;utf8," + encodeURIComponent(setup.qr)} /></>}
+        <p>On this device: <a href={setup.uri}>Open in authenticator app</a></p>
+        <p>Or enter this setup key manually:</p>
+        <p><code style={{wordBreak:"break-all",userSelect:"all"}}>{setup.secret.replace(/(.{4})/g, "$1 ").trim()}</code></p>
+        <label>6-digit code<input className="workspace-rename-input" style={{display:"block",width:"100%"}} autoComplete="one-time-code" inputMode="numeric" autoFocus required maxLength={8} value={code} onChange={e=>setCode(e.target.value)} /></label>
+        <button className="btn" disabled={busy || !code.trim()}>Confirm</button>
+        <button type="button" className="btn" disabled={busy} onClick={() => { setSetup(null); setCode(""); setMessage(""); }}>Cancel</button>
+      </form>
+    : <>
+        <p>Two-step verification is off. An authenticator app is the base for passkeys and emailed codes, so set it up first.</p>
+        <button className="btn" disabled={busy} onClick={begin}>Set up authenticator app</button>
+      </>}
+  </section>;
+}
+
+function EmailCodeSettings({client, onAuthFailure, enrolled}) {
   const [info, setInfo] = useState(null);
   const [code, setCode] = useState("");
   const [sentTo, setSentTo] = useState("");
@@ -8515,7 +8581,8 @@ function EmailCodeSettings({client, onAuthFailure}) {
     <h3>Emailed codes</h3>
     <p>An optional extra way to sign in. It is less secure than your authenticator app or a passkey: anyone who can read your email and knows your password could sign in.</p>
     {message && <p role="status">{message}</p>}
-    {info.enabled ? <>
+    {enrolled === false ? <p>Emailed codes are added on top of an authenticator app. Set one up above first.</p>
+    : info.enabled ? <>
       <p>On. Codes are sent to {info.address}.</p>
       <button className="btn" disabled={busy} onClick={turnOff}>Turn off emailed codes</button>
     </> : !info.has_email_on_file ? <p>Your account has no email address, so this cannot be turned on. Ask an administrator to add one.</p>
