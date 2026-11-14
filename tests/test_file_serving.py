@@ -41,6 +41,16 @@ def test_txt_is_wrapped_as_html_for_the_inline_viewer(client, linked):
     assert "Dear hiring manager" in resp.text
 
 
+@pytest.mark.parametrize('extension', ['txt', 'md', 'markdown', 'tex'])
+def test_text_previews_escape_active_content(client, linked, extension):
+    filename = 'hostile.' + extension
+    (linked / filename).write_text('<script>parent.__textExecuted=true</script><img src="https://external.invalid">')
+    response = client.get('/api/file', params={'relpath': filename})
+    assert response.status_code == 200
+    assert '<script>' not in response.text and '<img ' not in response.text
+    assert '&lt;script&gt;' in response.text
+
+
 def test_missing_file_is_404(client, linked):
     resp = client.get(
         "/api/file",

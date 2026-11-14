@@ -92,5 +92,6 @@ fastapi>=0.115
 uvicorn>=0.30
 python-multipart>=0.0.9
 Send2Trash>=1.8
-mammoth>=1.8
+mammoth>=1.12.2
+nh3==0.3.7
 fpdf2>=2.7

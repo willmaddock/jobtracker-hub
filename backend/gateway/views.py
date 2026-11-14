@@ -175,15 +175,41 @@ def _connect(user, allow_local):
     return be, conn
 
 
+class _UpstreamBody:
+    """Own the socket even when Django closes a response before first iteration."""
+    def __init__(self, response, connection):
+        self.response = response
+        self.connection = connection
+        self.closed = False
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self.closed:
+            raise StopIteration
+        try:
+            chunk = self.response.read(65536)
+        except BaseException:
+            self.close()
+            raise
+        if not chunk:
+            self.close()
+            raise StopIteration
+        return chunk
+
+    def close(self):
+        if self.closed:
+            return
+        self.closed = True
+        try:
+            self.response.close()
+        finally:
+            self.connection.close()
+
+
 def _body_iter(resp, conn):
-    try:
-        while True:
-            chunk = resp.read(65536)
-            if not chunk:
-                break
-            yield chunk
-    finally:
-        conn.close()
+    return _UpstreamBody(resp, conn)
 
 
 @csrf_exempt  # replaced by _same_origin() + session cookies; this view must not parse request.POST

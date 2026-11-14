@@ -92,3 +92,28 @@ test('headers received but never consumed cannot stall authentication forever',a
  const f=fixture(state('anon',null,'anonymous'));f.setProduct(()=>{const next=state('A2');f.setServer(next);return reply({},next);});
  await f.guard.fetch('/api/auth/login',{method:'POST'});[...f.timers.values()].find(x=>x.ms===30000).f();assert.equal(f.guard.ended,true);
 });
+
+test('file accepts caller cancellation before headers without allocating a blob',async()=>{
+ const f=fixture(),controller=new AbortController();let allocated=0;
+ f.env.URL.createObjectURL=()=>{allocated++;return 'blob:unexpected';};
+ f.setProduct((url,o)=>new Promise((resolve,reject)=>o.signal.addEventListener('abort',()=>reject(new DOMException('Canceled','AbortError')))));
+ const task=f.guard.file('/api/file?relpath=slow.pdf',{signal:controller.signal});await tick();controller.abort();
+ // Inspect propagation before awaiting: the old helper ignores the signal.
+ assert.equal(f.calls[0].options.signal.aborted,true);
+ await assert.rejects(task,{name:'AbortError'});assert.equal(allocated,0);assert.equal(f.guard.ended,false);
+});
+test('file canceled during a shared completion check returns promptly without canceling another reader',async()=>{
+ const f=fixture(),controller=new AbortController();let release,allocated=0;
+ f.env.URL.createObjectURL=()=>{allocated++;return 'blob:unexpected';};
+ f.setCheck(()=>new Promise(r=>release=r));
+ const file=f.guard.file('/api/file?relpath=slow.pdf',{signal:controller.signal});
+ const other=json(f);await tick();assert.equal(f.checks(),1);controller.abort();
+ const outcome=await Promise.race([file.then(()=> 'delivered',e=>e.name),tick().then(()=> 'still waiting')]);
+ assert.equal(outcome,'AbortError');assert.equal(allocated,0);
+ release(reply(null,state(),204));assert.deepEqual(await other,{private:'A'});assert.equal(f.guard.ended,false);
+});
+test('canceled safe response with unconsumed body discards its idle deadline',async()=>{
+ const f=fixture(),controller=new AbortController();const response=await f.guard.fetch('/api/file?relpath=a.pdf',{signal:controller.signal});
+ controller.abort();assert.equal([...f.timers.values()].some(x=>x.ms===600000),false);
+ await assert.rejects(response.blob(),{name:'AbortError'});assert.equal(f.guard.ended,false);
+});

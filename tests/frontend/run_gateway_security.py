@@ -27,8 +27,10 @@ class CDP:
   mask=self.exact(4) if h[1]&128 else None;b=self.exact(length)
   if mask:b=bytes(c^mask[i%4] for i,c in enumerate(b))
   return json.loads(b)
- def command(self,method,params=None):
-  self.ident+=1;data=json.dumps({'id':self.ident,'method':method,'params':params or {}}).encode();mask=os.urandom(4)
+ def command(self,method,params=None,session_id=None):
+  self.ident+=1;message={'id':self.ident,'method':method,'params':params or {}}
+  if session_id:message['sessionId']=session_id
+  data=json.dumps(message).encode();mask=os.urandom(4)
   header=bytes([129,128|len(data)]) if len(data)<126 else bytes([129,254])+struct.pack('!H',len(data))
   self.sock.sendall(header+mask+bytes(c^mask[i%4] for i,c in enumerate(data)))
   while True:
@@ -54,7 +56,53 @@ def launch(name):
   time.sleep(.1)
  port=int((profile/'DevToolsActivePort').read_text().splitlines()[0]);target=json.load(urllib.request.urlopen(urllib.request.Request(f'http://127.0.0.1:{port}/json/new?about:blank',method='PUT')))
  c=CDP(target['webSocketDebuggerUrl']);c.command('Page.enable');c.command('Runtime.enable');c.command('Browser.setDownloadBehavior',{'behavior':'allow','downloadPath':str(profile/'downloads'),'eventsEnabled':True})
+ c.port=port
  return c,profile
+
+def click_docx_label(primary, stage):
+ """Real mouse input into an opaque sandbox, located using privileged test tooling.
+
+ No document-supplied script is evaluated. Runtime queries only inspect rendering.
+ """
+ targets=json.load(urllib.request.urlopen(f'http://127.0.0.1:{primary.port}/json/list'))
+ target=next(t for t in targets if t.get('title')=='DOCX_SECURITY_TARGET')
+ viewer=CDP(target['webSocketDebuggerUrl'])
+ try:
+  viewer.command('Page.enable');viewer.command('Runtime.enable')
+  selector='#docx-defense' if stage=='defense' else 'iframe.viewer-frame'
+  frame_rect=viewer.evaluate(f"(()=>{{const f=document.querySelector({json.dumps(selector)});f.scrollIntoView();const r=f.getBoundingClientRect();return {{x:r.x+f.clientLeft,y:r.y+f.clientTop}};}})()")
+  viewer.command('DOM.enable')
+  root_node=viewer.command('DOM.getDocument')['root']['nodeId']
+  node=viewer.command('DOM.querySelector',{'nodeId':root_node,'selector':selector})['nodeId']
+  description=viewer.command('DOM.describeNode',{'nodeId':node})['node']
+  frame=description.get('frameId')
+  session=None
+  # Chrome may put the opaque sandbox in a separate renderer target. Inspect it
+  # through CDP, never by weakening the production sandbox or same-origin policy.
+  targets=viewer.command('Target.getTargets')['targetInfos']
+  remote=next((t for t in targets if t['targetId']==frame and t['type']=='iframe'),None)
+  if remote:
+   session=viewer.command('Target.attachToTarget',{'targetId':remote['targetId'],'flatten':True})['sessionId']
+   viewer.command('Page.enable',session_id=session)
+  world=viewer.command('Page.createIsolatedWorld',{'frameId':frame,'worldName':'docx-test-inspection'},session_id=session)['executionContextId']
+  expression="""(()=>{const walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);let n;while(n=walker.nextNode()){if(n.textContent.includes('Harmless attack label')){const range=document.createRange();range.selectNodeContents(n);const r=range.getBoundingClientRect();const x=r.x+r.width/2,y=r.y+r.height/2;return {x,y,hit:document.elementFromPoint(x,y)?.textContent.includes('Harmless attack label'),image:[...document.images].some(i=>i.complete&&i.naturalWidth>0)};}}return null;})()"""
+  position=None
+  deadline=time.monotonic()+10
+  while time.monotonic()<deadline:
+   result=viewer.command('Runtime.evaluate',{'expression':expression,'contextId':world,'returnByValue':True},session_id=session)
+   position=result['result'].get('value')
+   if position and position['hit'] and (stage=='defense' or position['image']):break
+   time.sleep(.05)
+  assert position and position['hit'],position
+  if stage=='sanitized':assert position['image'],'Embedded PNG did not decode'
+  for kind in ['mousePressed','mouseReleased']:
+   viewer.command('Input.dispatchMouseEvent',{'type':kind,'button':'left','clickCount':1,'x':frame_rect['x']+position['x'],'y':frame_rect['y']+position['y']})
+  # A round trip observes the completed input rather than a fixed sleep.
+  viewer.evaluate('document.readyState')
+  evidence=viewer.command('Runtime.evaluate',{'expression':'({url:location.href,scriptExecuted:!!document.documentElement.dataset.scriptExecuted,linkExecuted:!!document.documentElement.dataset.linkExecuted})','contextId':world,'returnByValue':True},session_id=session)['result']['value']
+  position.update(evidence)
+  primary.evaluate('window.__docxClickDone='+json.dumps(position))
+ finally:viewer.sock.close()
 try:
  server_log=open(D/'server.log','wb')
  server=subprocess.Popen([str(ROOT/'backend/venv/bin/python'),'-B',str(ROOT/'tests/frontend/serve_gateway_security.py')],cwd=ROOT,env={'PATH':'/usr/bin:/bin','PYTHONDONTWRITEBYTECODE':'1'},stdout=server_log,stderr=server_log)
@@ -69,16 +117,26 @@ try:
  separate=isolated.evaluate("""(async()=>{const html=await(await fetch('/')).text();let ctx=JSON.parse(html.match(/window.JTH_GATEWAY_PAGE = (\\{.*?\\});/)[1]).binding;const csrf=(await(await fetch('/api/auth/csrf')).json()).csrfToken;const response=await fetch('/api/auth/login',{method:'POST',headers:{'X-JTH-Context':ctx,'X-CSRFToken':csrf,'Content-Type':'application/json'},body:JSON.stringify({username:'auditB',password:'synthetic-test-password'})});window.isolatedBinding=response.headers.get('X-JTH-Context');return response.status;})()""")
  assert separate==200,separate
  primary,profile=launch('primary');primary.navigate('/__test/gateway-security')
- deadline=time.monotonic()+240
+ deadline=time.monotonic()+300
+ clicked=set()
  while time.monotonic()<deadline:
   if primary.evaluate('document.title')=='AUDIT_DONE':break
+  stage=primary.evaluate('window.__docxStage?.id')
+  if stage and stage not in clicked:
+   click_docx_label(primary,stage);clicked.add(stage)
   time.sleep(.5)
  else:raise RuntimeError('Browser harness deadline')
  results=json.loads(primary.evaluate('document.querySelector("#results").textContent'))
+ results.append({'name':'Real mouse clicks exercised sanitized DOCX and independent sandbox defenses','passed':clicked=={'sanitized','defense'}})
  identity=isolated.evaluate("""fetch('/api/auth/me',{headers:{'X-JTH-Context':window.isolatedBinding}}).then(r=>r.json()).then(x=>x.username)""")
  results.append({'name':'Separate Chrome profile retains B across other profile logout, A B A and MFA transitions','passed':identity=='auditB'})
  downloads=list((profile/'downloads').glob('*.pdf'))
  results.append({'name':'Actual synthetic PDF download saved only in disposable profile directory','passed':len(downloads)==1 and downloads[0].read_bytes().startswith(b'%PDF-1.4')})
+ docx_downloads=list((profile/'downloads').glob('*.docx'))
+ import sys
+ sys.path.insert(0,str(ROOT/'tests'))
+ from test_docx_preview import make_docx
+ results.append({'name':'Explicit DOCX download preserves original file bytes','passed':len(docx_downloads)==1 and docx_downloads[0].read_bytes()==make_docx()})
  (D/'final-browser-results.json').write_text(json.dumps(results,indent=2));print(json.dumps(results,indent=2),flush=True)
  print('TOTAL',len(results),'PASS',sum(x['passed'] for x in results),'FAIL',sum(not x['passed'] for x in results),flush=True)
  if not all(x['passed'] for x in results):raise SystemExit(1)

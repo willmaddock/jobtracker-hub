@@ -27,6 +27,20 @@
       env.localStorage.setItem(EVENT, Date.now() + ':' + Math.random());
     } catch (_) {}
   }
+  function canceled(signal) {
+    if (signal?.aborted) throw new DOMException('Document request canceled.', 'AbortError');
+  }
+  // A canceled reader need not wait for an uncooperative body or a shared
+  // completion check. Its result is discarded; other readers retain their proof.
+  function cancellable(task, signal) {
+    return new Promise((resolve, reject) => {
+      const abort = () => { signal.removeEventListener('abort', abort); reject(new DOMException('Document request canceled.', 'AbortError')); };
+      signal.addEventListener('abort', abort, {once:true});
+      Promise.resolve(task).then(value => { signal.removeEventListener('abort', abort); resolve(value); },
+        error => { signal.removeEventListener('abort', abort); reject(error); });
+      if (signal.aborted) abort();
+    });
+  }
   function create(env, initial) {
     // React portals live outside #root. Conceal those too while checking, and
     // keep any residual portal hidden even if an unmount cleanup throws.
@@ -242,7 +256,7 @@
       }
       return {next, changed};
     }
-    async function receive(response, path, method, g, binding, reader) {
+    async function receive(response, path, method, g, binding, reader, signal) {
       const {next, changed} = inspect(response, path, method, g, binding);
       let value, failure;
       try { value = await reader(); }
@@ -257,8 +271,10 @@
         }
       }
       current(g, binding);
+      canceled(signal);
       await completion(next.binding, g);
       current(g, binding);
+      canceled(signal);
       if (changed) {
         // Candidate comes only from our explicit transition, then is checked
         // against the CURRENT cookie session before the UI receives its result.
@@ -277,17 +293,27 @@
       if (failure) throw failure;
       return value;
     }
-    function wrap(response, path, method, g, binding, abort, cleanup) {
+    function wrap(response, path, method, g, binding, abort, cleanup, signal) {
       try { inspect(response, path, method, g, binding); }
       catch(e) { cleanup(); throw e; }
+      const safeRead = ['GET', 'HEAD'].includes(method);
+      if (safeRead) canceled(signal);
       const idle = env.setTimeout(() => { idleTimers.delete(idle); cleanup(); abort(); if (g === generation) end('Response handling timed out. Reload to check your session.'); }, requestDeadline(path));
       idleTimers.add(idle);
-      const consume = reader => { env.clearTimeout(idle); idleTimers.delete(idle); return receive(response, path, method, g, binding,
-        () => bounded(reader(response), abort, requestDeadline(path), () => g === generation))
-        .finally(() => { cleanup(); if (transition === g) transition = false; }); };
+      const discard = () => { env.clearTimeout(idle); idleTimers.delete(idle); cleanup(); };
+      if (safeRead) signal.addEventListener('abort', discard, {once:true});
+      const consume = reader => {
+        if (safeRead) signal.removeEventListener('abort', discard);
+        env.clearTimeout(idle); idleTimers.delete(idle);
+        const task = receive(response, path, method, g, binding,
+          () => bounded(safeRead ? cancellable(reader(response), signal) : reader(response),
+            abort, requestDeadline(path), () => g === generation), safeRead ? signal : null);
+        return (safeRead ? cancellable(task, signal) : task)
+          .finally(() => { cleanup(); if (transition === g) transition = false; });
+      };
       const wrapped = new Proxy(response, {
         get(target, key) {
-          if (key === 'clone') return () => wrap(target.clone(), path, method, g, binding, abort, cleanup);
+          if (key === 'clone') return () => wrap(target.clone(), path, method, g, binding, abort, cleanup, signal);
           if (['json', 'text', 'blob', 'arrayBuffer', 'formData'].includes(key)) return () => consume(raw => raw[key]());
           if (key === 'body') throw new Error('Use a validated response body reader.');
           const value = Reflect.get(target, key, target);
@@ -365,15 +391,17 @@
         signal?.removeEventListener('abort', abort);
       };
       try {
-        const response = await bounded(nativeFetch(input, {
+        const request = nativeFetch(input, {
           ...options,
           headers,
           credentials: 'same-origin',
           cache: 'no-store',
           signal: controller.signal
-        }), abort, requestDeadline(url.pathname), () => g === generation);
+        });
+        const response = await bounded(['GET','HEAD'].includes(method) ? cancellable(request, controller.signal) : request,
+          abort, requestDeadline(url.pathname), () => g === generation);
         current(g, binding);
-        return wrap(response, url.pathname, method, g, binding, abort, cleanup);
+        return wrap(response, url.pathname, method, g, binding, abort, cleanup, controller.signal);
       } catch (e) {
         if (changing && transition === g) {
           end('Sign-in state could not be confirmed. Reload to check it.');
@@ -444,12 +472,14 @@
         };
       });
     }
-    async function file(url) {
+    async function file(url, {signal} = {}) {
       const g = generation, binding = context.binding;
-      const response = await fetch(url);
+      canceled(signal);
+      const response = await fetch(url, {signal});
       const blob = await response.blob();
       if (!response.ok) throw new Error('Document unavailable.');
       current(g, binding);
+      canceled(signal);
       const object = env.URL.createObjectURL(blob);
       blobs.add(object);
       return object;
@@ -525,6 +555,7 @@
       onEnd(fn) {
         listeners.add(fn);
         if (ended) fn();
+        return () => listeners.delete(fn);
       },
       get ended() {
         return ended;

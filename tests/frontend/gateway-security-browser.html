@@ -113,24 +113,77 @@ function quietMeasurement(t){
  return()=>{t.removeEventListener('focus',stop,true);t.document.removeEventListener('visibilitychange',stop,true);if(own)Object.defineProperty(t.document,'visibilityState',own);else delete t.document.visibilityState;};
 }
 const resumeB=quietMeasurement(b);
+function transportTab(){const t=window.open('/?__transport=1','_blank');tabs.add(t);return t;}
+const reader=transportTab();await wait(()=>reader.jthGatewaySession,'transport fixture ready');
 // Measure direct protected reads, excluding app initialization and focus events.
-await b.jthGatewaySession.verify();let baseline=(await stats()).requests.length;await (await b.jthGatewaySession.fetch('/api/applications')).json();let measured=(await stats()).requests.slice(baseline).filter(x=>x.path.startsWith('/api/'));
+await reader.jthGatewaySession.verify();let baseline=(await stats()).requests.length;await (await reader.jthGatewaySession.fetch('/api/applications')).json();let measured=(await stats()).requests.slice(baseline).filter(x=>x.path.startsWith('/api/'));
 assert('Normal read uses no me preflight and one completion check',measured.filter(x=>x.path==='/api/auth/me').length===0&&measured.filter(x=>x.path==='/api/gateway/context').length===1,measured);
-const second=tab();await loaded(second,'B');const resumeSecond=quietMeasurement(second);await Promise.all([b.jthGatewaySession.verify(),second.jthGatewaySession.verify()]);baseline=(await stats()).requests.length;
-await Promise.all([b,second].map(t=>t.jthGatewaySession.fetch('/api/applications').then(x=>x.json())));measured=(await stats()).requests.slice(baseline).filter(x=>x.path.startsWith('/api/'));
+const second=transportTab();await wait(()=>second.jthGatewaySession,'second transport fixture');await Promise.all([reader.jthGatewaySession.verify(),second.jthGatewaySession.verify()]);baseline=(await stats()).requests.length;
+await Promise.all([reader,second].map(t=>t.jthGatewaySession.fetch('/api/applications').then(x=>x.json())));measured=(await stats()).requests.slice(baseline).filter(x=>x.path.startsWith('/api/'));
 assert('Two top-level tabs use two checks for two independent reads',measured.filter(x=>x.path==='/api/auth/me').length===0&&measured.filter(x=>x.path==='/api/gateway/context').length===2,measured);
 // Bounded, real top-level multi-tab load: completion checks may coalesce but never fan out.
-const loadTab=tab();await loaded(loadTab,'B');const resumeLoad=quietMeasurement(loadTab);const loadTabs=[b,second,loadTab];
+const loadTab=transportTab();await wait(()=>loadTab.jthGatewaySession,'third transport fixture');const loadTabs=[reader,second,loadTab];
 await Promise.all(loadTabs.map(t=>t.jthGatewaySession.verify()));baseline=(await stats()).requests.length;
 const loadResults=await Promise.all(loadTabs.map(async t=>{for(let round=0;round<5;round++){
 const values=await Promise.all([1,2].map(()=>t.jthGatewaySession.fetch('/api/applications').then(x=>x.json())));
 if(!values.every(v=>v[0].company==='PRIVATE_B'))return false;}return !t.jthGatewaySession.ended;}));
 measured=(await stats()).requests.slice(baseline).filter(x=>x.path.startsWith('/api/'));
-assert('Three top-level tabs complete thirty protected reads with bounded authentication volume',loadResults.every(Boolean)&&measured.filter(x=>x.path==='/api/applications').length===30&&measured.filter(x=>x.path==='/api/gateway/context').length<=30&&measured.filter(x=>x.path==='/api/auth/me').length===0,{reads:30,checks:measured.filter(x=>x.path==='/api/gateway/context').length,tabs:3});resumeLoad();remove(loadTab);resumeB();resumeSecond();await Promise.all([b.jthGatewaySession.verify(),second.jthGatewaySession.verify()]);
+assert('Three top-level tabs complete thirty protected reads with bounded authentication volume',loadResults.every(Boolean)&&measured.filter(x=>x.path==='/api/applications').length===30&&measured.filter(x=>x.path==='/api/gateway/context').length<=30&&measured.filter(x=>x.path==='/api/auth/me').length===0,{reads:30,checks:measured.filter(x=>x.path==='/api/gateway/context').length,tabs:3});remove(loadTab);remove(reader);resumeB();await b.jthGatewaySession.verify();
 // Exercise the actual drawer and download link, beyond the transport helper.
 await wait(()=>b.document.querySelector('[aria-label="View inline"]'),'document control');b.document.querySelector('[aria-label="View inline"]').click();
 await wait(()=>b.document.querySelector('.viewer-frame')?.getAttribute('src')?.startsWith('blob:'),'PDF drawer');
-const download=b.document.querySelector('.viewer-header a[download]');assert('Actual PDF drawer and named download use authenticated blob URL',download.href.startsWith('blob:')&&download.download==='synthetic.pdf');download.click();
+const download=[...b.document.querySelectorAll('.viewer-header button')].find(x=>x.textContent==='Download');assert('Actual PDF drawer and named download use authenticated blob URL',!!download&&!download.disabled);download.click();
+await wait(()=>!download.disabled,'PDF download handed to browser');
+function closePreview(){b.document.querySelector('.viewer-header button:last-child').click();}
+function showDocument(name){const card=[...b.document.querySelectorAll('.doc-card')].find(x=>x.textContent.includes(name));if(!card)throw Error('Document missing '+name);card.querySelector('[aria-label="View inline"]').click();}
+closePreview();await wait(()=>!b.document.querySelector('.viewer-drawer'),'PDF closed');
+// Observe actual resource ownership without replacing fetch or response validation.
+const activeUrls=new Set(),createdUrls=[],revokedUrls=[],fileCalls=[];
+const nativeCreate=b.URL.createObjectURL.bind(b.URL),nativeRevoke=b.URL.revokeObjectURL.bind(b.URL);
+b.URL.createObjectURL=blob=>{const url=nativeCreate(blob);activeUrls.add(url);createdUrls.push(url);return url;};
+b.URL.revokeObjectURL=url=>{activeUrls.delete(url);revokedUrls.push(url);nativeRevoke(url);};
+const nativeFile=b.jthGatewaySession.file;
+b.jthGatewaySession.file=(url,options)=>{const entry={url,signal:options?.signal,done:false};fileCalls.push(entry);return nativeFile(url,options).then(value=>{entry.done=true;return value;},error=>{entry.done=true;entry.error=error.name;throw error;});};
+const previewStart=(await stats()).seen.length;
+showDocument('hostile.docx');await wait(()=>b.document.querySelector('iframe.viewer-frame')?.srcdoc.includes('Harmless attack label'),'actual DOCX conversion displayed');
+const docxFrame=b.document.querySelector('iframe.viewer-frame');
+assert('DOCX preview uses real conversion without fetching the original',!(await stats()).seen.slice(previewStart).some(x=>x.path==='/api/file'&&x.relpath==='hostile.docx'));
+assert('DOCX iframe has an empty sandbox and no parent DOM access',docxFrame.hasAttribute('sandbox')&&docxFrame.getAttribute('sandbox')===''&&docxFrame.contentDocument===null);
+assert('Converted DOCX preserves formatting and embedded PNG while removing navigation',docxFrame.srcdoc.includes('<h1>')&&docxFrame.srcdoc.includes('<ul>')&&docxFrame.srcdoc.includes('<table>')&&docxFrame.srcdoc.includes('data:image/png;base64,')&&!docxFrame.srcdoc.includes('href='));
+b.__docxExecuted=false;b.document.title='DOCX_SECURITY_TARGET';
+window.__docxStage={id:'sanitized',tab:b};window.__docxClickDone=false;
+await wait(()=>window.__docxClickDone,'real click on original attack label');
+assert('Actual clicked DOCX javascript-link reproduction cannot execute in parent',!b.__docxExecuted&&window.__docxClickDone.hit);
+// Challenge the rendering layer independently of the sanitizer as defense in depth.
+const probe=b.document.createElement('iframe');probe.id='docx-defense';probe.setAttribute('sandbox','');probe.style.cssText='position:fixed;left:0;top:0;width:500px;height:250px;z-index:2147483647';
+probe.srcdoc=b.JTHDocumentPreview.docxDocument('<a href="javascript:document.documentElement.dataset.linkExecuted=1;parent.__docxExecuted=true">Harmless attack label</a><script>document.documentElement.dataset.scriptExecuted=1;parent.__docxExecuted=true<\/script><img src="/__test/docx-network"><style>@import url("/__test/docx-network");</style>');b.document.body.append(probe);
+window.__docxStage={id:'defense',tab:b};window.__docxClickDone=false;await wait(()=>window.__docxClickDone,'real click inside hostile sandbox probe');
+assert('Sandbox and CSP block scripts, javascript clicks, navigation and external resources independently',!b.__docxExecuted&&window.__docxClickDone.hit&&!window.__docxClickDone.scriptExecuted&&!window.__docxClickDone.linkExecuted&&window.__docxClickDone.url==='about:srcdoc'&&b.location.pathname==='/'&&!(await stats()).requests.some(x=>x.path==='DOCUMENT_NETWORK_BEACON'));
+probe.remove();window.__docxStage=null;
+const docxDownload=[...b.document.querySelectorAll('.viewer-header button')].find(x=>x.textContent==='Download');docxDownload.click();
+await wait(()=>fileCalls.some(x=>x.url.includes('hostile.docx')&&x.done),'explicit original DOCX download completed');
+assert('Original DOCX is fetched only for an intentional authenticated download',fileCalls.filter(x=>x.url.includes('hostile.docx')).length===1);
+closePreview();await wait(()=>!b.document.querySelector('.viewer-drawer'),'DOCX closed');assert('DOCX download URL revoked on close',activeUrls.size===0);
+showDocument('notes.txt');await wait(()=>b.document.querySelector('iframe.viewer-frame')?.src?.startsWith('blob:'),'text preview');
+const textFrame=b.document.querySelector('iframe.viewer-frame');const wrappedText=await(await b.fetch(textFrame.src)).text();
+assert('Authenticated text preview remains escaped and sandboxed',wrappedText.includes('&lt;script&gt;')&&textFrame.getAttribute('sandbox')==='');
+closePreview();await wait(()=>!b.document.querySelector('.viewer-drawer'),'text closed');
+// Cancel both before headers and while a real response body is incomplete.
+await config({hold_file:'B'});let callsBefore=fileCalls.length;showDocument('synthetic.pdf');await wait(()=>fileCalls.length>callsBefore,'held preview file dispatched');closePreview();
+await wait(()=>fileCalls.at(-1).done,'closed preview fetch rejected');assert('Closing PDF preview aborts its actual authenticated file request',fileCalls.at(-1).signal.aborted&&fileCalls.at(-1).error==='AbortError');await config();
+await config({hold_file_body:true});callsBefore=fileCalls.length;const bodyStart=(await stats()).seen.length;showDocument('synthetic.pdf');await wait(async()=> (await stats()).seen.slice(bodyStart).some(x=>x.body_started),'file headers and first body byte received');
+showDocument('hostile.docx');await wait(()=>fileCalls[callsBefore].done,'switched PDF body canceled');await wait(()=>b.document.querySelector('iframe.viewer-frame')?.srcdoc.includes('Harmless attack label'),'replacement DOCX rendered');
+assert('Switching documents cancels an incomplete body without ending authentication',fileCalls[callsBefore].signal.aborted&&fileCalls[callsBefore].error==='AbortError'&&!b.jthGatewaySession.ended);await config();
+// A held conversion finishing after a switch must never replace the new text.
+await config({hold_preview:true});const lateStart=(await stats()).seen.length;showDocument('slow.docx');await wait(async()=> (await stats()).seen.slice(lateStart).some(x=>x.path==='/api/preview-docx'),'held conversion dispatched');
+showDocument('notes.txt');await wait(()=>b.document.querySelector('iframe.viewer-frame')?.src?.startsWith('blob:'),'text replaces held conversion');const currentTextSrc=b.document.querySelector('iframe.viewer-frame').src;
+await config();await wait(async()=> (await stats()).seen.slice(lateStart).some(x=>x.path==='/api/preview-docx'&&x.complete),'late conversion actually completed');
+assert('Completed obsolete conversion cannot replace current text preview',b.document.querySelector('iframe.viewer-frame').src===currentTextSrc&&!b.document.querySelector('iframe.viewer-frame').hasAttribute('srcdoc'));
+closePreview();await wait(()=>!b.document.querySelector('.viewer-drawer'),'late preview closed');
+showDocument('hostile.docx');await wait(()=>b.document.querySelector('iframe.viewer-frame')?.srcdoc,'DOCX before canceling download');await config({hold_file:'B'});callsBefore=fileCalls.length;
+[...b.document.querySelectorAll('.viewer-header button')].find(x=>x.textContent==='Download').click();await wait(()=>fileCalls.length>callsBefore,'explicit download dispatched');closePreview();await wait(()=>fileCalls.at(-1).done,'abandoned explicit download canceled');await config();
+assert('Closing aborts an unfinished DOCX download and releases all preview URLs',fileCalls.at(-1).error==='AbortError'&&activeUrls.size===0&&createdUrls.length===revokedUrls.length);
+r=await fetch('/api/auth/me',{headers:{[HEADER]:binding}});assert('Document cancellation preserves actual authenticated B identity',(await r.json()).username==='auditB'&&!b.jthGatewaySession.ended);
 assert('No signed context was transported in application URLs' ,(await stats()).seen.every(x=>!x.path.includes('_jth_')));remove(second);remove(b);
 // Traditional Django forms use signed POST fields, with no fetch interception.
 await logout();await login('A');

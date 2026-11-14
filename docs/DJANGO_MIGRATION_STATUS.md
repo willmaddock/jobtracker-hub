@@ -1,5 +1,75 @@
 # Django migration: current status
 
+## DOCX preview containment and abandoned-download cancellation — 2026-11-13
+
+Implemented locally on `feature/gateway` after committed checkpoint
+`e26ea79e975984e592f117b46506ade3a04751d9`; not staged or committed. This supersedes
+the deferred DOCX/cancellation statements in historical checkpoints below. Scope is the
+approved 19 files, including four new modules/tests; no models, migrations, auth contract,
+session-lineage enforcement, framework or packaging-file changes.
+
+The real OOXML javascript hyperlink is now a permanent regression. Conversion explicitly
+disables external-file access and embedded style maps, then uses nh3's formatting/attribute
+allowlist and conversion-issued raster data URIs. Scripts, active content, navigation and
+external resources are removed. DOCX renders in a scriptless opaque iframe with a deny-by-
+default CSP and a hash-authorized fixed stylesheet. Text stays escaped and gains a sandbox;
+native PDF rendering stays separate. Original files are never rewritten.
+
+The modular drawer owner aborts preview/download requests on close/switch/unmount/session
+invalidation, rejects stale results, releases URLs/listeners/timers, and fetches the original
+DOCX only on explicit Download. Preview deadlines are 60 seconds; intentional downloads
+retain ten minutes. Gateway readers propagate cancellation through fetch/body/check stages
+without weakening current-session proof or canceling other readers' shared checks. The
+proxy closes upstream response/socket even before first iteration or after a read error.
+Desktop keeps genuine native download URLs and existing cache behavior.
+
+Fresh verification, synthetic accounts/files and disposable storage only:
+
+- Python 3.14.7: **26 passed** conversion/file-serving tests with installed Mammoth 1.13.0;
+  **26 passed** again with minimum Mammoth 1.12.2 isolated in a temporary package directory.
+  One existing Starlette/httpx deprecation warning; no dependency upgrade for that warning.
+- Full labelled Django/SQLite, default `JTH_GATEWAY=false`: **1,642 run, 1,627 passed,
+  15 skipped, zero failures**. Gateway classes opt in explicitly.
+- Gateway/SQLite, `JTH_GATEWAY=true`: **109 run, 107 passed, two PostgreSQL-only skips**.
+- Gateway/PostgreSQL 17/Python 3.12.16: **109 passed, zero skips/failures**, plus real
+  sanitizer/converter smoke with nh3's Linux wheel. Temporary database/runner containers
+  were removed; current source was mounted read-only and nh3 installed only in temporary
+  container storage. No existing database was accessed or migrated.
+- Node/frontend: **116 passed**, zero failures (54 API client, 50 gateway session,
+  ten preview lifecycle/CSP, two workspace context). Desktop caching/direct URLs remain
+  covered. Final same-document return test rejects an older pending download.
+- Chrome: **83 passed**, zero failures, with isolated profiles and real top-level tabs.
+  Actual mouse clicks exercise the original DOCX label and a separately hostile sandbox
+  probe; neither frame scripts nor javascript links execute, the frame/parent URLs remain
+  unchanged, and document resource beacons receive no requests. Formatting and embedded PNG
+  decoding, PDF/text previews, exact original DOCX download bytes, header/body cancellation,
+  late conversion completion, balanced URL cleanup, actual B identity and prior gateway
+  cookie/logout/MFA/native-form attacks pass. Thirty direct reads across three transport
+  tabs use thirty completion checks and no me preflights; lifecycle tests run separately.
+
+The initial red tests reproduced ten Python failures, two gateway cancellation failures,
+and stream cleanup failures before implementation. A sandbox-blocked loopback stub caused
+one incomplete gateway run; a fresh run with loopback permission passed. Browser harness
+development exposed measurement contamination from unrelated lifecycle checks, opaque
+iframe CDP targeting, and nondeterministic ZIP timestamps. Measurements now isolate direct
+reads in transport-only fixture tabs, mouse tests attach to the real opaque renderer,
+and synthetic archives use fixed timestamps. No production authentication restriction was
+relaxed to make tests pass.
+
+Limits: Safari, packaged WKWebView/frozen builds and physical passkeys remain unverified.
+PyInstaller is not installed; macOS/Python 3.14 and Linux/Python 3.12 wheel imports work, and
+the existing desktop data rule includes the new JS, but frozen native-extension loading
+still needs a packaging acceptance run. Browser abort cannot forcibly stop synchronous
+conversion or an upstream blocking read; WSGI detects disconnects when the stack observes
+them. Large-document buffering, decoder vulnerabilities, conversion CPU/memory isolation,
+resource quotas and production capacity remain hosting work. Existing text-download HTML
+wrapping is preserved. No Critical/High defect is known from this focused implementation
+review; this is a local security checkpoint, not a hosting-readiness declaration.
+
+See [GATEWAY.md](GATEWAY.md#docx-containment-and-preview-cancellation--2026-11-13) for the
+19-file inventory, commands, behavioral boundaries and packaging limitations. Older test
+counts below are historical. No real documents/data, commits, push, merge or deployment.
+
 ## Reviewed gateway security checkpoint — 2026-11-13
 
 This checkpoint was prepared and reviewed on `feature/gateway` from parent `9f25d66`.

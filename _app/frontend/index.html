@@ -594,6 +594,7 @@
 
 <!-- DJANGO_FOUNDATION_BOOTSTRAP -->
 <script src="/gateway-session.js"></script>
+<script src="/document-preview.js"></script>
 <script src="/workspace-context.js"></script>
 <script src="/api-client.js"></script>
 <script type="text/babel" data-presets="react">
@@ -6409,41 +6410,41 @@ function CommandPalette({apps, onClose, setPage, setSelectedKey, doRebuild, fire
 /* =========================== INLINE DOCUMENT VIEWER DRAWER (glassmorphic) =========================== */
 function ViewerDrawer({doc, onClose, onOpen}){
   const ext = ((doc && doc.ext) || "").toLowerCase();
-  const [docxHtml, setDocxHtml] = useState(null);
-  const [docxErr, setDocxErr] = useState(null);
-  const [docxLoading, setDocxLoading] = useState(false);
-  const [gatewayFile, setGatewayFile] = useState(null);
-  const [fileError, setFileError] = useState("");
+  const [preview, setPreview] = useState(null);
+  const [download, setDownload] = useState(null);
+  const ownerRef = useRef(null);
+  const documentKey = window.JTHDocumentPreview.key(doc);
+  // State is keyed in render as well as in asynchronous callbacks: switching
+  // documents must not briefly display the previous fragment before effects run.
   useEffect(() => {
-    const guard = window.jthGatewaySession;
-    if (!guard || !doc) return;
-    let active = true, objectUrl = null;
-    setGatewayFile(null); setFileError("");
-    guard.file(`${API_BASE}/api/file?relpath=${encodeURIComponent(doc.relpath)}`)
-      .then(url => { objectUrl = url; if (active) setGatewayFile({relpath:doc.relpath, url}); else guard.release(url); })
-      .catch(error => { if (active) setFileError(error.message); });
-    return () => { active = false; if (objectUrl) guard.release(objectUrl); };
-  }, [doc && doc.relpath]);
-
-  // Runs whenever the viewed doc changes (not just on mount) — the drawer
-  // stays mounted while you click between docs, so this can't be a
-  // one-time fetch. .docx has no browser-native renderer, unlike the
-  // plain-text/PDF formats below, so it needs a converted-HTML round trip
-  // to the backend instead of pointing an <iframe> straight at /api/file.
-  useEffect(() => {
-    setDocxHtml(null); setDocxErr(null);
-    if (!doc || ext !== ".docx") return;
-    setDocxLoading(true);
-    apiGet(`/api/preview-docx?relpath=${encodeURIComponent(doc.relpath)}`)
-      .then(r => setDocxHtml(r.html))
-      .catch(e => setDocxErr(String(e.message || e)))
-      .finally(() => setDocxLoading(false));
-  }, [doc && doc.relpath]);
+    setDownload(null);
+    const owner = window.JTHDocumentPreview.create({env:window, guard:window.jthGatewaySession,
+      base:API_BASE, onState:setPreview});
+    ownerRef.current = owner;
+    owner.open(doc);
+    return () => { owner.destroy(); if (ownerRef.current === owner) ownerRef.current = null; };
+  }, [documentKey]);
 
   if (!doc) return null;
   const fileUrl = `${API_BASE}/api/file?relpath=${encodeURIComponent(doc.relpath)}`;
-  const src = window.jthGatewaySession ? (gatewayFile?.relpath === doc.relpath ? gatewayFile.url : null) : fileUrl;
-  const isFrameable = ext === ".pdf" || ext === ".md" || ext === ".markdown" || ext === ".txt" || ext === ".tex";
+  const current = preview?.key === documentKey ? preview : null;
+  const downloading = download?.key === documentKey && download.pending;
+  const startDownload = async () => {
+    const owner = ownerRef.current;
+    if (!owner || downloading) return;
+    setDownload({key:documentKey, pending:true});
+    try {
+      const url = await owner.download(doc);
+      if (owner !== ownerRef.current) return;
+      const link = document.createElement('a');
+      link.href = url; link.download = doc.filename;
+      document.body.append(link); link.click(); link.remove();
+      setDownload({key:documentKey, pending:false});
+    } catch (error) {
+      if (owner === ownerRef.current && error.name !== 'AbortError')
+        setDownload({key:documentKey, pending:false, error:error.message});
+    }
+  };
   return (
     <div className="viewer-backdrop" onClick={onClose}>
       <div className="viewer-drawer" onClick={e => e.stopPropagation()}>
@@ -6461,9 +6462,12 @@ function ViewerDrawer({doc, onClose, onOpen}){
               own UI, which has no such hook -- see launcher.py's
               ALLOW_DOWNLOADS comment for why that one can't be fixed the
               same way. Works unchanged in a plain browser tab too. */}
-          <a className="btn small" href={src || undefined} aria-disabled={!src} onClick={e => { if (!src) e.preventDefault(); }} download={doc.filename}>Download</a>
+          {window.jthGatewaySession
+            ? <button className="btn small" disabled={downloading} onClick={startDownload}>{downloading ? "Downloading…" : "Download"}</button>
+            : <a className="btn small" href={fileUrl} download={doc.filename}>Download</a>}
           <button className="btn small" onClick={onClose}><Icon name="close" size={12} style={{marginRight:4, verticalAlign:"-1px"}}/>Close (Esc)</button>
         </div>
+        {download?.key === documentKey && download.error && <div role="alert">{download.error}</div>}
         {/* The PDF pane below embeds WebKit's own native PDF plugin, whose
             save/download icon is a closed native affordance we can't wire
             up (see the Download button comment above) -- zoom in that same
@@ -6475,25 +6479,20 @@ function ViewerDrawer({doc, onClose, onOpen}){
           <div className="viewer-pdf-hint">Use Download or Open in OS above to save this file.</div>
         )}
         <div className="viewer-body">
-          {window.jthGatewaySession && !src
-            ? <div className="viewer-unsupported">{fileError || "Loading document…"}</div>
-            : ext === ".pdf"
-            ? <embed className="viewer-frame" src={src} type="application/pdf" />
-            : ext === ".docx"
-              ? (docxLoading
-                  ? <div className="viewer-unsupported"><Icon name="hourglass" size={13} style={{marginRight:4, verticalAlign:"-2px"}}/> Converting for preview…</div>
-                  : docxErr
-                    ? (
-                      <div className="viewer-unsupported">
-                        <div><Icon name="resume_library" size={13} style={{marginRight:4, verticalAlign:"-2px"}}/> Couldn't preview this .docx ({docxErr}).</div>
-                        <button className="btn primary" onClick={() => onOpen(doc.relpath)}>Open in OS</button>
-                      </div>
-                    )
-                    : <iframe className="viewer-frame" title={doc.filename}
-                        srcDoc={`<style>body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:760px;margin:24px auto;padding:0 24px 40px;line-height:1.55;color:#1e293b;}img{max-width:100%;}</style>${docxHtml || ""}`} />
-                )
-              : isFrameable
-                ? <iframe className="viewer-frame" src={src} title={doc.filename} />
+          {!current || current.loading
+            ? <div className="viewer-unsupported" role="status">{ext === '.docx' ? 'Converting for preview…' : 'Loading document…'}</div>
+            : current.error
+              ? <div className="viewer-unsupported" role="alert">{current.error}</div>
+            : current.kind === 'pdf'
+              ? <embed className="viewer-frame" src={current.src} type="application/pdf" />
+            : current.kind === 'docx'
+              ? <>
+                  {current.warnings?.length > 0 && <div role="status">Some document features could not be previewed. Download the original for the complete document.</div>}
+                  <iframe key={documentKey} className="viewer-frame" title={doc.filename} sandbox="" referrerPolicy="no-referrer"
+                    srcDoc={window.JTHDocumentPreview.docxDocument(current.html)} />
+                </>
+            : current.kind === 'text'
+                ? <iframe key={documentKey} className="viewer-frame" src={current.src} title={doc.filename} sandbox="" referrerPolicy="no-referrer" />
                 : (
                   <div className="viewer-unsupported">
                     <div><Icon name="resume_library" size={13} style={{marginRight:4, verticalAlign:"-2px"}}/> No inline preview for this file type.</div>

@@ -2,16 +2,51 @@
 import json
 import re
 import threading
+from django.http import StreamingHttpResponse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest import mock
 
 from django.contrib.auth import get_user_model
 from django.core import signing
-from django.test import TestCase, override_settings
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.urls import include, path
 
 from gateway import session_context, views
 from gateway.backends import Backend
+
+
+class GatewayStreamCleanupTests(SimpleTestCase):
+    def test_close_before_first_chunk_closes_upstream(self):
+        connection, upstream = mock.Mock(), mock.Mock()
+        response = StreamingHttpResponse(views._body_iter(upstream, connection))
+        response.close()
+        connection.close.assert_called_once()
+        upstream.close.assert_called_once()
+
+    def test_close_midstream_is_idempotent(self):
+        connection, upstream = mock.Mock(), mock.Mock()
+        upstream.read.side_effect = [b'chunk', b'next']
+        response = StreamingHttpResponse(views._body_iter(upstream, connection))
+        self.assertEqual(next(iter(response.streaming_content)), b'chunk')
+        response.close()
+        response.close()
+        connection.close.assert_called_once()
+        upstream.close.assert_called_once()
+
+    def test_normal_completion_and_read_failure_close_upstream(self):
+        for chunks in ([b'chunk', b''], [OSError('synthetic disconnect')]):
+            with self.subTest(chunks=chunks):
+                connection, upstream = mock.Mock(), mock.Mock()
+                upstream.read.side_effect = chunks
+                response = StreamingHttpResponse(views._body_iter(upstream, connection))
+                if isinstance(chunks[0], Exception):
+                    with self.assertRaises(OSError):
+                        list(response.streaming_content)
+                else:
+                    self.assertEqual(b''.join(response.streaming_content), b'chunk')
+                response.close()
+                connection.close.assert_called_once()
+                upstream.close.assert_called_once()
 
 SEEN = []
 
@@ -89,6 +124,21 @@ class GatewayProxyTests(TestCase):
     def test_anonymous_is_refused_and_nothing_is_forwarded(self):
         r = self.client.get("/api/applications")
         self.assertEqual(r.status_code, 409)
+        self.assertEqual(SEEN, [])
+
+    def test_document_routes_reject_missing_and_obsolete_context_before_proxy(self):
+        paths = ['/api/file?relpath=synthetic.pdf', '/api/preview-docx?relpath=synthetic.docx']
+        for path in paths:
+            self.assertEqual(self.client.get(path).status_code, 409)
+        binding = self.login()
+        for path in paths:
+            self.assertEqual(self.client.get(path, HTTP_X_JTH_CONTEXT='').status_code, 409)
+        other = get_user_model().objects.create_user(username='document-other', password='pw-not-used-12345')
+        self.login(other)
+        for path in paths:
+            response = self.client.get(path, HTTP_X_JTH_CONTEXT=binding)
+            self.assertEqual(response.status_code, 409)
+            self.assertEqual(response.json()['code'], 'gateway_context_changed')
         self.assertEqual(SEEN, [])
 
     def test_signed_in_request_is_forwarded_with_token_and_without_cookies(self):

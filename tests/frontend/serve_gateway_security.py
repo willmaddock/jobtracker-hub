@@ -4,6 +4,7 @@ Run from the repository root with backend/venv/bin/python. Never starts the
 private tracker or reads .env. Database, media and gateway state are disposable.
 """
 import argparse
+import io
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
@@ -23,6 +24,8 @@ args = parser.parse_args()
 # The runner terminates this owned fixture; unwind temporary DB/media storage.
 signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 sys.path.insert(0, str(ROOT / "backend"))
+sys.path.insert(0, str(ROOT / "_app"))
+sys.path.insert(0, str(ROOT / "tests"))
 sys.argv = ["manage.py", "test"]  # dev settings must never load backend/.env
 os.environ["DJANGO_SETTINGS_MODULE"] = "config.settings.test_sqlite"
 os.environ["JTH_GATEWAY"] = "true"
@@ -91,7 +94,7 @@ with tempfile.TemporaryDirectory(prefix="jth-gateway-browser-") as directory:
     controls = {}
     seen = []
     requests = []
-    delays = {name: threading.Event() for name in ("csrf", "native", "context", "headers")}
+    delays = {name: threading.Event() for name in ("csrf", "native", "context", "headers", "preview", "file_body")}
     for delay in delays.values():
         delay.set()
     gates = {label: threading.Event() for label in ("A", "B", "M")}
@@ -116,15 +119,21 @@ with tempfile.TemporaryDirectory(prefix="jth-gateway-browser-") as directory:
         return content + b"trailer<</Size 6/Root 1 0 R>>\nstartxref\n" + str(start).encode() + b"\n%%EOF\n"
 
     PDF = synthetic_pdf()
+    from test_docx_preview import make_docx
+    from docx_preview import convert_docx
+    DOCX = make_docx()
+    TEXT = b'<!doctype html><html><body><pre>Synthetic text &lt;script&gt;never execute&lt;/script&gt;</pre></body></html>'
 
     class Stub(BaseHTTPRequestHandler):
         def handle_request(self):
             label = actors[self.headers["X-JTH-Gateway-Token"]]
+            from urllib.parse import parse_qs
             route = urlsplit(self.path).path
+            name = parse_qs(urlsplit(self.path).query).get('relpath', [''])[0]
             length = int(self.headers.get("Content-Length") or 0)
             if length:
                 self.rfile.read(length)
-            observation = {"actor": label, "path": route, "method": self.command}
+            observation = {"actor": label, "path": route, "method": self.command, "relpath":name}
             seen.append(observation)
             status = 200
             if self.command == "POST" and controls.get("hold_write") == label:
@@ -146,7 +155,13 @@ with tempfile.TemporaryDirectory(prefix="jth-gateway-browser-") as directory:
             elif route.endswith("/dossier"):
                 data = {"contacts": {"emails": [], "phones": [], "urls": []}, "timeline_events": [], "account_matches": []}
             elif route.endswith("/documents"):
-                data = [{"id": 100, "filename": "synthetic.pdf", "ext": ".pdf", "relpath": "synthetic.pdf", "doc_type": "resume"}]
+                data = [{"id":100 + i, "filename":name, "ext":Path(name).suffix,
+                         "relpath":name, "doc_type":"resume"}
+                        for i, name in enumerate(('synthetic.pdf', 'hostile.docx', 'slow.docx', 'notes.txt'))]
+            elif route == '/api/preview-docx':
+                if controls.get('hold_preview') and name == 'slow.docx':
+                    delays['preview'].wait(20)
+                data = convert_docx(io.BytesIO(DOCX))
             elif route == "/api/discoveries":
                 data = []
             else:
@@ -156,8 +171,7 @@ with tempfile.TemporaryDirectory(prefix="jth-gateway-browser-") as directory:
                     status = 401
                 if controls.get("hold_file") == label:
                     gates[label].wait(20)
-                body = PDF
-                content_type = "application/pdf"
+                body, content_type = (DOCX, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') if name.endswith('.docx') else (TEXT, 'text/html') if name.endswith('.txt') else (PDF, 'application/pdf')
             else:
                 body = json.dumps(data).encode()
                 content_type = "application/json"
@@ -166,7 +180,13 @@ with tempfile.TemporaryDirectory(prefix="jth-gateway-browser-") as directory:
                 self.send_header("Content-Type", content_type)
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
-                self.wfile.write(body)
+                if route == '/api/file' and controls.get('hold_file_body'):
+                    self.wfile.write(body[:1]); self.wfile.flush()
+                    observation['body_started'] = True
+                    delays['file_body'].wait(20)
+                    self.wfile.write(body[1:])
+                else:
+                    self.wfile.write(body)
             except (BrokenPipeError, ConnectionResetError):
                 pass  # an invalidated page intentionally abandons old requests
             finally:
@@ -209,6 +229,10 @@ with tempfile.TemporaryDirectory(prefix="jth-gateway-browser-") as directory:
     def observations(request):
         return JsonResponse({"seen": seen, "requests": requests})
 
+    def document_network(request):
+        requests.append({'path':'DOCUMENT_NETWORK_BEACON','method':request.method})
+        return HttpResponse('Forbidden document resource')
+
     def me(request):
         if controls.get("fail_me"):
             return JsonResponse({"detail": "Synthetic authentication outage"}, status=503)
@@ -222,6 +246,19 @@ with tempfile.TemporaryDirectory(prefix="jth-gateway-browser-") as directory:
     def harness(request):
         return HttpResponse((ROOT / "tests/frontend/gateway-security-browser.html").read_text())
 
+    def transport_only(request):
+        # Measure direct reads without React initialization or tab lifecycle work.
+        # Lifecycle behavior remains exercised in the real application tabs.
+        import re
+        response = views.index(request)
+        html = re.sub(r'<script type="text/babel"[^>]*>.*?</script>', '', response.content.decode(), flags=re.S)
+        quiet = '<script>Object.defineProperty(document,"visibilityState",{get:()=>"hidden"});window.addEventListener("focus",e=>e.stopImmediatePropagation(),true);document.addEventListener("visibilitychange",e=>e.stopImmediatePropagation(),true);</script>'
+        response.content = html.replace('<script src="/gateway-session.js">', quiet + '<script src="/gateway-session.js">')
+        return response
+
+    def index(request):
+        return transport_only(request) if request.GET.get('__transport') else views.index(request)
+
     @csrf_exempt
     def report(request):
         result = json.loads(request.body)
@@ -234,8 +271,9 @@ with tempfile.TemporaryDirectory(prefix="jth-gateway-browser-") as directory:
         path('static/<path:path>', lambda request, path: static_serve(request, path, insecure=True)),
         path("__test/config", configure), path("__test/seen", observations), path("__test/code", code),
         path("__test/report", report), path("__test/gateway-security", harness),
+        path('__test/docx-network', document_network),
         path("api/auth/me", me, name="auth-me"), path("api/auth/logout", logout, name="auth-logout"),
-        path("", views.index), path("<str:name>", asset), path("", include("gateway.urls")),
+        path("", index), path("<str:name>", asset), path("", include("gateway.urls")),
     ]
     from django.core.wsgi import get_wsgi_application
     application = get_wsgi_application()

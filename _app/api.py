@@ -2884,18 +2884,18 @@ def preview_docx(relpath: str):
     if full_path.suffix.lower() != ".docx":
         raise HTTPException(status_code=400, detail="Inline docx preview only supports .docx files")
     try:
-        import mammoth
+        from docx_preview import convert_docx
     except ImportError as exc:
         raise HTTPException(
             status_code=501,
-            detail="Inline .docx preview needs the 'mammoth' package — run: pip install -r requirements.txt",
+            detail="Inline .docx preview requires the declared preview dependencies. Download the original instead.",
         ) from exc
     try:
         with open(full_path, "rb") as f:
-            result = mammoth.convert_to_html(f)
+            result = convert_docx(f)
     except Exception as exc:  # noqa: BLE001 — surface a readable message instead of a raw 500
-        raise HTTPException(status_code=500, detail=f"Couldn't preview {full_path.name}: {exc}") from exc
-    return {"html": result.value, "warnings": [str(w) for w in result.messages]}
+        raise HTTPException(status_code=500, detail="Couldn't convert this .docx for preview. Download the original instead.") from exc
+    return result
 
 
 # --- static frontend ----------------------------------------------------

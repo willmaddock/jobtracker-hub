@@ -2,6 +2,109 @@
 
 `JTH_GATEWAY=true` (set in `backend/.env.example`) changes what happens after sign-in.
 
+## DOCX containment and preview cancellation — 2026-11-13
+
+This uncommitted increment follows local security checkpoint `e26ea79`. It supersedes
+the historical DOCX/drawer-cancellation caveats in the earlier checkpoint sections below.
+Django templates remain the hosted direction; these changes protect the legacy fallback.
+
+`_app/docx_preview.py` converts with `external_file_access=False` and
+`include_embedded_style_map=False`, then sanitizes using `nh3==0.3.7`. Both runtime
+manifests require Mammoth >=1.12.2. Missing dependencies fail closed with HTTP 501;
+conversion failures return a generic error and never rewrite the original document.
+The existing `{html, warnings}` response and safe-root path checks are retained.
+
+Only explicit formatting elements/attributes survive. Links become inert text; scripts,
+document styles, forms, frames, active content and navigation/resource attributes are
+removed. Embedded PNG/JPEG/GIF/WebP images require matching byte signatures; the sanitizer
+admits only exact data URIs issued by that conversion's image handler. SVG, unsupported
+images and mislabeled content are omitted with a warning. This validates format signatures,
+not full image decoding or immunity to browser image-decoder vulnerabilities.
+
+DOCX HTML is never parsed in the parent DOM. `document-preview.js` wraps the sanitized
+fragment with a CSP before any content: deny by default, no scripts/connections/frames/
+forms/base changes, data images only, and a SHA-256-authorized fixed stylesheet. The iframe
+uses `sandbox=""` and `referrerpolicy="no-referrer"`; no script or same-origin permission
+is granted. All document hyperlinks, including external and footnote links, are inert.
+Sandboxing alone does not prevent every self-navigation, so server sanitization remains
+essential. The native PDF embed stays separate. Text previews retain escaped HTML wrapping
+and gain the scriptless sandbox; text downloads retain their existing wrapped-HTML semantics.
+
+Each drawer owns cancellable operations, a document identity, generation and blob URLs.
+Close/switch/unmount/session invalidation abort owned requests, remove viewers and release
+URLs. Late results are discarded even if a transport ignores abort. Gateway `file()` accepts
+an AbortSignal; canceled GET/HEAD consumers cannot allocate a late blob or wait indefinitely
+for a shared completion check. Other readers keep their authoritative check. Canceled unused
+responses discard their idle timer. End listeners can unsubscribe to avoid retaining drawers.
+Authentication, lineage, CSRF, MFA and write/replay behavior are unchanged.
+
+DOCX preview fetches conversion only. Its original is fetched on explicit Download, using
+authenticated blobs in gateway mode and a genuine native URL in desktop mode. PDF/text blobs
+can be reused for download. Previews have a 60-second deadline; intentional downloads retain
+the existing ten-minute allowance. Both are canceled on abandonment before browser handoff.
+Once handed off, a browser/OS download belongs to that download manager. The upstream proxy
+owns a closable iterator, closing response/socket on EOF/error/close even before iteration.
+
+Limits: browser abort does not forcibly terminate synchronous conversion or a blocking read
+already running upstream. WSGI disconnect detection can be delayed; the existing socket
+timeout remains. Large documents still buffer in browser memory. Converter process isolation,
+CPU/ZIP/image-size quotas, production ingress limits and capacity testing remain hosting
+requirements. No application models, schema, auth contract or deployment settings changed.
+
+New permanent regressions first failed against the parent: ten Python failures (including
+the real OOXML javascript hyperlink), two gateway file-cancellation failures, and stream-close
+failures. The new preview module initially failed to load before implementation.
+
+Verification commands (from repository root unless stated otherwise):
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 backend/venv/bin/python -B -m pytest \
+  tests/test_docx_preview.py tests/test_file_serving.py -q -p no:cacheprovider
+node --test tests/frontend/*.test.cjs
+backend/venv/bin/python -B tests/frontend/run_gateway_security.py
+```
+
+Node is not on this host shell's PATH; verification used the existing Node tool runtime's
+`node:test.run({files})` with child-process isolation. Django commands/settings remain in
+[Disposable verification](#disposable-verification). PostgreSQL requires a separately created
+disposable database; never point those settings at an existing database. The browser fixture
+converts actual generated OOXML, drives the real drawer, and uses CDP mouse input in opaque
+iframe targets. Request-volume measurements use transport-only fixture tabs to exclude
+unrelated React initialization/lifecycle checks; real-tab lifecycle tests remain separate.
+
+macOS/Python 3.14 and Linux/Python 3.12 binary-wheel imports/conversion are verified. The
+desktop specification includes the entire frontend folder, so the new JS is included by
+that rule. PyInstaller is not installed: a frozen build, bundled nh3 extension loading,
+packaged WKWebView and current Safari remain unverified. No packaging files changed.
+
+Approved file inventory (19; four new):
+
+```text
+_app/api.py
+_app/docx_preview.py (new)
+_app/frontend/index.html
+_app/frontend/document-preview.js (new)
+_app/frontend/gateway-session.js
+_app/requirements.txt
+backend/requirements.txt
+backend/core/frontend.py
+backend/gateway/views.py
+backend/gateway/tests.py
+tests/test_docx_preview.py (new)
+tests/test_file_serving.py
+tests/frontend/document-preview.test.cjs (new)
+tests/frontend/gateway-session.test.cjs
+tests/frontend/gateway-security-browser.html
+tests/frontend/serve_gateway_security.py
+tests/frontend/run_gateway_security.py
+docs/GATEWAY.md
+docs/DJANGO_MIGRATION_STATUS.md
+```
+
+Actual final counts and verification limitations are recorded in the current
+[migration status](DJANGO_MIGRATION_STATUS.md). All tests use synthetic/disposable storage;
+no real tracker, existing application database, migration, commit or deployment was used.
+
 ```
 browser ──► Django (sign-in, email code, MFA, sessions)
               │  every /api/* request that is not /api/auth/*, /api/account/*, /api/health
