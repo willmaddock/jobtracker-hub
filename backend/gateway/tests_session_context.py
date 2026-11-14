@@ -415,8 +415,8 @@ class ContextTests(TestCase):
             previous = self.binding
             for username in transitions:
                 self.login(username)
-            for path, body in [('/api/auth/mfa/enroll/begin', {}), ('/api/auth/mfa/enroll/confirm', {'code':code})]:
-                result = self.post(path, body, binding=previous)
+            for url, body in [('/api/auth/mfa/enroll/begin', {}), ('/api/auth/mfa/enroll/confirm', {'code':code})]:
+                result = self.post(url, body, binding=previous)
                 self.assertEqual(result.status_code, 409)
             self.assertEqual(self.client.get('/api/auth/me').json()['username'], transitions[-1])
         self.assertIsNone(MfaDevice.objects.get(user=self.a).confirmed_at)
@@ -463,8 +463,8 @@ class ContextTests(TestCase):
         self.assertIsNone(MfaDevice.objects.get(user=self.a).confirmed_at)
         user, _, _ = make_enrolled('pending-enroll')
         self.login(user.username)
-        for path in ('/api/auth/mfa/enroll/begin','/api/auth/mfa/enroll/confirm'):
-            self.assertEqual(self.post(path, {'code':code}).status_code, 403)
+        for url in ('/api/auth/mfa/enroll/begin','/api/auth/mfa/enroll/confirm'):
+            self.assertEqual(self.post(url, {'code':code}).status_code, 403)
         self.assertEqual(self.state()['p'], 'pending')
         self.assertEqual(self.client.get('/api/auth/me').status_code, 401)
 

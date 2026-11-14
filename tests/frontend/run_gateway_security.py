@@ -1,5 +1,13 @@
 """Repeatable Chrome regressions: synthetic server, profiles, downloads and DB only."""
-import base64, json, os, socket, struct, subprocess, tempfile, time, urllib.request
+import base64
+import json
+import os
+import socket
+import struct
+import subprocess
+import tempfile
+import time
+import urllib.request
 from pathlib import Path
 from urllib.parse import urlsplit
 ROOT=Path(__file__).resolve().parents[2]

@@ -11,7 +11,7 @@ import run_database_validation as harness
 
 class HarnessSafetyTests(unittest.TestCase):
     def setUp(self):
-        self.directory = tempfile.TemporaryDirectory(prefix='jth-pg-', dir='/private/tmp')
+        self.directory = tempfile.TemporaryDirectory(prefix='jth-pg-', dir=harness.VALIDATION_PARENT)
         self.root = Path(self.directory.name)
         for child in ('data', 'socket'):
             (self.root / child).mkdir(mode=0o700)
@@ -47,14 +47,42 @@ class HarnessSafetyTests(unittest.TestCase):
         socket.unlink()
 
     def test_foreign_children_and_names(self):
-        for changes in ({'data':'/private/tmp'}, {'socket':'/tmp'}, {'database':'production'},
-                        {'role':'postgres'}, {'system_id':'bad'}, {'root':'/private/tmp'}):
+        for changes in ({'data':str(harness.VALIDATION_PARENT)}, {'socket':'/tmp'}, {'database':'production'},
+                        {'role':'postgres'}, {'system_id':'bad'}, {'root':str(harness.VALIDATION_PARENT)}):
             self.write(**changes)
             with self.assertRaises(ValueError): harness.load_manifest(self.manifest)
 
     def test_wrong_major(self):
         (self.root/'data'/'PG_VERSION').write_text('18')
         with self.assertRaises(ValueError): harness.load_manifest(self.manifest)
+
+    def test_valid_identity_under_foreign_parent_is_refused(self):
+        # All other ownership/identity fields are valid: only the parent differs.
+        parent = self.root / 'foreign-parent'
+        root = parent / 'jth-pg-foreign'
+        root.mkdir(parents=True, mode=0o700)
+        parent.chmod(0o700)
+        for child in ('data', 'socket'):
+            (root / child).mkdir(mode=0o700)
+        (root / 'data' / 'PG_VERSION').write_text('17\n')
+        run = self.run | {'root':str(root), 'data':str(root/'data'), 'socket':str(root/'socket'),
+                         'role':'jth_foreign', 'database':'test_jth_foreign'}
+        manifest = root / 'manifest.json'
+        manifest.write_text(json.dumps(run)); manifest.chmod(0o600)
+        with self.assertRaisesRegex(ValueError, 'Unexpected validation root'):
+            harness.load_manifest(manifest)
+
+    def test_symlink_manifest_and_root_are_refused(self):
+        alias = self.root / 'alias'
+        alias.symlink_to(self.manifest)
+        with self.assertRaisesRegex(ValueError, 'canonical and owned'):
+            harness.load_manifest(alias)
+        alias.unlink()
+        alias.symlink_to(self.root, target_is_directory=True)
+        self.write(root=str(alias))
+        with self.assertRaisesRegex(ValueError, 'canonical and owned'):
+            harness.load_manifest(self.manifest)
+        alias.unlink()
 
     def actual(self, **changes):
         return json.dumps(dict(data=self.run['data'], socket=self.run['socket'], listen='',

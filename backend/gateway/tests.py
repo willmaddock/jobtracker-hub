@@ -128,15 +128,15 @@ class GatewayProxyTests(TestCase):
 
     def test_document_routes_reject_missing_and_obsolete_context_before_proxy(self):
         paths = ['/api/file?relpath=synthetic.pdf', '/api/preview-docx?relpath=synthetic.docx']
-        for path in paths:
-            self.assertEqual(self.client.get(path).status_code, 409)
+        for url in paths:
+            self.assertEqual(self.client.get(url).status_code, 409)
         binding = self.login()
-        for path in paths:
-            self.assertEqual(self.client.get(path, HTTP_X_JTH_CONTEXT='').status_code, 409)
+        for url in paths:
+            self.assertEqual(self.client.get(url, HTTP_X_JTH_CONTEXT='').status_code, 409)
         other = get_user_model().objects.create_user(username='document-other', password='pw-not-used-12345')
         self.login(other)
-        for path in paths:
-            response = self.client.get(path, HTTP_X_JTH_CONTEXT=binding)
+        for url in paths:
+            response = self.client.get(url, HTTP_X_JTH_CONTEXT=binding)
             self.assertEqual(response.status_code, 409)
             self.assertEqual(response.json()['code'], 'gateway_context_changed')
         self.assertEqual(SEEN, [])

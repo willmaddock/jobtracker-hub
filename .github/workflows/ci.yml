@@ -17,6 +17,7 @@ jobs:
         working-directory: backend
     env:
       DJANGO_SETTINGS_MODULE: config.settings.test_sqlite
+      JTH_GATEWAY: "false"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -27,9 +28,25 @@ jobs:
       - run: pip install -r requirements.txt
       # App names are listed on purpose; see the Tests section of the README.
       - run: python manage.py test accounts applications core documents email_sync postings web
+
+  gateway-tests:
+    name: Gateway tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      DJANGO_SETTINGS_MODULE: config.settings.test_sqlite
+      JTH_GATEWAY: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - run: pip install -r requirements.txt
       - run: python manage.py test gateway
-        env:
-          JTH_GATEWAY: "true"
 
   deploy-check:
     name: Deploy check (prod settings)
@@ -78,8 +95,6 @@ jobs:
   legacy-tests:
     name: Legacy app tests (pytest)
     runs-on: ubuntu-latest
-    # Informational: the status document records 6 known failures. Delete this line once triaged.
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -88,6 +103,9 @@ jobs:
           cache: pip
           cache-dependency-path: |
             _app/requirements.txt
+            backend/requirements.txt
             requirements-dev.txt
-      - run: pip install -r _app/requirements.txt -r requirements-dev.txt
+      # pytest also collects tests/backend: its mocked safety tests import Django
+      # and the PostgreSQL backend, without contacting/provisioning a database.
+      - run: pip install -r _app/requirements.txt -r backend/requirements.txt -r requirements-dev.txt
       - run: pytest -q

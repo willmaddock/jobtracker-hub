@@ -17,7 +17,9 @@ boto3==1.35.36
 # Phase 6 -- test-only. postings/tests/test_extraction.py reads the
 # real fixture PDFs the same way _app/requirements.txt's pypdf pin
 # always has (see that file); not needed at runtime.
-pypdf>=4.0
+# Compatibility pin: 7.1.0 changes fixture text spacing. Review against the full
+# extraction acceptance suite before upgrading; keep in sync with _app/requirements.txt.
+pypdf==7.0.1
 
 # Phase 9 -- Gmail OAuth (email_sync/oauth.py, email_sync/gmail_provider.py).
 # google-api-python-client is the Gmail v1 client gmail_provider.py's

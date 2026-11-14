@@ -17,6 +17,9 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
 MANIFEST_ENV = "JTH_POSTGRES_MANIFEST"
+# Fixed short POSIX parent: canonical /private/tmp on macOS and /tmp on Ubuntu.
+# Do not let TMPDIR redirect destructive validation/cleanup authority elsewhere.
+VALIDATION_PARENT = Path('/tmp').resolve()
 
 
 def private_path(path, *, directory=True):
@@ -40,7 +43,7 @@ def load_manifest(path=None):
     if set(run) != {"root", "data", "socket", "role", "database", "system_id", "bin"}:
         raise ValueError("Invalid validation manifest")
     root = private_path(run["root"])
-    if root.parent != Path("/private/tmp") or not re.fullmatch(r"jth-pg-[a-z0-9_]+", root.name):
+    if root.parent != VALIDATION_PARENT or not re.fullmatch(r"jth-pg-[a-z0-9_]+", root.name):
         raise ValueError("Unexpected validation root")
     if path != root / "manifest.json":
         raise ValueError("Manifest must belong to validation root")
@@ -200,7 +203,7 @@ def main():
     report = Path(args.report_dir).resolve() if args.report_dir else Path(tempfile.mkdtemp(prefix="jth-pg-evidence-"))
     report.mkdir(exist_ok=True)
     print(f"Evidence directory: {report}\n{version}; psycopg {driver}", flush=True)
-    root = Path(tempfile.mkdtemp(prefix="jth-pg-", dir="/private/tmp"))
+    root = Path(tempfile.mkdtemp(prefix="jth-pg-", dir=VALIDATION_PARENT))
     token = root.name.removeprefix("jth-pg-")
     data, socket = root / "data", root / "socket"
     socket.mkdir(mode=0o700)

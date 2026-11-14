@@ -1,5 +1,117 @@
 # Django migration: current status
 
+## CI portability and reproducibility correction — 2026-11-13
+
+Prepared on `feature/gateway` from `aa018be4ed3eeb7d27e98df03d54a3ce0a1463f5`.
+Both security commits are preserved; local `feature/django-start-fresh` remains at that
+DOCX checkpoint. Only the approved nine CI/dependency/test/harness/documentation files
+changed. No staging, commit, push, branch switch, application models/migrations, auth or
+DOCX behavior changes are included. The older checkpoint sections below are historical.
+
+Actual GitHub Actions run `43546597244` identified:
+
+- Ruff 0.17.5: three F402 imported-`path` shadowing errors in gateway tests and one
+  E401 combined import in the Chrome runner. Renamed local variables/split imports;
+  no rule changes or suppressions.
+- Ordinary Django: 1,533 run, two Indeed location-spacing failures, 13 skips. CI resolved
+  pypdf 7.1.0 from `>=4.0`; local passing runs used 7.0.1. The gateway step was skipped
+  after the ordinary suite failed, so that run supplied no gateway verification.
+- Legacy pytest: 388 passed/16 failed. Fourteen safety tests failed in shared setup
+  because `/private/tmp` does not exist on Ubuntu; two Indeed failures matched Django.
+  Once setup succeeds, several safety tests also require Django/PostgreSQL imports absent
+  from the legacy-only install. No missing DOCX dependencies or repository fixtures were
+  reported; Mammoth 1.13.0 and nh3 0.3.7 installed successfully.
+
+Controlled comparison used separate temporary pypdf package directories, the same Python
+3.14 interpreter, unchanged PDF fixtures and both extraction implementations:
+
+| pypdf | Digest jobs / GEO location | Single jobs / Mytech location | Legacy extraction tests | Django Indeed tests |
+|---|---|---|---|---|
+| 7.0.1 | 19 / `Boulder , CO` | 1 / `Denver , CO 80281` | 31 passed | Five passed |
+| 7.1.0 | 19 / `Boulder, CO` | 1 / `Denver, CO 80281` | 29 passed, same two failures | Three passed, same two failures |
+
+Both runtime manifests now pin `pypdf==7.0.1` as an explicitly documented compatibility
+constraint requiring future review against the complete extraction suite. No fixture,
+parser or assertion changed; this pin is not permission to defer future security updates.
+
+The safety harness and fixtures use the fixed canonical `Path('/tmp').resolve()` parent:
+`/private/tmp` on macOS, `/tmp` on Ubuntu. TMPDIR cannot redirect cleanup authority. Exact
+private-root/child names, owning UID, canonical/no-symlink paths, permissions, cluster
+identity, existing-database refusal and no-autoclobber/no-clone safeguards remain intact.
+All 14 original safety tests remain; two new negative tests reject foreign parents and
+symlink manifests/roots. The actual Homebrew PostgreSQL provisioning command remains
+restricted to its previously approved runtime; this correction does not generalize that
+command into an Ubuntu database provisioner. Linux gateway PostgreSQL tests use disposable
+containers independently of that command.
+
+CI ordinary mode explicitly sets `JTH_GATEWAY=false`; a separate gateway job sets it true
+and has no dependency on ordinary-suite success. The legacy job installs all three existing
+requirement manifests, includes backend requirements in the pip cache key, and still runs
+unfiltered `pytest -q`. Its `continue-on-error` exception was removed only after all 406
+collected legacy tests passed on fresh Ubuntu (404 existing plus two safety regressions).
+
+Verification commands, with only temporary databases/state/documents:
+
+```sh
+# Repository root, with the declared dependencies installed:
+python -m pip install -r _app/requirements.txt -r backend/requirements.txt -r requirements-dev.txt
+python -m pip check
+python -m ruff check --no-cache .
+PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -q -p no:cacheprovider
+
+# backend/; this settings module uses disposable SQLite/media, never db.sqlite3:
+DJANGO_SETTINGS_MODULE=config.settings.test_sqlite JTH_GATEWAY=false \
+  python -B manage.py test accounts applications core documents email_sync postings web --noinput
+DJANGO_SETTINGS_MODULE=config.settings.test_sqlite JTH_GATEWAY=true \
+  python -B manage.py test gateway --noinput
+
+# Repository root:
+node --test tests/frontend/*.test.cjs
+backend/venv/bin/python -B tests/frontend/run_gateway_security.py
+```
+
+On macOS, ordinary shell pytest must also isolate native home-directory/Trash effects:
+the first sandboxed host run had 401 passes/five failures (two undiscoverable-libpq imports,
+two blocked packaged-directory imports and one blocked native Trash action). No permission
+escalation was granted for those filesystem tests. After exposing the installed Homebrew
+libpq via `DYLD_LIBRARY_PATH`, all 16 safety tests passed; the complete legacy collection
+was verified inside disposable Ubuntu instead of granting access to the real home/Trash.
+No real application database/documents were read or changed.
+
+Fresh verification of current source:
+
+- Full Ruff: **passed**, no exclusions/rules changed. Workflow structure check confirms
+  independent jobs, explicit gateway modes, full test discovery and blocking failures.
+- Fresh Ubuntu 24.04/ARM64/Python 3.12.3: declared dependencies install successfully;
+  `pip check` passes; Ruff passes; **406 legacy tests passed**, none skipped. Container
+  setup installs Python/venv, certificates and libpq5. Only a read-only tracked-source
+  snapshot was mounted; actual `.env`, virtual environments and application DBs were absent.
+  Ordinary Django: **1,533 run, 1,520 passed, 13 PostgreSQL-only skips**. Independent gateway:
+  **109 run, 107 passed, two PostgreSQL-only skips**. No final suite failures; container
+  and its installed test environment were removed automatically after successful completion.
+- macOS/Python 3.14.7 ordinary Django: **1,533 run, 1,520 passed, 13 PostgreSQL-only skips**;
+  independent gateway SQLite: **109 run, 107 passed, two PostgreSQL-only skips**.
+- PostgreSQL 17/Python 3.12.16 gateway: **109 passed**, zero skips/failures; current source
+  mounted read-only in disposable containers, removed afterward. Invocation inside the
+  owned container uses `DJANGO_SETTINGS_MODULE=jth_docx_pg_settings JTH_GATEWAY=true
+  python -B manage.py test gateway --noinput`; that settings module targets only its newly
+  created temporary database, not an application database.
+- Frontend: **116 passed** via the existing Node tool runtime's isolated `node:test.run`.
+- Chrome: **83 passed**, real isolated tabs/profiles, including authentication lineage,
+  MFA enrollment/recovery, DOCX script/sandbox/CSP and actual mouse clicks, original file
+  integrity, PDF/text rendering and canceled/late downloads. No authentication/DOCX code
+  changed in this correction.
+- Ubuntu `check --deploy`: **passed**, with the existing deferred `security.W004` HSTS
+  warning. Legacy tests retain one existing Starlette/httpx deprecation warning; malformed
+  PDF fixtures emit expected reader warnings, not test failures.
+
+The Ubuntu environment is ARM64/Python 3.12.3; GitHub used x86_64/Python 3.12.16. Exact 3.12.16 PostgreSQL coverage is
+separate from the Ubuntu install/suite reproduction. Hosted runner orchestration, caches,
+action execution and remote status still require a new authorized push/run; local results
+do not establish that GitHub Actions is green. No real gateway instance or Start Fresh work
+was started. Safari, packaged desktop, physical passkeys and large-document resource limits
+remain the previously documented release gaps.
+
 ## DOCX preview containment and abandoned-download cancellation — 2026-11-13
 
 Implemented locally on `feature/gateway` after committed checkpoint
