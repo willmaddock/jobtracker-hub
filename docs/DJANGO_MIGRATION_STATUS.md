@@ -1,5 +1,88 @@
 # Django migration: current status
 
+## Reviewed gateway security checkpoint — 2026-11-13
+
+This checkpoint was prepared and reviewed on `feature/gateway` from parent `9f25d66`.
+The owner authorized one local commit named
+`fix(gateway): secure session isolation and Django form compatibility`; Git history records
+the resulting commit. No push, merge, branch switch or deployment is part of this checkpoint.
+Django templates remain the primary hosted interface; the legacy gateway is the fallback.
+Older checkpoints below are historical evidence, not fresh verification.
+
+Protocol v2 retains the approved stable lineage cookie and additive `GatewaySessionLineage`
+authority. First successful server commit wins; obsolete competing or delayed cookies cannot
+restore prior identities. Session response-save and lineage update retain the same default
+connection/transaction, including native auth/logout and legitimate key rotation.
+
+Traditional Django POST forms now carry `_jth_context` plus ordinary CSRF. Only explicit web
+form routes and default admin routes accept that transport; APIs remain header-only. The
+same signed principal/phase/generation/lineage snapshot is checked against the locked actual
+session before the view. Missing/forged/expired/duplicate/conflicting/stale contexts fail
+closed without automatic replay. First HTML visits reach sign-in; obsolete cookies still
+require explicit recovery. Ten small admin overrides preserve upstream blocks/permissions;
+non-gateway deployments keep original admin templates and native behavior.
+
+Multipart parsing uses Django's bounded parser before session load or lineage locking. An
+unlocked hint only rejects obvious obsolete requests; the real authorization is repeated
+under the lock afterward. Tests switch identity during parsing and verify rejection, file
+integrity, temporary-file cleanup and rollback of native writes after finalization failure.
+The context field is marked sensitive for production error reporting; no value is logged.
+
+Enrollment confirmation now has a dedicated completion type, distinct from pending-factor
+sign-in. It checks the actual authenticated principal and exact phase/context snapshot for
+the already permitted enrollment/verified/mfa phases. Optional MFA setup and re-enrollment
+after an authorized reset now work from verified sessions, retaining generation and rotating
+the pinned session key. Pending identity/expiry checks, CSRF, ownership and obsolete-generation
+rejection remain unchanged. Two permanent regressions failed before correction and now pass;
+five additional server regressions challenge principal, phase, stale contexts and ordinary mode.
+This narrow correction changes seven existing authentication/test/documentation files only.
+
+Fresh disposable-data verification:
+
+- Full labelled Django (`accounts applications documents email_sync postings core web gateway`),
+  Python 3.14.7/SQLite: **1,638 run; 1,623 passed; 15 skipped; zero failures**.
+- Gateway SQLite: **105 run; 103 passed; two PostgreSQL-only skips**.
+- Gateway PostgreSQL 17/Python 3.12.16: **105 passed; zero skips/failures**, using existing images
+  and temporary container/database storage. Both API and native-admin first-commit races and
+  session/lineage transaction failure tests passed. Disposable test containers were removed.
+- Focused ordinary MFA/passkeys plus gateway: **147 run; 145 passed; two skips; zero failures**.
+- Node frontend: **103 passed; zero failures** (47 gateway, 54 API client, two workspace context),
+  including actual desktop caching helpers and gateway-disabled transport behavior.
+- Chrome: **68 passed; zero failures** with two isolated profiles and real top-level tabs.
+  Covers prior cache/cookie/logout races, MFA enrollment/recovery, pending actions, PDF/XHR,
+  native Pipeline/Kanban/status/follow-up/reset forms, CSRF rejection, stale forms with fresh
+  CSRF, multipart integrity, admin validation/login/edit/password/logout and real downloads.
+  Direct-read measurements exclude unrelated test-window lifecycle/poll traffic: one check
+  per read, zero me preflights; three tabs/thirty reads/thirty checks. Normal lifecycle and
+  polling are exercised separately. The three initial form/entry regressions failed before
+  correction. Verified-user optional enrollment and simulated operator-reset re-enrollment
+  now complete through the real Security UI, verify actual principal/enrolled/verified state,
+  preserve context and exercise a new recovery code at subsequent pending sign-in. The fixture
+  unwinds its disposable DB/media directory on termination.
+
+An initial mixed authentication-suite invocation used the wrong global gateway setting
+(41 failures/one error in ordinary-Django fixtures). The corrected default with explicit
+gateway opt-in passed; no server enforcement was loosened for the tests. Exact isolated
+commands and the required `JTH_GATEWAY=false` versus `true` defaults are documented in
+[GATEWAY.md](GATEWAY.md#disposable-verification).
+
+The full SQLite skips include thirteen existing non-gateway PostgreSQL tests and the two new
+gateway races (both passed on PostgreSQL). Safari, packaged desktop and physical passkeys
+remain unverified; Python 3.12 covers gateway only. Gateway passkey tests mock authenticator
+cryptographic results. Production capacity, ingress/upload/read limits, rate limits and
+expired-row scheduling still require hosting validation. Already-rendered native HTML is not
+actively erased in other tabs; no-store and authoritative stale-form rejection remain in
+force. New native POST routes must explicitly register their transport. DOCX containment,
+large document blob memory use and drawer-close cancellation remain separate unresolved work.
+
+See [GATEWAY.md](GATEWAY.md) for the contract, each admin override's purpose, exact 25-file
+compatibility scope and complete uncommitted file inventory. No new schema/dependency change
+was introduced in this slice; the prior lineage migration was applied only to disposable test
+databases. No real application DB/documents or deployment changed, and no existing database migration
+was authorized or applied. The reproduced MFA blocker is resolved. Final scope, integrity and
+verification checks gate the authorized local commit. This is not hosting readiness. Next: DOCX preview containment, then
+Django-native Start Fresh with persistent idempotency (still unimplemented).
+
 Maintained checkpoint: 2026-10-07. Current working branch: `feature/gateway`, which contains
 `django-migration` (the checkpoint below was recorded on `django-migration`);
 current implementation checkpoint `dbaa85926e35466dd6be7b8e02ff625828bc73f0`

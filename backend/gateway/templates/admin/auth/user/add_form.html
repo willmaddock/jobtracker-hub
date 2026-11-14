@@ -1,0 +1,4 @@
+{% extends "admin/auth/user/add_form.html" %}
+{% load gateway_forms %}
+{# User add overrides form_top without block.super. #}
+{% block form_top %}{% gateway_context %}{{ block.super }}{% endblock %}

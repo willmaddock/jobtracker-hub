@@ -1,0 +1,227 @@
+<!doctype html><meta charset="utf-8"><title>Gateway security regressions</title>
+<h1>Disposable gateway browser tests</h1><pre id="results">Running…</pre>
+<script>
+const results=[],tabs=new Set(),HEADER='X-JTH-Context';let binding;
+const pause=ms=>new Promise(r=>setTimeout(r,ms));
+function assert(name,condition,detail){results.push({name,passed:!!condition,...(detail?{detail}: {})});document.querySelector('#results').textContent=JSON.stringify(results,null,2);if(!condition)throw Error(name);}
+async function wait(check,label){const deadline=Date.now()+20000;while(Date.now()<deadline){try{if(await check())return;}catch(_){}await pause(50);}throw Error('Timed out: '+label);}
+const root=t=>t.document?.querySelector('#root')?.textContent||'';
+function tab(){const t=window.open('/','_blank');if(!t)throw Error('Top-level tab blocked');tabs.add(t);return t;}
+function remove(t){t.close();tabs.delete(t);}
+async function config(value={}){await fetch('/__test/config',{method:'POST',body:JSON.stringify(value)});}
+async function stats(){return (await (await fetch('/__test/seen')).json());}
+async function bootstrap(){const html=await (await fetch('/',{cache:'no-store'})).text();binding=JSON.parse(html.match(/window.JTH_GATEWAY_PAGE = (\{.*?\});/)[1]).binding;}
+async function csrf(){return (await (await fetch('/api/auth/csrf',{cache:'no-store'})).json()).csrfToken;}
+async function action(path,body={},expected=binding){const r=await fetch(path,{method:'POST',headers:{[HEADER]:expected,'Content-Type':'application/json','X-CSRFToken':await csrf()},body:JSON.stringify(body)});if(r.ok&&r.headers.get(HEADER))binding=r.headers.get(HEADER);return r;}
+async function login(actor){const r=await action('/api/auth/login',{username:'audit'+actor,password:'synthetic-test-password'});if(!r.ok)throw Error('Fixture login failed '+r.status+' '+await r.text());await r.text();}
+async function logout(){const r=await action('/api/auth/logout');if(!r.ok)throw Error('Fixture logout '+r.status);await r.text();}
+function signal(){const c=new BroadcastChannel('jth-session-change');c.postMessage({actor:'forged',authenticated:true});c.close();}
+async function loaded(t,label){await wait(()=>root(t).includes('PRIVATE_'+label),'tab '+label+' loaded');}
+async function invalidate(t,label){await wait(()=>t.jthGatewaySession?.ended&&!root(t).includes('PRIVATE_'),'invalidated '+label);}
+(async()=>{try{
+localStorage.clear();sessionStorage.clear();await config();await bootstrap();await login('A');let a=tab();await loaded(a,'A');
+assert('Real top-level A tab displays authenticated A data',a.top===a&&root(a).includes('NOTE_A'));
+assert('Gateway never persists application data',localStorage.getItem('jth_cache_v1')===null);
+localStorage.setItem('jth_cache_v1',JSON.stringify({statusInfo:{workspace:{name:'OLD_PRIVATE_A'},index_built:true},apps:[{company:'PRIVATE_A',notes:'NOTE_A'}]}));
+await logout();await login('B');await config({hold_apps:'B'});let b=tab();await wait(()=>b.jthGatewaySession,'B guard');
+await wait(async()=> (await stats()).seen.some(x=>x.actor==='B'&&x.path==='/api/applications'),'B held request');
+assert('Pre-existing sensitive cache removed before B data arrives',localStorage.getItem('jth_cache_v1')===null&&!root(b).includes('PRIVATE_A'));
+await config({fail_apps:'B'});const failed=await b.jthGatewaySession.fetch('/api/applications');await failed.json();assert('Completed failed B response does not expose A',failed.status===503&&!root(b).includes('PRIVATE_A'));
+remove(b);b=tab();await wait(()=>b.jthGatewaySession,'B reload');const failedReload=await b.jthGatewaySession.fetch('/api/applications');await failedReload.json();assert('Reload with failed reads stays isolated',!root(b).includes('PRIVATE_A'));
+await config();remove(b);b=tab();await loaded(b,'B');assert('Successful B read contains only B',!root(b).includes('PRIVATE_A')&&root(b).includes('NOTE_B'));
+signal();await invalidate(a,'A across tabs');await b.jthGatewaySession.verify();assert('Cross-tab signals invalidate A and cannot impersonate B',root(b).includes('PRIVATE_B')&&!b.jthGatewaySession.ended);remove(a);remove(b);
+// Actual logout/CSRF race: delay the old page's CSRF response, switch cookies,
+// then submit logout with that freshly obtained token and the old signed context.
+await logout();await login('A');a=tab();await loaded(a,'A');const old=a.JTH_GATEWAY_PAGE.binding;
+const beforeRaceCsrf=await csrf();
+await config({hold_csrf:true});const start=(await stats()).requests.length;
+const oldLogout=a.jthGatewaySession.logout();await wait(async()=> (await stats()).requests.slice(start).some(x=>x.path==='/api/auth/csrf'),'old logout CSRF started');
+const switched=await fetch('/api/auth/login',{method:'POST',headers:{[HEADER]:binding,'X-CSRFToken':beforeRaceCsrf,'Content-Type':'application/json'},body:JSON.stringify({username:'auditB',password:'synthetic-test-password'})});
+assert('B login completes while old A CSRF retrieval is stalled',switched.ok);binding=switched.headers.get(HEADER);await switched.text();await config();await oldLogout;
+let r=await action('/api/auth/logout',{},old);assert('Actual server logout rejects A context with B CSRF',r.status===409);
+r=await fetch('/api/auth/me',{headers:{[HEADER]:binding}});assert('B remains authenticated after raced old logout',(await r.json()).username==='auditB');assert('Old page clears itself after unconfirmed logout',!root(a).includes('PRIVATE_A'));remove(a);
+// Same account and A -> B -> A invalidate old generations even with matching IDs.
+await logout();await login('A');a=tab();await loaded(a,'A');const firstA=a.JTH_GATEWAY_PAGE.binding;await logout();await login('A');
+r=await fetch('/api/gateway/context',{headers:{[HEADER]:firstA}});assert('Same-account logout/relogin rejects old generation',r.status===409);signal();await invalidate(a,'same account');remove(a);
+a=tab();await loaded(a,'A');await login('B');await login('A');r=await action('/api/auth/logout',{},a.JTH_GATEWAY_PAGE.binding);assert('A B A does not resurrect first A context',r.status===409);signal();await invalidate(a,'A B A');remove(a);
+// Hold actual Set-Cookie headers after B commits, before the browser receives them.
+await logout();await login('A');const oldA=binding;await config({hold_headers:true});
+const markerStart=(await stats()).requests.length;
+const heldLogin=fetch('/api/auth/login',{method:'POST',headers:{[HEADER]:oldA,'X-CSRFToken':await csrf(),
+'Content-Type':'application/json','X-JTH-Test-Hold':'auth-header'},body:JSON.stringify({username:'auditB',password:'synthetic-test-password'})});
+await wait(async()=> (await stats()).requests.slice(markerStart).some(x=>x.marker==='held-auth-header'&&x.status===200),'B committed with headers held');
+r=await action('/api/auth/login',{username:'auditA',password:'synthetic-test-password'},oldA);
+assert('First committed transition wins despite withheld response headers',r.status===409&&(await r.json()).code==='gateway_session_obsolete');
+async function explicitRestart(){const page=await fetch('/',{cache:'no-store'});if(page.status!==409)throw Error('Recovery page missing');const html=await page.text();const recovery=JSON.parse(html.match(/window.JTH_GATEWAY_RECOVERY = (\{.*?\});/)[1]);const response=await fetch('/api/gateway/session/restart',{method:'POST',headers:{'X-CSRFToken':recovery.csrf,'X-JTH-Recovery':recovery.challenge}});if(response.status!==204)throw Error('Restart failed '+response.status);binding=response.headers.get(HEADER);}
+await explicitRestart();await login('A');const newA=binding;await config();const released=await heldLogin;const oldB=released.headers.get(HEADER);await released.text();
+r=await fetch('/api/auth/me',{headers:{[HEADER]:oldB}});assert('Delayed B cookie cannot authenticate after explicit restart and new A login',r.status===409&&(await r.json()).code==='gateway_session_obsolete');
+r=await fetch('/api/auth/me',{headers:{[HEADER]:newA}});assert('Obsolete cookie also rejects current A context rather than selecting A or B',r.status===409&&(await r.json()).code==='gateway_session_obsolete');
+const recoveryTab=tab();await wait(()=>recoveryTab.document.getElementById('restart'),'explicit recovery button');recoveryTab.document.getElementById('restart').click();
+await wait(()=>recoveryTab.JTH_GATEWAY_PAGE?.phase==='anonymous','browser recovery completed');binding=recoveryTab.JTH_GATEWAY_PAGE.binding;
+assert('Explicit recovery returns anonymous state without adopting held identity',binding&&recoveryTab.JTH_GATEWAY_PAGE.actor===null);remove(recoveryTab);await login('A');
+// A completed server-side login with a truncated body must retire the old UI context.
+await logout();const brokenTab=tab();await wait(()=>brokenTab.jthGatewaySession?.context.phase==='anonymous','anonymous body-failure tab');
+const beforeBroken=brokenTab.jthGatewaySession.context.binding;
+const brokenResponse=await brokenTab.jthGatewaySession.fetch('/api/auth/login',{method:'POST',headers:{'X-CSRFToken':await csrf(),'Content-Type':'application/json','X-JTH-Test-Break-Body':'yes'},body:JSON.stringify({username:'auditA',password:'synthetic-test-password'})});
+const bodyRejected=await brokenResponse.json().then(()=>false,()=>true);const afterBroken=brokenResponse.headers.get(HEADER);
+r=await fetch('/api/auth/me',{headers:{[HEADER]:afterBroken}});const actualBroken=await r.json();
+assert('Failed authentication body invalidates frontend although server really committed A',bodyRejected&&brokenTab.jthGatewaySession.ended&&r.status===200&&actualBroken.username==='auditA'&&afterBroken!==beforeBroken);
+binding=afterBroken;remove(brokenTab);
+// Two real simultaneous native logins use the same cookie and expected context.
+await logout(); // both competing sign-ins now begin from the same anonymous cookie
+const original=binding,token=await csrf();const opts={method:'POST',headers:{[HEADER]:original,'X-CSRFToken':token,'Content-Type':'application/json'},body:JSON.stringify({username:'auditA',password:'synthetic-test-password'})};
+const competing=await Promise.all([fetch('/api/auth/login',opts),fetch('/api/auth/login',opts)]);assert('Concurrent native logins allow one transition only',competing.map(x=>x.status).sort().join(',')==='200,409');binding=competing.find(x=>x.ok).headers.get(HEADER);r=await fetch('/api/gateway/context',{headers:{[HEADER]:binding}});assert('Rejected stale login cannot clear or replace winner cookie',r.status===204);
+// A delayed native response body must not cross a later cookie transition.
+a=tab();await loaded(a,'A');await config({hold_native:true});const nativeStart=(await stats()).requests.length;
+const nativeResponse=await a.jthGatewaySession.fetch('/api/auth/me');
+const lateNative=nativeResponse.json().then(()=>false,()=>true);
+await wait(async()=> (await stats()).requests.slice(nativeStart).some(x=>x.path==='/api/auth/me'),'native request dispatched');
+await login('B');await config();assert('Native route body arriving after identity replacement is rejected',await lateNative);await invalidate(a,'native response');remove(a);
+// Delayed tracker response and queued operations.
+await logout();await login('A');a=tab();await loaded(a,'A');await config({hold_apps:'A'});let before=(await stats()).seen.length;
+const late=a.jthGatewaySession.fetch('/api/applications').then(x=>x.json()).then(()=>false,()=>true);
+await wait(async()=> (await stats()).seen.slice(before).some(x=>x.actor==='A'&&x.path==='/api/applications'),'held A tracker read');await logout();await login('B');await config();assert('Delayed A tracker response is rejected under B',await late);await invalidate(a,'late tracker');assert('Old queued actions cannot execute',await a.jthGatewaySession.fetch('/api/applications/new',{method:'POST'}).then(()=>false,()=>true));remove(a);
+// Failures, recovery, expiry, stalled authoritative checks.
+b=tab();await loaded(b,'B');await config({fail_logout:true});await b.jthGatewaySession.logout();assert('Failed logout clears sensitive UI and reports uncertainty',!root(b).includes('PRIVATE_B')&&root(b).includes('could not be confirmed'));await config();remove(b);b=tab();await loaded(b,'B');assert('Fresh reload recovers after failed logout',root(b).includes('NOTE_B'));
+const portal=b.document.createElement('div');portal.textContent='SYNTHETIC_PRIVATE_PORTAL';b.document.body.append(portal);await config({fail_context:true});b.dispatchEvent(new Event('focus'));assert('Revalidation conceals portal content outside the React root',b.getComputedStyle(portal).visibility==='hidden');await invalidate(b,'failed verification');assert('Failed authoritative context check clears data',root(b).includes('could not be verified'));assert('Ended sessions cannot expose residual portal content',b.getComputedStyle(portal).display==='none');portal.remove();await config();remove(b);
+b=tab();await loaded(b,'B');await config({hold_context:true});const timeoutStart=performance.now();await b.jthGatewaySession.verify().catch(()=>{});assert('Stalled check aborts within bounded five second deadline',b.jthGatewaySession.ended&&performance.now()-timeoutStart<6500);await config();remove(b);
+b=tab();await loaded(b,'B');await logout();b.dispatchEvent(new Event('focus'));await invalidate(b,'expired cookie');assert('Session expiration invalidates cached visible state',!root(b).includes('PRIVATE_B'));remove(b);
+// Uploads and optimistic Kanban use the same context boundary.
+await login('A');a=tab();await loaded(a,'A');let upload=await a.jthGatewaySession.upload('/api/applications/1/documents',new a.FormData());assert('Real multipart XHR remains compatible',Array.isArray(upload));
+await config({hold_write:'A'});before=(await stats()).seen.length;const lateUpload=a.jthGatewaySession.upload('/api/applications/1/documents',new a.FormData()).then(()=>false,()=>true);
+await wait(async()=> (await stats()).seen.slice(before).some(x=>x.method==='POST'),'XHR in flight');await logout();await login('B');await config();assert('Late multipart response is rejected after replacement',await lateUpload);remove(a);
+await logout();await login('A');a=tab();await loaded(a,'A');[...a.document.querySelectorAll('button')].find(x=>x.textContent.startsWith('Kanban')).click();await wait(()=>a.document.querySelector('.kanban-move'),'Kanban');
+await config({hold_write:'A'});before=(await stats()).seen.length;const select=a.document.querySelector('.kanban-move');select.value='interviewing';select.dispatchEvent(new a.Event('change',{bubbles:true}));await wait(()=>a.document.querySelector('.kanban-card.optimistic'),'optimistic UI');assert('Existing optimistic Kanban interaction remains functional',true);
+await wait(async()=> (await stats()).seen.slice(before).some(x=>x.path.endsWith('/override')),'Kanban write');await logout();await login('B');signal();await invalidate(a,'optimistic invalidation');await config({fail_write:'A'});await wait(async()=> (await stats()).seen.slice(before).some(x=>x.path.endsWith('/override')&&x.complete&&x.response_status===503),'late failed Kanban write completed');assert('Pending optimistic callbacks cannot revive an ended session',a.jthGatewaySession.ended&&!root(a).includes('PRIVATE_A'));remove(a);await config();
+// Authenticated document transport never exposes a signed context in a URL.
+b=tab();await loaded(b,'B');const object=await b.jthGatewaySession.file('/api/file?relpath=synthetic.pdf');const pdf=await (await b.fetch(object)).text();assert('Authenticated PDF fetch produces a usable blob URL',object.startsWith('blob:')&&pdf.startsWith('%PDF-1.4'));b.jthGatewaySession.release(object);
+// Document authentication failures and cancellation have distinct recovery semantics.
+const documentTab=tab();await loaded(documentTab,'B');const documentBinding=documentTab.jthGatewaySession.context.binding;
+await config({hold_file:'B'});const fileStart=(await stats()).seen.length;const cancelFile=new documentTab.AbortController();
+const canceled=documentTab.jthGatewaySession.fetch('/api/file?relpath=canceled.pdf',{signal:cancelFile.signal}).then(x=>x.blob()).then(()=>false,()=>true);
+await wait(async()=> (await stats()).seen.slice(fileStart).some(x=>x.path.startsWith('/api/file')),'cancellable file dispatched');cancelFile.abort();
+const wasCanceled=await canceled;await config();r=await fetch('/api/auth/me',{headers:{[HEADER]:documentBinding}});let documentIdentity=await r.json();
+assert('Canceled document request preserves verified B identity without changing context',wasCanceled&&!documentTab.jthGatewaySession.ended&&r.status===200&&documentIdentity.username==='auditB'&&documentTab.jthGatewaySession.context.binding===documentBinding);
+await config({file401:'B'});const rejectedDocument=await documentTab.jthGatewaySession.file('/api/file?relpath=unauthorized.pdf').then(()=>false,()=>true);
+r=await fetch('/api/auth/me',{headers:{[HEADER]:documentBinding}});documentIdentity=await r.json();
+assert('Actual document 401 clears frontend even though Django still verifies B',rejectedDocument&&documentTab.jthGatewaySession.ended&&r.status===200&&documentIdentity.username==='auditB');await config();remove(documentTab);
+// Attribute request volume to explicit reads, pausing unrelated test-window lifecycle events.
+// Normal lifecycle/polling behavior is exercised above and in the deterministic Node suite.
+function quietMeasurement(t){
+ const stop=e=>e.stopImmediatePropagation();t.addEventListener('focus',stop,true);t.document.addEventListener('visibilitychange',stop,true);
+ const own=Object.getOwnPropertyDescriptor(t.document,'visibilityState');Object.defineProperty(t.document,'visibilityState',{configurable:true,get:()=> 'hidden'});
+ return()=>{t.removeEventListener('focus',stop,true);t.document.removeEventListener('visibilitychange',stop,true);if(own)Object.defineProperty(t.document,'visibilityState',own);else delete t.document.visibilityState;};
+}
+const resumeB=quietMeasurement(b);
+// Measure direct protected reads, excluding app initialization and focus events.
+await b.jthGatewaySession.verify();let baseline=(await stats()).requests.length;await (await b.jthGatewaySession.fetch('/api/applications')).json();let measured=(await stats()).requests.slice(baseline).filter(x=>x.path.startsWith('/api/'));
+assert('Normal read uses no me preflight and one completion check',measured.filter(x=>x.path==='/api/auth/me').length===0&&measured.filter(x=>x.path==='/api/gateway/context').length===1,measured);
+const second=tab();await loaded(second,'B');const resumeSecond=quietMeasurement(second);await Promise.all([b.jthGatewaySession.verify(),second.jthGatewaySession.verify()]);baseline=(await stats()).requests.length;
+await Promise.all([b,second].map(t=>t.jthGatewaySession.fetch('/api/applications').then(x=>x.json())));measured=(await stats()).requests.slice(baseline).filter(x=>x.path.startsWith('/api/'));
+assert('Two top-level tabs use two checks for two independent reads',measured.filter(x=>x.path==='/api/auth/me').length===0&&measured.filter(x=>x.path==='/api/gateway/context').length===2,measured);
+// Bounded, real top-level multi-tab load: completion checks may coalesce but never fan out.
+const loadTab=tab();await loaded(loadTab,'B');const resumeLoad=quietMeasurement(loadTab);const loadTabs=[b,second,loadTab];
+await Promise.all(loadTabs.map(t=>t.jthGatewaySession.verify()));baseline=(await stats()).requests.length;
+const loadResults=await Promise.all(loadTabs.map(async t=>{for(let round=0;round<5;round++){
+const values=await Promise.all([1,2].map(()=>t.jthGatewaySession.fetch('/api/applications').then(x=>x.json())));
+if(!values.every(v=>v[0].company==='PRIVATE_B'))return false;}return !t.jthGatewaySession.ended;}));
+measured=(await stats()).requests.slice(baseline).filter(x=>x.path.startsWith('/api/'));
+assert('Three top-level tabs complete thirty protected reads with bounded authentication volume',loadResults.every(Boolean)&&measured.filter(x=>x.path==='/api/applications').length===30&&measured.filter(x=>x.path==='/api/gateway/context').length<=30&&measured.filter(x=>x.path==='/api/auth/me').length===0,{reads:30,checks:measured.filter(x=>x.path==='/api/gateway/context').length,tabs:3});resumeLoad();remove(loadTab);resumeB();resumeSecond();await Promise.all([b.jthGatewaySession.verify(),second.jthGatewaySession.verify()]);
+// Exercise the actual drawer and download link, beyond the transport helper.
+await wait(()=>b.document.querySelector('[aria-label="View inline"]'),'document control');b.document.querySelector('[aria-label="View inline"]').click();
+await wait(()=>b.document.querySelector('.viewer-frame')?.getAttribute('src')?.startsWith('blob:'),'PDF drawer');
+const download=b.document.querySelector('.viewer-header a[download]');assert('Actual PDF drawer and named download use authenticated blob URL',download.href.startsWith('blob:')&&download.download==='synthetic.pdf');download.click();
+assert('No signed context was transported in application URLs' ,(await stats()).seen.every(x=>!x.path.includes('_jth_')));remove(second);remove(b);
+// Traditional Django forms use signed POST fields, with no fetch interception.
+await logout();await login('A');
+function nativeTab(path){const t=window.open(path,'_blank');if(!t)throw Error('Native tab blocked');tabs.add(t);return t;}
+const native=nativeTab('/app/w/1/pipeline/');
+await wait(()=>native.document.querySelector('select[name="status"]'),'native Pipeline');
+function boundForms(t){return [...t.document.forms].every(f=>f.querySelectorAll('input[name="_jth_context"]').length===(f.method.toLowerCase()==='post'?1:0));}
+function nativeData(t,form){return Object.fromEntries(new t.FormData(form));}
+assert('Native Pipeline POST forms are bound and GET forms contain no context',boundForms(native)&&!native.jthGatewaySession);
+let statusSelect=native.document.querySelector('select[name="status"]');statusSelect.value='interviewing';statusSelect.dispatchEvent(new native.Event('change',{bubbles:true}));
+await wait(()=>native.location.pathname==='/app/w/1/pipeline/'&&native.document.querySelector('select[name="status"]')?.value==='interviewing','native status committed and redirect finished');
+assert('Real native status form saves and redirects without a custom header',true);
+for(const actionName of ['follow-up','reset-clock']){const form=native.document.querySelector('form[action$="/'+actionName+'/"]');form.requestSubmit();await wait(()=>native.document.readyState==='complete'&&native.location.pathname==='/app/w/1/pipeline/'&&(actionName==='follow-up'?native.document.body.textContent.includes('Follow up'):native.document.body.textContent.includes('Activity reset')),'native '+actionName+' completed');}
+assert('Native follow-up and reset activity forms preserve existing actions',native.document.body.textContent.includes('Follow up')&&native.document.body.textContent.includes('Activity reset'));
+native.location.href='/app/w/1/pipeline/?view=kanban';await wait(()=>native.document.readyState==='complete'&&native.document.querySelector('select[name="status_move"]'),'native Kanban');
+const move=native.document.querySelector('select[name="status_move"]');move.value='ghosted';move.dispatchEvent(new native.Event('change',{bubbles:true}));
+await wait(()=>native.document.querySelector('.kc')?.dataset.status==='ghosted','native Kanban move committed');assert('Native Kanban submission remains functional',true);
+native.location.href='/app/w/1/pipeline/';await wait(()=>native.document.querySelector('select[name="status"]')?.value==='ghosted','native list');
+const oldNativeForm=nativeData(native,native.document.querySelector('select[name="status"]').form);
+r=await fetch('/app/w/1/applications/1/status/',{method:'POST',body:new URLSearchParams({...oldNativeForm,status:'invalid'})});assert('Invalid native Pipeline input retains ordinary 404 behavior',r.status===404);
+r=await fetch('/app/w/1/applications/1/status/',{method:'POST',body:new URLSearchParams({...oldNativeForm,status:'applied',csrfmiddlewaretoken:'invalid'})});assert('Valid hidden context does not bypass native CSRF',r.status===403);
+await login('B');r=await fetch('/app/w/1/applications/1/status/',{method:'POST',body:new URLSearchParams({...oldNativeForm,status:'rejected',csrfmiddlewaretoken:await csrf()})});
+const staleNative=await r.text();const identityB=await(await fetch('/api/auth/me',{headers:{[HEADER]:binding}})).json();
+assert('Old A native form fails under B even with fresh B CSRF; actual B stays signed in',r.status===409&&staleNative.includes('gateway_context_changed')&&identityB.username==='auditB'&&!staleNative.includes(oldNativeForm._jth_context));remove(native);
+await logout();await login('A');const uploadTab=nativeTab('/app/multipart/');await wait(()=>uploadTab.document.querySelector('input[type="file"]'),'native multipart form');
+const bytes=new Uint8Array([0,1,2,255,42,10,13,0]);const transfer=new uploadTab.DataTransfer();transfer.items.add(new uploadTab.File([bytes],'synthetic-native.bin'));
+uploadTab.document.querySelector('input[type="file"]').files=transfer.files;uploadTab.document.querySelector('form').requestSubmit();
+await wait(()=>uploadTab.document.body.textContent.startsWith('{'),'native multipart completion');const uploaded=JSON.parse(uploadTab.document.body.textContent);
+const digest=[...new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))].map(x=>x.toString(16).padStart(2,'0')).join('');
+assert('Real browser multipart form preserves file bytes and authenticated A',uploaded.actor==='auditA'&&uploaded.size===bytes.length&&uploaded.sha256===digest);remove(uploadTab);
+// Operator-only native admin forms use an independent synthetic account.
+await logout();const operator=nativeTab('/admin/login/?next=/admin/');await wait(()=>operator.document.querySelector('#login-form'),'admin credential form');
+assert('Anonymous native admin login form carries a binding',boundForms(operator));
+operator.document.querySelector('[name="username"]').value='auditOperator';operator.document.querySelector('[name="password"]').value='wrong';operator.document.querySelector('#login-form').requestSubmit();
+await wait(()=>operator.document.querySelector('.errornote'),'admin credential failure');assert('Native admin credential errors retain a bound retry form',boundForms(operator));
+operator.document.querySelector('[name="password"]').value='synthetic-test-password';operator.document.querySelector('#login-form').requestSubmit();await wait(()=>operator.location.pathname==='/admin/'&&operator.document.getElementById('logout-form'),'admin authenticated');
+await bootstrap();let operatorIdentity=await(await fetch('/api/auth/me',{headers:{[HEADER]:binding}})).json();assert('Native admin login authenticates the actual synthetic operator',operatorIdentity.username==='auditOperator');
+operator.location.href='/admin/accounts/workspace/1/change/';await wait(()=>operator.document.getElementById('workspace_form'),'admin change form');operator.document.querySelector('[name="name"]').value='';operator.document.getElementById('workspace_form').requestSubmit();
+await wait(()=>operator.document.querySelector('.errorlist'),'admin validation response');assert('Native admin validation errors preserve all POST bindings',boundForms(operator));
+operator.document.querySelector('[name="name"]').value='Native browser edited';operator.document.getElementById('workspace_form').requestSubmit();await wait(()=>operator.location.pathname==='/admin/accounts/workspace/'&&operator.document.body.textContent.includes('Native browser edited'),'admin change saved');assert('Authorized native admin change saves and redirects',boundForms(operator));
+operator.location.href='/admin/password_change/';await wait(()=>operator.document.querySelector('[name="old_password"]'),'native password form');operator.document.querySelector('[name="old_password"]').value='synthetic-test-password';for(const name of ['new_password1','new_password2'])operator.document.querySelector('[name="'+name+'"]').value='Native-Browser-Password-58!';operator.document.querySelector('[name="old_password"]').form.requestSubmit();
+await wait(()=>operator.location.pathname==='/admin/password_change/done/'&&operator.document.body.textContent.includes('Your password was changed'),'native password completion');operatorIdentity=await(await fetch('/api/auth/me',{headers:{[HEADER]:binding}})).json();assert('Native password rotation retains the bound operator session and success-page logout',operatorIdentity.username==='auditOperator'&&boundForms(operator));
+operator.document.getElementById('logout-form').requestSubmit();await wait(()=>operator.location.pathname==='/admin/logout/'&&operator.document.body.textContent.includes('Logged out'),'native admin logout');await bootstrap();r=await fetch('/api/auth/me',{headers:{[HEADER]:binding}});assert('Native admin logout leaves an anonymous authoritative session',r.status===401);remove(operator);
+// Enrollment from an already verified session is an account operation, not pending sign-in.
+await config();await login('M');const mfaTab=tab();await loaded(mfaTab,'M');
+const verifiedBinding=mfaTab.jthGatewaySession.context.binding;
+async function enrollVerified(t,label){
+ t.dispatchEvent(new t.Event('jth-open-security'));
+ await wait(()=>[...t.document.querySelectorAll('button')].some(x=>x.textContent==='Set up authenticator app'),label+' settings loaded');
+ [...t.document.querySelectorAll('button')].find(x=>x.textContent==='Set up authenticator app').click();
+ await wait(()=>t.document.querySelector('section[aria-label="Authenticator app"] code'),label+' setup key');
+ const secret=t.document.querySelector('section[aria-label="Authenticator app"] code').textContent.replace(/\s/g,'');
+ const generated=await(await fetch('/__test/code',{method:'POST',body:JSON.stringify({secret})})).json();
+ fill(t,'section[aria-label="Authenticator app"] input[autocomplete="one-time-code"]',generated.code);
+ t.document.querySelector('section[aria-label="Authenticator app"] form').requestSubmit();
+ await wait(()=>t.document.querySelector('section[aria-label="Recovery codes"] li'),label+' completion and recovery delivery');
+ const codes=[...t.document.querySelectorAll('section[aria-label="Recovery codes"] li')].map(x=>x.textContent);
+ const status=await(await t.jthGatewaySession.fetch('/api/auth/mfa/status')).json();
+ const who=await(await t.jthGatewaySession.fetch('/api/auth/me')).json();
+ assert(label+' confirms device, verified session, principal and recovery delivery',codes.length===10&&status.enrolled&&status.verified&&who.username==='auditM'&&t.jthGatewaySession.context.phase==='verified'&&!t.jthGatewaySession.ended);
+ t.document.querySelector('section[aria-label="Recovery codes"] input[type="checkbox"]').click();
+ await wait(()=>[...t.document.querySelectorAll('section[aria-label="Recovery codes"] button')].some(x=>x.textContent==='Continue'&&!x.disabled),label+' recovery acknowledgement');
+ [...t.document.querySelectorAll('section[aria-label="Recovery codes"] button')].find(x=>x.textContent==='Continue').click();
+ t.document.dispatchEvent(new t.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+ await wait(()=>!t.document.querySelector('section[aria-label="Security"]'),label+' settings closed');
+ return codes;
+}
+await enrollVerified(mfaTab,'Optional verified-user enrollment');
+assert('Verified enrollment preserves the existing session generation and context',mfaTab.jthGatewaySession.context.binding===verifiedBinding);
+await config({mfa_required:true,reset_mfa:'auditM'});
+const replacementCodes=await enrollVerified(mfaTab,'Verified-user re-enrollment after operator reset');
+assert('Re-enrollment after reset preserves current verified lineage',mfaTab.jthGatewaySession.context.binding===verifiedBinding);
+await mfaTab.jthGatewaySession.logout();remove(mfaTab);await bootstrap();await login('M');
+const recovered=await action('/api/auth/mfa/verify',{code:replacementCodes[0]});const recoveredData=await recovered.json();
+const recoveredWho=await(await fetch('/api/auth/me',{headers:{[HEADER]:binding}})).json();
+assert('New recovery code still completes a bound pending sign-in after re-enrollment',recovered.status===200&&recoveredData.mfa_method==='recovery'&&recoveredWho.username==='auditM');
+await config();
+// Actual pre-auth React flow, enrollment, recovery acknowledgement and re-login.
+await logout();await config({mfa_required:true});await bootstrap();a=tab();
+await wait(()=>a.document.querySelector('input[autocomplete="username"]'),'password form');
+function fill(t,selector,value){const input=t.document.querySelector(selector);Object.getOwnPropertyDescriptor(t.HTMLInputElement.prototype,'value').set.call(input,value);input.dispatchEvent(new t.Event('input',{bubbles:true}));}
+async function submit(t){await wait(()=>!t.document.querySelector('form button[type="submit"],form button.btn.primary')?.disabled,'form enabled');t.document.querySelector('form').requestSubmit();}
+fill(a,'input[autocomplete="username"]','auditA');fill(a,'input[type="password"]','synthetic-test-password');await submit(a);
+await wait(()=>root(a).includes('Set up two-step verification'),'enrollment screen');assert('Gateway login reaches genuine MFA enrollment with phase binding',a.jthGatewaySession.context.phase==='enrollment');
+const secret=a.document.querySelector('code').textContent.replace(/\s/g,'');const code=await (await fetch('/__test/code',{method:'POST',body:JSON.stringify({secret})})).json();fill(a,'input.auth-code',code.code);await submit(a);
+await wait(()=>root(a).includes('Save your recovery codes'),'recovery codes');const recovery=[...a.document.querySelectorAll('li')].map(x=>x.textContent);assert('Enrollment key rotation preserves recovery-code delivery',recovery.length===10&&a.jthGatewaySession.context.phase==='verified');
+a.document.querySelector('input[type="checkbox"]').click();await wait(()=>[...a.document.querySelectorAll('button')].some(x=>x.textContent==='Continue'&&!x.disabled),'recovery acknowledgement');[...a.document.querySelectorAll('button')].find(x=>x.textContent==='Continue').click();await loaded(a,'A');
+await a.jthGatewaySession.logout();await wait(()=>a.document.querySelector('input[autocomplete="username"]'),'relogin form');fill(a,'input[autocomplete="username"]','auditA');fill(a,'input[type="password"]','synthetic-test-password');await submit(a);
+await wait(()=>root(a).includes('Two-step verification'),'MFA prompt');fill(a,'input.auth-code','invalid');await submit(a);await wait(()=>root(a).includes('not accepted'),'bad MFA response');assert('Bad MFA code remains retryable without invalidating context',!a.jthGatewaySession.ended&&a.jthGatewaySession.context.phase==='pending');
+fill(a,'input.auth-code',recovery[0]);await submit(a);await loaded(a,'A');assert('Recovery-code reauthentication completes in real browser',a.jthGatewaySession.context.phase==='verified');remove(a);await config();
+}catch(error){results.push({name:'Harness failure',passed:false,error:String(error),tabs:[...tabs].map(t=>({phase:t.jthGatewaySession?.context.phase,ended:t.jthGatewaySession?.ended,text:root(t).slice(0,300)}))});}finally{
+for(const t of tabs)t.close();await config();document.querySelector('#results').textContent=JSON.stringify(results,null,2);await fetch('/__test/report',{method:'POST',body:JSON.stringify(results)});document.title='AUDIT_DONE';
+}})();
+</script>

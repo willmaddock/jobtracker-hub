@@ -6,7 +6,7 @@ from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_GET
 
 FRONTEND = Path(__file__).resolve().parents[2] / "_app" / "frontend"
-ASSETS = {"api-client.js", "workspace-context.js", "favicon.svg", "favicon.ico",
+ASSETS = {"api-client.js", "workspace-context.js", "gateway-session.js", "favicon.svg", "favicon.ico",
           "apple-touch-icon.png", "manifest.json", "icon-192.png", "icon-512.png"}
 
 

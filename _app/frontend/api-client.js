@@ -45,9 +45,14 @@
       if (payload !== undefined) headers["Content-Type"] = "application/json";
       try {
         const response = await fetchImpl(path, { method, headers, body: payload, credentials: "same-origin", cache: "no-store", signal: controller.signal });
-        const text = await response.text();
-        check(captured);
-        const data = decode(response.status, text, captured);
+        const read = async raw => {
+          const text = await raw.text();
+          check(captured);
+          return decode(raw.status, text, captured);
+        };
+        // Decode before a gateway authentication transition can adopt its context.
+        const guard = root.jthGatewaySession;
+        const data = guard ? await guard.consume(response, read) : await read(response);
         return withStatus ? {status:response.status,data} : data;
       } catch (e) {
         check(captured);

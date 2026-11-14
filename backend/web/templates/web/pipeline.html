@@ -1,4 +1,5 @@
 {% extends "web/base.html" %}
+{% load gateway_forms %}
 {% block title %}Pipeline · JobTracker Hub{% endblock %}
 {% block topbar %}
 <header class="top">
@@ -39,7 +40,7 @@
         {% for a in col.cards %}
           <div class="kc" draggable="true" data-id="{{ a.id }}" data-status="{{ a.effective_status }}">
             <a href="{{ a.href }}"><b>{{ a.effective_company }}</b><small>{{ a.role_label }}</small>{% if a.days_since_activity is not None %}<small>{{ a.days_since_activity }}d</small>{% endif %}</a>
-            <form method="post" action="{% url 'web:application-action' workspace.pk a.id 'status' %}">{% csrf_token %}
+            <form method="post" action="{% url 'web:application-action' workspace.pk a.id 'status' %}">{% csrf_token %}{% gateway_context %}
               <input type="hidden" name="next" value="{{ back }}"><input type="hidden" name="status" value="">
               <select name="status_move" aria-label="Move {{ a.effective_company }}">
                 <option value="">Move to…</option>
@@ -69,15 +70,15 @@
         <div class="title">{{ selected.role_label }}</div>
         <div class="sub">{% if selected.date_applied %}Applied {{ selected.date_applied|date:"Y-m-d" }}{% else %}Date applied not known{% endif %}{% if selected.activity_override %} • Activity reset {{ selected.activity_override|date:"Y-m-d" }}{% endif %}</div>
         <div class="actions">
-          <form method="post" action="{% url 'web:application-action' workspace.pk selected.id 'status' %}">{% csrf_token %}
+          <form method="post" action="{% url 'web:application-action' workspace.pk selected.id 'status' %}">{% csrf_token %}{% gateway_context %}
             <input type="hidden" name="next" value="{{ back }}">
             <select name="status" aria-label="Status" onchange="this.form.submit()">
               <option value="">(auto — {{ selected.status }})</option>
               {% for s in statuses %}<option value="{{ s }}"{% if selected.manual_status == s %} selected{% endif %}>{{ s|capfirst }}</option>{% endfor %}
             </select>
           </form>
-          <form method="post" action="{% url 'web:application-action' workspace.pk selected.id 'follow-up' %}">{% csrf_token %}<input type="hidden" name="next" value="{{ back }}"><button class="btn pri" type="submit">Follow Up (+7d)</button></form>
-          <form method="post" action="{% url 'web:application-action' workspace.pk selected.id 'reset-clock' %}">{% csrf_token %}<input type="hidden" name="next" value="{{ back }}"><button class="btn" type="submit" title="Keeps date applied as-is and resets the days-quiet countdown to 0.">Reset Activity Clock</button></form>
+          <form method="post" action="{% url 'web:application-action' workspace.pk selected.id 'follow-up' %}">{% csrf_token %}{% gateway_context %}<input type="hidden" name="next" value="{{ back }}"><button class="btn pri" type="submit">Follow Up (+7d)</button></form>
+          <form method="post" action="{% url 'web:application-action' workspace.pk selected.id 'reset-clock' %}">{% csrf_token %}{% gateway_context %}<input type="hidden" name="next" value="{{ back }}"><button class="btn" type="submit" title="Keeps date applied as-is and resets the days-quiet countdown to 0.">Reset Activity Clock</button></form>
         </div>
       </div>
       <div class="eyebrow soft">Application detail</div>

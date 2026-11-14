@@ -13,7 +13,10 @@ _django_routes = [
 ]
 
 urlpatterns = [
-    path("api/health", HealthView.as_view()),
+    path("api/gateway/session/restart", views.context_restart, name="gateway-restart"),
+    path("api/gateway/context", views.context_status, name="gateway-context"),
+    path("api/auth/logout", views.context_logout, name="auth-logout"),
+    path("api/health", HealthView.as_view(authentication_classes=[])),
     path("api/", include(_django_routes)),
     re_path(r"^api/(?P<path>.+)$", views.proxy, name="gateway-proxy"),
 ]

@@ -12,9 +12,10 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from . import email_codes, mfa
-from .passkey_views import _device_for, _second_step_user
+from .passkey_views import _device_for
 from .serializers import MfaCodeSerializer, UserSerializer
 from .throttles import MfaThrottle
+from . import mfa_session
 from .views import _complete_login, _mfa_error
 
 _STATUS = {
@@ -108,7 +109,7 @@ class EmailSignInSendView(APIView):
     throttle_classes = [MfaThrottle]
 
     def post(self, request):
-        user = _second_step_user(request)
+        user = mfa_session.second_step_user(request)
         if user is None:
             return _mfa_error("mfa_session_expired", "Sign in again.", status.HTTP_401_UNAUTHORIZED)
         device = _device_for(user)
@@ -132,7 +133,7 @@ class EmailSignInVerifyView(APIView):
     def post(self, request):
         serializer = MfaCodeSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        user = _second_step_user(request)
+        user = mfa_session.second_step_user(request)
         if user is None:
             return _mfa_error("mfa_session_expired", "Sign in again.", status.HTTP_401_UNAUTHORIZED)
         device = _device_for(user)

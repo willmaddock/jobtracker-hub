@@ -43,10 +43,7 @@ def _device_for(user):
 
 
 def _second_step_user(request):
-    user = mfa_session.pending_user(request)
-    if user is None and request.user.is_authenticated:
-        user = request.user  # password-only session (e.g. Django admin) completing verification
-    return user
+    return mfa_session.second_step_user(request)
 
 
 # --- management (verified sessions) --------------------------------------------------------

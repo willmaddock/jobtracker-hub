@@ -57,10 +57,12 @@ AUTH_USER_MODEL = 'accounts.User'
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
-    'django.contrib.sessions.middleware.SessionMiddleware',
+    'gateway.middleware.GatewaySessionLockMiddleware',
+    'gateway.middleware.GatewaySessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'gateway.middleware.GatewayContextMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'accounts.middleware.MfaEnforcementMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
@@ -355,6 +357,9 @@ def _env_flag(name, default=False):
     return default if value is None else value.strip().lower() == "true"
 
 JTH_GATEWAY = _env_flag("JTH_GATEWAY")
+if JTH_GATEWAY:
+    # Explicit POST-field adapters; ordinary deployments use Django's originals.
+    TEMPLATES[0]['DIRS'] = [BASE_DIR / 'gateway' / 'templates']
 JTH_DATA_DIR = Path(os.environ.get("JTH_DATA_DIR") or (BASE_DIR.parent / "jth-data"))
 JTH_APP_SOURCE = BASE_DIR.parent / "_app"
 JTH_IDLE_MINUTES = int(os.environ.get("JTH_IDLE_MINUTES", "30"))

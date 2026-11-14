@@ -593,6 +593,7 @@
 <div id="root"></div>
 
 <!-- DJANGO_FOUNDATION_BOOTSTRAP -->
+<script src="/gateway-session.js"></script>
 <script src="/workspace-context.js"></script>
 <script src="/api-client.js"></script>
 <script type="text/babel" data-presets="react">
@@ -907,6 +908,8 @@ function extractErrorMessage(rawText, fallback){
 // XHR's multipart upload path is older and doesn't share the bug, so every
 // file upload in this app goes through here instead of a raw fetch().
 function uploadFormData(url, form){
+  if (window.jthGatewaySession) return window.jthGatewaySession.upload(url, form,
+    text => extractErrorMessage(text, "Upload failed."));
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", url);
@@ -1016,12 +1019,14 @@ function writeUrlState(view, selectedId){
 
 /* ---- localStorage cache: instant first paint, then refreshed from the API ---- */
 function loadCache(){
+  if (window.JTH_GATEWAY === true) { clearCache(); return null; }
   try {
     const raw = localStorage.getItem(CACHE_KEY);
     return raw ? JSON.parse(raw) : null;
   } catch (e) { return null; }
 }
 function saveCache(statusInfo, apps){
+  if (window.JTH_GATEWAY === true) { clearCache(); return; }
   try { localStorage.setItem(CACHE_KEY, JSON.stringify({statusInfo, apps, savedAt: Date.now()})); }
   catch (e) { /* storage full/unavailable — fine, cache is best-effort */ }
 }
@@ -1810,6 +1815,7 @@ const isGateway = () => window.JTH_GATEWAY === true;
 const shownPath = (p) => (isGateway() ? "" : p);
 function openGatewaySecurity(){ window.dispatchEvent(new Event(GATEWAY_OPEN_SECURITY)); }
 async function gatewaySignOut(){
+  if (window.jthGatewaySession) return window.jthGatewaySession.logout();
   try {
     const j = await fetch("/api/auth/csrf", {credentials:"same-origin"}).then(r => r.json());
     await fetch("/api/auth/logout", {method:"POST", credentials:"same-origin", headers:{"X-CSRFToken": j.csrfToken}});
@@ -6406,6 +6412,18 @@ function ViewerDrawer({doc, onClose, onOpen}){
   const [docxHtml, setDocxHtml] = useState(null);
   const [docxErr, setDocxErr] = useState(null);
   const [docxLoading, setDocxLoading] = useState(false);
+  const [gatewayFile, setGatewayFile] = useState(null);
+  const [fileError, setFileError] = useState("");
+  useEffect(() => {
+    const guard = window.jthGatewaySession;
+    if (!guard || !doc) return;
+    let active = true, objectUrl = null;
+    setGatewayFile(null); setFileError("");
+    guard.file(`${API_BASE}/api/file?relpath=${encodeURIComponent(doc.relpath)}`)
+      .then(url => { objectUrl = url; if (active) setGatewayFile({relpath:doc.relpath, url}); else guard.release(url); })
+      .catch(error => { if (active) setFileError(error.message); });
+    return () => { active = false; if (objectUrl) guard.release(objectUrl); };
+  }, [doc && doc.relpath]);
 
   // Runs whenever the viewed doc changes (not just on mount) — the drawer
   // stays mounted while you click between docs, so this can't be a
@@ -6423,7 +6441,8 @@ function ViewerDrawer({doc, onClose, onOpen}){
   }, [doc && doc.relpath]);
 
   if (!doc) return null;
-  const src = `${API_BASE}/api/file?relpath=${encodeURIComponent(doc.relpath)}`;
+  const fileUrl = `${API_BASE}/api/file?relpath=${encodeURIComponent(doc.relpath)}`;
+  const src = window.jthGatewaySession ? (gatewayFile?.relpath === doc.relpath ? gatewayFile.url : null) : fileUrl;
   const isFrameable = ext === ".pdf" || ext === ".md" || ext === ".markdown" || ext === ".txt" || ext === ".tex";
   return (
     <div className="viewer-backdrop" onClick={onClose}>
@@ -6431,7 +6450,8 @@ function ViewerDrawer({doc, onClose, onOpen}){
         <div className="viewer-header">
           <div className="viewer-title" title={doc.filename}>{doc.filename}</div>
           <button className="btn small" onClick={() => onOpen(doc.relpath)}>Open in OS</button>
-          {/* Real <a download> on a real (non-blob) URL -- not a stand-in
+          {/* Desktop keeps its real (non-blob) URL; gateway mode uses a
+              validated, revocable blob URL. This link is not a stand-in
               for the WKWebView PDF plugin's own broken toolbar button.
               pywebview's Cocoa delegate specifically watches for
               shouldPerformDownload() on a genuine link navigation (added
@@ -6441,7 +6461,7 @@ function ViewerDrawer({doc, onClose, onOpen}){
               own UI, which has no such hook -- see launcher.py's
               ALLOW_DOWNLOADS comment for why that one can't be fixed the
               same way. Works unchanged in a plain browser tab too. */}
-          <a className="btn small" href={src} download={doc.filename}>Download</a>
+          <a className="btn small" href={src || undefined} aria-disabled={!src} onClick={e => { if (!src) e.preventDefault(); }} download={doc.filename}>Download</a>
           <button className="btn small" onClick={onClose}><Icon name="close" size={12} style={{marginRight:4, verticalAlign:"-1px"}}/>Close (Esc)</button>
         </div>
         {/* The PDF pane below embeds WebKit's own native PDF plugin, whose
@@ -6455,7 +6475,9 @@ function ViewerDrawer({doc, onClose, onOpen}){
           <div className="viewer-pdf-hint">Use Download or Open in OS above to save this file.</div>
         )}
         <div className="viewer-body">
-          {ext === ".pdf"
+          {window.jthGatewaySession && !src
+            ? <div className="viewer-unsupported">{fileError || "Loading document…"}</div>
+            : ext === ".pdf"
             ? <embed className="viewer-frame" src={src} type="application/pdf" />
             : ext === ".docx"
               ? (docxLoading
@@ -6671,7 +6693,7 @@ function App(){
 
   useEffect(() => {
     refreshStatus().then(s => { if (s.index_built) refreshApps(); }).catch(() => {});
-    const iv = setInterval(() => { refreshStatus().catch(()=>{}); }, 15000);
+    const iv = setInterval(() => { if (!isGateway() || document.visibilityState !== "hidden") refreshStatus().catch(()=>{}); }, 15000);
     return () => clearInterval(iv);
   }, []);
 
@@ -8768,9 +8790,9 @@ function DjangoFoundation() {
     checkSession();
     const focus = () => { if (!holdsMfaScreen()) checkSession(); };
     const changed = () => { if (!holdsMfaScreen()) checkSession(); };
-    window.addEventListener("focus", focus);
+    if (!window.jthGatewaySession) window.addEventListener("focus", focus);
     window.addEventListener("hashchange", changed);
-    if (window.BroadcastChannel) {
+    if (!window.jthGatewaySession && window.BroadcastChannel) {
       channel.current = new BroadcastChannel("jth-session-change");
       channel.current.onmessage = () => { clearIdentity(); checkSession(); };
     }
@@ -8990,7 +9012,9 @@ function DjangoFoundation() {
     </section>
   </main>;
 }
-ReactDOM.createRoot(document.getElementById("root")).render(<ErrorBoundary>{window.JTH_DJANGO === true ? <DjangoFoundation /> : <App />}</ErrorBoundary>);
+const applicationRoot = ReactDOM.createRoot(document.getElementById("root"));
+window.jthGatewaySession?.onEnd(() => applicationRoot.unmount());
+if (!window.jthGatewaySession?.ended) applicationRoot.render(<ErrorBoundary>{window.JTH_DJANGO === true ? <DjangoFoundation /> : <App />}</ErrorBoundary>);
 </script>
 </body>
 </html>

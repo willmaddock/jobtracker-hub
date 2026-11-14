@@ -97,6 +97,7 @@ class LoginView(APIView):
                 {"code": "invalid_credentials", "detail": "Invalid username or password."},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
+        mfa_session.prepare_primary(request, user)
         if mfa.is_enrolled(user):
             # Password alone never creates a session for an enrolled user.
             mfa_session.start_pending(request, user)
@@ -187,6 +188,7 @@ def _mfa_error(code, detail, http_status):
 
 def _complete_login(request, user):
     """Finish a verified login: create/rotate the session, then mark it verified."""
+    mfa_session.check_completion(request, user)
     if request.user.is_authenticated and request.user.pk == user.pk:
         request.session.cycle_key()
     else:
@@ -205,9 +207,7 @@ class MfaVerifyView(APIView):
     def post(self, request):
         serializer = MfaCodeSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        user = mfa_session.pending_user(request)
-        if user is None and request.user.is_authenticated:
-            user = request.user  # password-only session (e.g. Django admin login) completing verification
+        user = mfa_session.second_step_user(request)
         if user is None:
             return _mfa_error("mfa_session_expired", "Sign in again.", status.HTTP_401_UNAUTHORIZED)
         try:
@@ -243,6 +243,7 @@ class MfaEnrollBeginView(APIView):
 
     def post(self, request):
         try:
+            mfa_session.assert_current_actor(request)
             secret, uri = mfa.begin_enrollment(request.user)
         except mfa.AlreadyEnrolled:
             return _mfa_error("mfa_already_enrolled", "Multi-factor authentication is already set up.", status.HTTP_409_CONFLICT)
@@ -257,6 +258,7 @@ class MfaEnrollConfirmView(APIView):
         serializer = MfaCodeSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         try:
+            mfa_session.check_completion(request, request.user)
             codes = mfa.confirm_enrollment(request.user, serializer.validated_data["code"])
         except mfa.NotEnrolled:
             return _mfa_error("mfa_not_started", "Start setup first.", status.HTTP_400_BAD_REQUEST)

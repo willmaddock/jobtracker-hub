@@ -540,3 +540,9 @@ test('attachment lifecycle_busy is uncertain even after a committed write',()=>{
  assert(outcome.includes('may have completed')&&outcome.includes('before another explicit action')&&outcome.includes('does not prove'));
  assert(!outcome.includes('refused')&&!outcome.includes('acknowledged')&&!outcome.includes('PRIVATE'));
 });
+test('gateway adapter decodes within the guard before accepting a transition',async()=>{
+ const previous=globalThis.jthGatewaySession;let decoded=false,consumed=0;
+ globalThis.jthGatewaySession={consume:async(response,reader)=>{consumed++;try{return await reader(response);}catch(error){decoded=error.code==='unexpected_response';throw error;}}};
+ try{const {client}=setup(async()=>response(200,'{broken'));await assert.rejects(client.request('/api/auth/me'),{code:'unexpected_response'});assert.equal(consumed,1);assert.equal(decoded,true);}
+ finally{if(previous===undefined)delete globalThis.jthGatewaySession;else globalThis.jthGatewaySession=previous;}
+});

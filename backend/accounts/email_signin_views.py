@@ -97,6 +97,7 @@ class SignInVerifyView(APIView):
                 serializer.validated_data["email"], serializer.validated_data["code"])
         except email_signin.SignInError as error:
             return _error(error)
+        mfa_session.prepare_primary(request, user)
         if mfa.is_enrolled(user):
             # The mailbox replaced the password only: the authenticator app is still required.
             mfa_session.start_pending(request, user)

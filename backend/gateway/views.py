@@ -12,16 +12,16 @@ import logging
 from urllib.parse import quote, urlsplit
 
 from django.conf import settings
+from django.contrib.auth import logout
 from django.http import HttpResponse, JsonResponse, StreamingHttpResponse
 from django.views.decorators.cache import never_cache
 from django.views.decorators.clickjacking import xframe_options_sameorigin
-from django.views.decorators.csrf import csrf_exempt
-from django.views.decorators.http import require_GET
+from django.views.decorators.csrf import csrf_exempt, csrf_protect
+from django.views.decorators.http import require_GET, require_POST
 
-from accounts import mfa_session
 from core.frontend import FRONTEND
 
-from . import policy
+from . import policy, session_context
 from .backends import Backends, BackendError
 
 log = logging.getLogger(__name__)
@@ -36,9 +36,7 @@ _LOGIN_SNIPPET = """<script>window.JTH_DJANGO = true;
   var done = false;
   function check(){
     if (done || !/Signed in as/.test(document.body ? document.body.innerText : "")) return;
-    var last = Number(sessionStorage.getItem("jth-reload") || 0);
-    if (Date.now() - last < 10000) return;
-    done = true; sessionStorage.setItem("jth-reload", String(Date.now())); location.reload();
+    done = true; location.reload();
   }
   new MutationObserver(check).observe(document.documentElement, {childList:true, subtree:true, characterData:true});
 })();</script>"""
@@ -46,16 +44,74 @@ _LOGIN_SNIPPET = """<script>window.JTH_DJANGO = true;
 # Shown to fully signed-in people: the original app, plus session-expiry handling. JTH_GATEWAY
 # tells the app it is served by the gateway, so it shows the account controls (signed-in email,
 # Security, Sign out) in its own tracker menu, rail and Settings.
-_APP_SNIPPET = """<script>window.JTH_GATEWAY = true;
-(function(){
-  var f = window.fetch;
-  window.fetch = function(){
-    return f.apply(this, arguments).then(function(r){
-      if (r.status === 401 && String(r.url).indexOf("/api/auth/") < 0) location.reload();
-      return r;
-    });
-  };
-})();</script>"""
+@require_GET
+def context_status(request):
+    # Middleware validates the supplied context; do not return identity data.
+    return HttpResponse(status=204)
+
+
+@require_POST
+@csrf_protect
+def context_logout(request):
+    # Includes cancellation of a validated pending sign-in. SessionAuthentication
+    # alone would not enforce CSRF on an anonymous pending-MFA session.
+    logout(request)
+    return HttpResponse(status=204)
+
+
+@require_POST
+@csrf_protect
+def context_restart(request):
+    from . import session_lineage
+    state = request.gateway_lineage
+    if not session_lineage.valid_recovery(request, state.row):
+        return state.reject('gateway_recovery_changed')
+    state.restart(request)
+    return HttpResponse(status=204)
+
+
+def form_conflict(code, status=409):
+    """Never rebind/replay an old form, or echo its fields or signed context."""
+    from django.utils.html import format_html
+    response = HttpResponse(format_html(
+        '<!doctype html><html lang="en"><meta charset="utf-8"><title>Form not submitted</title>'
+        '<main><h1>Form not submitted</h1><p role="alert">This form could not be accepted. '
+        'Your sign-in may have changed, or the form may be invalid. No action was retried.</p>'
+        '<p>Reload the page before entering your changes again.</p>'
+        '<p><a href="/">Check sign-in</a></p><p>Reference: {}</p></main></html>', code), status=status)
+    response['Cache-Control'] = 'private, no-store'
+    response['Referrer-Policy'] = 'no-referrer'
+    response.gateway_context_rejected = True
+    return response
+
+
+def recovery_page(request, row):
+    """Explicit recovery; never silently bless the cookie currently in the jar."""
+    from django.middleware.csrf import get_token, CsrfViewMiddleware
+    csrf = CsrfViewMiddleware(lambda r: None)
+    if 'CSRF_COOKIE' not in request.META:
+        csrf.process_request(request)  # outer-boundary recovery precedes normal CSRF middleware
+    from .session_lineage import recovery
+    config = json.dumps({'challenge': recovery(row), 'csrf': get_token(request)})
+    html = """<!doctype html><html><meta charset="utf-8"><title>Restart sign-in</title>
+<body><main><h1>Sign-in changed</h1><p>A previous sign-in response replaced this browser's session.
+Restart sign-in to continue. This also signs out other tabs in this browser.</p>
+<button id="restart">Restart sign-in</button><p id="result" role="alert"></p></main>
+<script>window.JTH_GATEWAY_RECOVERY = CONFIG;
+document.getElementById('restart').onclick=async function(){
+this.disabled=true;
+try{const controller=new AbortController(); const timer=setTimeout(()=>controller.abort(),10000);
+try { const r=await fetch('/api/gateway/session/restart',{method:'POST',credentials:'same-origin',
+cache:'no-store',signal:controller.signal,headers:{'X-JTH-Recovery':window.JTH_GATEWAY_RECOVERY.challenge,
+'X-CSRFToken':window.JTH_GATEWAY_RECOVERY.csrf}});
+if(!r.ok)throw Error();location.reload(); } finally {clearTimeout(timer);}
+}catch(e){document.getElementById('result').textContent='Recovery could not be confirmed. Reload and try again.';}
+};</script></body></html>""".replace('CONFIG', config)
+    response = HttpResponse(html, status=409)
+    response['Cache-Control'] = 'private, no-store'
+    response['Referrer-Policy'] = 'no-referrer'
+    response.gateway_context_rejected = True
+    return csrf.process_response(request, response)
 
 
 def backends() -> Backends:
@@ -66,17 +122,23 @@ def backends() -> Backends:
 
 
 def _fully_signed_in(request) -> bool:
-    if not request.user.is_authenticated:
-        return False
-    return (not settings.MFA_REQUIRED) or mfa_session.is_verified(request)
+    return session_context.phase(request)[0] == "verified"
 
 
 @require_GET
 @never_cache
 def index(request):
     html = (FRONTEND / "index.html").read_text(encoding="utf-8")
-    snippet = _APP_SNIPPET if _fully_signed_in(request) else _LOGIN_SNIPPET
-    return HttpResponse(html.replace(_MARKER, snippet))
+    if _fully_signed_in(request):
+        config = json.dumps(session_context.issue(request))
+        snippet = ("<script>window.JTH_GATEWAY = true;window.JTH_GATEWAY_PAGE = "
+                   + config + ";</script>")
+    else:
+        snippet = ("<script>window.JTH_GATEWAY_LOGIN = true;window.JTH_GATEWAY_PAGE = "
+                   + json.dumps(session_context.issue(request)) + ";</script>") + _LOGIN_SNIPPET
+    response = HttpResponse(html.replace(_MARKER, snippet))
+    response["Referrer-Policy"] = "no-referrer"
+    return response
 
 
 # --- proxy ---------------------------------------------------------------------------------
@@ -129,6 +191,8 @@ def _body_iter(resp, conn):
 def proxy(request, path):
     if not _fully_signed_in(request):
         return _json("Sign in required.", 401, code="authentication_required")
+    if not getattr(request, "gateway_context", None):
+        return session_context.conflict()
 
     api_path = request.path_info
     allow_local = bool(settings.JTH_ALLOW_LOCAL_LINK and request.user.is_superuser)
@@ -195,6 +259,7 @@ def proxy(request, path):
             out = _json("Unexpected response from workspace server.", 502)
         conn.close()
         out["Cache-Control"] = "no-store"
+        out["Referrer-Policy"] = "no-referrer"
         return out
 
     out = StreamingHttpResponse(_body_iter(resp, conn), status=resp.status, reason=resp.reason)
@@ -206,6 +271,7 @@ def proxy(request, path):
             parts = urlsplit(value)
             value = parts.path + ("?" + parts.query if parts.query else "")
         out[name] = value
-    out.setdefault("Cache-Control", "private, no-cache")
+    out["Cache-Control"] = "private, no-store"
     out["Vary"] = "Cookie"
+    out["Referrer-Policy"] = "no-referrer"
     return out

@@ -44,3 +44,30 @@ def mark_verified(request) -> None:
 
 def is_verified(request) -> bool:
     return request.session.get(VERIFIED_KEY) is True
+
+
+def prepare_primary(request, user):
+    """Gateway-only hook, after credentials were verified by the native flow."""
+    state = getattr(request, 'gateway_lineage', None)
+    if state is not None:
+        state.prepare_primary(request, user)
+
+
+def second_step_user(request):
+    state = getattr(request, 'gateway_lineage', None)
+    if state is not None:
+        return state.factor_user(request)
+    user = pending_user(request)
+    return user if user is not None else request.user if request.user.is_authenticated else None
+
+
+def check_completion(request, user):
+    state = getattr(request, 'gateway_lineage', None)
+    if state is not None:
+        state.check_completion(request, user)
+
+
+def assert_current_actor(request):
+    state = getattr(request, 'gateway_lineage', None)
+    if state is not None:
+        state.assert_actor(request)
